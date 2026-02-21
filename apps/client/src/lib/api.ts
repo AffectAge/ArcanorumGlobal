@@ -94,3 +94,59 @@ export async function register(payload: {
   const country = (await response.json()) as Country;
   return normalizeCountry(country);
 }
+
+
+export async function adminUpdateCountry(
+  token: string,
+  countryId: string,
+  payload: {
+    countryName?: string;
+    countryColor?: string;
+    isAdmin?: boolean;
+    flagFile?: File | null;
+    crestFile?: File | null;
+  },
+): Promise<Country> {
+  const formData = new FormData();
+
+  if (payload.countryName != null) {
+    formData.set("countryName", payload.countryName);
+  }
+  if (payload.countryColor != null) {
+    formData.set("countryColor", payload.countryColor);
+  }
+  if (payload.isAdmin != null) {
+    formData.set("isAdmin", String(payload.isAdmin));
+  }
+  if (payload.flagFile) {
+    formData.set("flag", payload.flagFile);
+  }
+  if (payload.crestFile) {
+    formData.set("crest", payload.crestFile);
+  }
+
+  const response = await fetch(`${API}/admin/countries/${countryId}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "COUNTRY_UPDATE_FAILED");
+  }
+
+  return normalizeCountry((await response.json()) as Country);
+}
+
+export async function adminDeleteCountry(token: string, countryId: string): Promise<void> {
+  const response = await fetch(`${API}/admin/countries/${countryId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "COUNTRY_DELETE_FAILED");
+  }
+}

@@ -87,9 +87,26 @@ function FileField({
           onChange={(event) => onChange(event.target.files?.[0] ?? null)}
         />
       </label>
-      <p className="mt-1 text-xs text-slate-500">PNG, JPG, WEBP до 4MB</p>
+      <p className="mt-1 text-xs text-slate-500">PNG, JPG, WEBP до 4MB, максимум 256x256</p>
     </div>
   );
+}
+
+async function isImageWithinMaxSize(file: File, maxSize = 256): Promise<boolean> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const ok = img.width <= maxSize && img.height <= maxSize;
+      URL.revokeObjectURL(url);
+      resolve(ok);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(false);
+    };
+    img.src = url;
+  });
 }
 
 export function AuthPanel({ onSuccess }: Props) {
@@ -214,6 +231,16 @@ export function AuthPanel({ onSuccess }: Props) {
   });
 
   const submitRegister = registerForm.handleSubmit(async (values) => {
+    if (flagFile && !(await isImageWithinMaxSize(flagFile))) {
+      toast.error("Флаг должен быть максимум 256x256");
+      return;
+    }
+
+    if (crestFile && !(await isImageWithinMaxSize(crestFile))) {
+      toast.error("Герб должен быть максимум 256x256");
+      return;
+    }
+
     setSubmitting(true);
     try {
       const normalizedColor = colord(values.countryColor).toHex();
@@ -229,8 +256,17 @@ export function AuthPanel({ onSuccess }: Props) {
       setCrestFile(null);
       registerForm.reset({ countryName: "", countryColor: "#4ade80", password: "", confirmPassword: "" });
       toast.success("Страна создана, теперь войдите");
-    } catch {
-      toast.error("Ошибка регистрации");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "REGISTER_FAILED";
+      if (msg === "IMAGE_DIMENSIONS_TOO_LARGE") {
+        toast.error("Изображение должно быть максимум 256x256");
+      } else if (msg === "FILE_TOO_LARGE") {
+        toast.error("Файл слишком большой (до 4MB)");
+      } else if (msg === "ONLY_IMAGES") {
+        toast.error("Разрешены только изображения");
+      } else {
+        toast.error("Ошибка регистрации");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -403,7 +439,7 @@ export function AuthPanel({ onSuccess }: Props) {
                     <div className="mb-2 text-xs text-slate-400">Предпросмотр флага</div>
                     <div className="h-20 overflow-hidden rounded-md bg-black/30">
                       {flagPreviewUrl ? (
-                        <img src={flagPreviewUrl} alt="flag preview" className="h-full w-full object-cover" />
+                        <img src={flagPreviewUrl} alt="flag preview" className="h-full w-full object-contain p-1" />
                       ) : (
                         <div className="flex h-full items-center justify-center text-xs text-slate-500">Не выбран</div>
                       )}
@@ -413,7 +449,7 @@ export function AuthPanel({ onSuccess }: Props) {
                     <div className="mb-2 text-xs text-slate-400">Предпросмотр герба</div>
                     <div className="h-20 overflow-hidden rounded-md bg-black/30">
                       {crestPreviewUrl ? (
-                        <img src={crestPreviewUrl} alt="crest preview" className="h-full w-full object-cover" />
+                        <img src={crestPreviewUrl} alt="crest preview" className="h-full w-full object-contain p-1" />
                       ) : (
                         <div className="flex h-full items-center justify-center text-xs text-slate-500">Не выбран</div>
                       )}

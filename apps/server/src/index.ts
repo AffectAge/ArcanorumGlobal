@@ -4,10 +4,11 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import multer from "multer";
+import { imageSize } from "image-size";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import Redis from "ioredis";
@@ -146,6 +147,39 @@ function countryFromDb(row: { id: string; name: string; color: string; flagUrl: 
   return row;
 }
 
+function validateImageDimensions(file: Express.Multer.File): boolean {
+  const dimensions = imageSize(readFileSync(file.path));
+  const width = dimensions.width ?? 0;
+  const height = dimensions.height ?? 0;
+  return width > 0 && height > 0 && width <= 256 && height <= 256;
+}
+
+function removeUploadedFile(file?: Express.Multer.File): void {
+  if (!file) {
+    return;
+  }
+
+  try {
+    unlinkSync(file.path);
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
+function removeUploadedByUrl(url?: string | null): void {
+  if (!url || !url.startsWith("/uploads/")) {
+    return;
+  }
+
+  const rel = url.replace(/^\/uploads\//, "");
+  const absolute = resolve(uploadsRoot, rel);
+  try {
+    unlinkSync(absolute);
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
 function resolveTurn(): WorldPatch {
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldPatch["rejectedOrders"] = [];
@@ -228,6 +262,119 @@ app.patch("/admin/countries/:countryId/admin", async (req, res) => {
   }
 });
 
+const adminCountryUpdateSchema = z.object({
+  countryName: z.string().min(2).max(32).optional(),
+  countryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  isAdmin: z
+    .string()
+    .optional()
+    .transform((v) => (v == null ? undefined : v === "true")),
+});
+
+app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !auth.isAdmin) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const parsed = adminCountryUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const countryIdParam = String(req.params.countryId);
+  const target = await prisma.country.findUnique({ where: { id: countryIdParam } });
+  if (!target) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+
+  const files = req.files as { flag?: Express.Multer.File[]; crest?: Express.Multer.File[] } | undefined;
+  const flagFile = files?.flag?.[0];
+  const crestFile = files?.crest?.[0];
+
+  if (flagFile && !validateImageDimensions(flagFile)) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+  }
+
+  if (crestFile && !validateImageDimensions(crestFile)) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+  }
+
+  const data: { name?: string; color?: string; isAdmin?: boolean; flagUrl?: string | null; crestUrl?: string | null } = {};
+  if (parsed.data.countryName) {
+    data.name = parsed.data.countryName;
+  }
+  if (parsed.data.countryColor) {
+    data.color = parsed.data.countryColor;
+  }
+  if (parsed.data.isAdmin !== undefined) {
+    data.isAdmin = parsed.data.isAdmin;
+  }
+  if (flagFile) {
+    data.flagUrl = `/uploads/flags/${flagFile.filename}`;
+  }
+  if (crestFile) {
+    data.crestUrl = `/uploads/crests/${crestFile.filename}`;
+  }
+
+  try {
+    const updated = await prisma.country.update({
+      where: { id: target.id },
+      data,
+      select: countrySelect,
+    });
+
+    if (flagFile) {
+      removeUploadedByUrl(target.flagUrl);
+    }
+    if (crestFile) {
+      removeUploadedByUrl(target.crestUrl);
+    }
+
+    return res.json(countryFromDb(updated));
+  } catch {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(409).json({ error: "COUNTRY_UPDATE_FAILED" });
+  }
+});
+
+app.delete("/admin/countries/:countryId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !auth.isAdmin) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const countryIdParam = String(req.params.countryId);
+
+  if (auth.countryId === countryIdParam) {
+    return res.status(400).json({ error: "CANNOT_DELETE_SELF" });
+  }
+
+  const target = await prisma.country.findUnique({ where: { id: countryIdParam } });
+  if (!target) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+
+  await prisma.country.delete({ where: { id: countryIdParam } });
+
+  removeUploadedByUrl(target.flagUrl);
+  removeUploadedByUrl(target.crestUrl);
+
+  delete worldBase.resourcesByCountry[countryIdParam];
+  for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
+    if (ownerId === countryIdParam) {
+      delete worldBase.provinceOwner[provinceId];
+    }
+  }
+
+  return res.json({ ok: true });
+});
+
 app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -237,6 +384,18 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
   const files = req.files as { flag?: Express.Multer.File[]; crest?: Express.Multer.File[] } | undefined;
   const flagFile = files?.flag?.[0];
   const crestFile = files?.crest?.[0];
+
+  if (flagFile && !validateImageDimensions(flagFile)) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+  }
+
+  if (crestFile && !validateImageDimensions(crestFile)) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+  }
 
   const { countryName, countryColor, password } = parsed.data;
   const passwordHash = await bcrypt.hash(password, 10);
@@ -261,6 +420,8 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
 
     return res.status(201).json(countryFromDb(country));
   } catch {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
     return res.status(409).json({ error: "COUNTRY_EXISTS" });
   }
 });

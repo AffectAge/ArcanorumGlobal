@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, LogOut, ShieldAlert, SkipForward } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, LogOut, ShieldAlert, SkipForward, SlidersHorizontal } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 
 type Resources = {
@@ -19,6 +19,7 @@ type Props = {
   onLogout: () => void;
   isAdmin?: boolean;
   onAdminForceResolve?: () => void;
+  onOpenAdminPanel?: () => void;
 };
 
 const cards = [
@@ -29,7 +30,7 @@ const cards = [
   { key: "gold", label: "Золото", icon: CircleDollarSign, tip: "Госказна для больших проектов" },
 ] as const;
 
-export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNextTurn, onLogout, isAdmin = false, onAdminForceResolve }: Props) {
+export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNextTurn, onLogout, isAdmin = false, onAdminForceResolve, onOpenAdminPanel }: Props) {
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
@@ -55,6 +56,18 @@ export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNe
         </div>
 
         <div className="flex justify-end gap-2">
+          {isAdmin && (
+            <Tooltip content="Панель администратора" placement="top">
+              <button
+                onClick={onOpenAdminPanel}
+                className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300 transition hover:bg-rose-500/30"
+                aria-label="Панель администратора"
+              >
+                <SlidersHorizontal size={16} />
+              </button>
+            </Tooltip>
+          )}
+
           {isAdmin && (
             <Tooltip content="Админ: форс-резолв" placement="top">
               <button

@@ -80,3 +80,33 @@ body {
 .map-hover-popup .maplibregl-popup-tip {
   border-top-color: rgba(5, 7, 10, 0.96);
 }
+
+
+.arc-toast {
+  background: linear-gradient(160deg, rgba(6, 8, 11, 0.97), rgba(3, 5, 7, 0.95)) !important;
+  border: 1px solid rgba(67, 78, 92, 0.3) !important;
+  color: #e2e8f0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32) !important;
+}
+
+.arc-toast-title {
+  color: #f8fafc !important;
+  font-weight: 600 !important;
+}
+
+.arc-toast-description {
+  color: #94a3b8 !important;
+}
+
+.arc-toast-success {
+  border-color: rgba(74, 222, 128, 0.45) !important;
+}
+
+.arc-toast-error {
+  border-color: rgba(251, 113, 133, 0.45) !important;
+}
+
+.arc-toast-warning {
+  border-color: rgba(251, 191, 36, 0.45) !important;
+}

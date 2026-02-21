@@ -8,6 +8,7 @@ import { TopBar } from "./components/TopBar";
 import { SideNav } from "./components/SideNav";
 import { MapModePanel } from "./components/MapModePanel";
 import { CommandPalette } from "./components/CommandPalette";
+import { AdminPanel } from "./components/AdminPanel";
 import { apiBase } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
@@ -23,6 +24,7 @@ export default function App() {
   const [country, setCountry] = useState<SessionCountry | null>(null);
   const [mapMode, setMapMode] = useState("Политическая карта");
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -110,6 +112,19 @@ export default function App() {
     toast("Админ-команда отправлена", { description: "Принудительный резолв хода" });
   };
 
+  const handleSessionCountryUpdated = (updated: { name: string; color: string; flagUrl?: string | null; crestUrl?: string | null; isAdmin?: boolean }) => {
+    setCountry((prev) => ({
+      name: updated.name,
+      color: updated.color,
+      flagUrl: updated.flagUrl ?? prev?.flagUrl ?? null,
+      crestUrl: updated.crestUrl ?? prev?.crestUrl ?? null,
+    }));
+
+    if (auth) {
+      setAuth({ ...auth, isAdmin: Boolean(updated.isAdmin) });
+    }
+  };
+
   const queueBuildOrder = (provinceId?: string) => {
     if (!auth) {
       return;
@@ -161,11 +176,22 @@ export default function App() {
             onLogout={logoutToAuth}
             isAdmin={auth.isAdmin}
             onAdminForceResolve={forceResolveAsAdmin}
+            onOpenAdminPanel={() => setAdminOpen(true)}
           />
           <SideNav />
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
 
         </motion.div>
+      )}
+
+      {auth?.isAdmin && auth?.token && (
+        <AdminPanel
+          open={adminOpen}
+          token={auth.token}
+          currentCountryId={auth.countryId}
+          onClose={() => setAdminOpen(false)}
+          onSessionCountryUpdated={handleSessionCountryUpdated}
+        />
       )}
 
       <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
