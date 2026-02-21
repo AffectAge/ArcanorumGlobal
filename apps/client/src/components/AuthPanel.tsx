@@ -8,6 +8,7 @@ import { Check, LoaderCircle, LogIn, Palette, Server, ShieldCheck, Upload, UserP
 import { fetchCountries, fetchServerStatus, login, register } from "../lib/api";
 import type { Country, ServerStatus } from "@arcanorum/shared";
 import { toast } from "sonner";
+import { motion } from "framer-motion";
 
 const loginSchema = z.object({
   countryId: z.string().min(1, "Выберите страну"),
@@ -288,7 +289,7 @@ export function AuthPanel({ onSuccess }: Props) {
   });
 
   return (
-    <div className="glass panel-border relative z-20 w-[min(94vw,620px)] rounded-2xl p-6 shadow-2xl">
+    <motion.div layout transition={{ layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }} className="glass panel-border relative z-20 w-[min(94vw,620px)] rounded-2xl p-6 shadow-2xl">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
           <div className="font-display text-5xl tracking-[0.18em]">ARCANORUM</div>
@@ -333,8 +334,10 @@ export function AuthPanel({ onSuccess }: Props) {
             </Tab>
           </Tab.List>
 
-          <Tab.Panels>
+          <motion.div layout transition={{ layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }} className="overflow-hidden">
+            <Tab.Panels>
             <Tab.Panel>
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: "easeOut" }}>
               <form onSubmit={submitLogin} className="space-y-4">
                 <div>
                   <label className="mb-1 block text-xs text-slate-300">Страна</label>
@@ -398,9 +401,11 @@ export function AuthPanel({ onSuccess }: Props) {
                   {submitting ? "Вход..." : "Войти"}
                 </button>
               </form>
+              </motion.div>
             </Tab.Panel>
 
             <Tab.Panel>
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: "easeOut" }}>
               <form onSubmit={submitRegister} className="space-y-4">
                 <div>
                   <label className="mb-1 block text-xs text-slate-300">Название страны</label>
@@ -490,10 +495,12 @@ export function AuthPanel({ onSuccess }: Props) {
                   {submitting ? "Создание..." : "Создать страну"}
                 </button>
               </form>
+              </motion.div>
             </Tab.Panel>
           </Tab.Panels>
+          </motion.div>
         </Tab.Group>
       )}
-    </div>
+    </motion.div>
   );
 }

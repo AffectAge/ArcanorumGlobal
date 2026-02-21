@@ -157,9 +157,12 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-40 flex items-center justify-center bg-black/15"
+            className="absolute inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-[3px]"
           >
-            <AuthPanel onSuccess={onAuthSuccess} />
+                        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(10,14,18,0.06),rgba(3,6,10,0.62)_72%)]" />
+            <div className="relative z-10">
+              <AuthPanel onSuccess={onAuthSuccess} />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
