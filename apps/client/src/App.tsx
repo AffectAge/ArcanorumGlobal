@@ -143,14 +143,6 @@ export default function App() {
           <SideNav />
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
 
-          <div className="pointer-events-auto absolute bottom-24 right-4 z-30 flex flex-col gap-2">
-            <button onClick={() => queueBuildOrder()} className="rounded-lg bg-white/10 px-3 py-2 text-xs hover:text-arc-accent">
-              Тест: приказ BUILD
-            </button>
-            <button onClick={() => setCmdOpen(true)} className="rounded-lg bg-white/10 px-3 py-2 text-xs hover:text-arc-accent">
-              Команды (Ctrl/Cmd+K)
-            </button>
-          </div>
         </motion.div>
       )}
 
