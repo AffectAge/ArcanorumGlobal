@@ -1,0 +1,172 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { toast } from "sonner";
+import type { OrderDelta, WsOutMessage } from "@arcanorum/shared";
+import { AuthPanel, type AuthSuccess } from "./components/AuthPanel";
+import { MapView } from "./components/MapView";
+import { TopBar } from "./components/TopBar";
+import { SideNav } from "./components/SideNav";
+import { MapModePanel } from "./components/MapModePanel";
+import { CommandPalette } from "./components/CommandPalette";
+import { apiBase } from "./lib/api";
+import { useWs } from "./lib/useWs";
+import { useGameStore } from "./store/gameStore";
+
+type SessionCountry = {
+  name: string;
+  color: string;
+  flagUrl?: string | null;
+  crestUrl?: string | null;
+};
+
+export default function App() {
+  const [country, setCountry] = useState<SessionCountry | null>(null);
+  const [mapMode, setMapMode] = useState("Политическая карта");
+  const [cmdOpen, setCmdOpen] = useState(false);
+
+  const auth = useGameStore((s) => s.auth);
+  const turnId = useGameStore((s) => s.turnId);
+  const worldBase = useGameStore((s) => s.worldBase);
+  const selectedProvinceId = useGameStore((s) => s.selectedProvinceId);
+  const setAuth = useGameStore((s) => s.setAuth);
+  const setWorldBase = useGameStore((s) => s.setWorldBase);
+  const addOrder = useGameStore((s) => s.addOrder);
+  const setPresence = useGameStore((s) => s.setPresence);
+  const resetOverlay = useGameStore((s) => s.resetOverlay);
+
+  const onWsMessage = useCallback(
+    (msg: WsOutMessage) => {
+      if (msg.type === "AUTH_OK") {
+        setWorldBase(msg.worldBase, msg.turnId);
+      }
+
+      if (msg.type === "ORDER_BROADCAST") {
+        addOrder(msg.order);
+      }
+
+      if (msg.type === "WORLD_PATCH") {
+        setWorldBase(msg.worldBase, msg.turnId);
+        resetOverlay(msg.turnId);
+        if (msg.rejectedOrders.length > 0) {
+          toast.warning(`Отклонено приказов: ${msg.rejectedOrders.length}`);
+        } else {
+          toast.success("Ход успешно зарезолвен");
+        }
+      }
+
+      if (msg.type === "PRESENCE") {
+        setPresence(msg.onlinePlayerIds);
+      }
+
+      if (msg.type === "ERROR") {
+        toast.error(msg.message);
+      }
+    },
+    [addOrder, resetOverlay, setPresence, setWorldBase],
+  );
+
+  const { send } = useWs(onWsMessage, auth?.token);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCmdOpen((v) => !v);
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const onAuthSuccess = (payload: AuthSuccess) => {
+    setAuth({ token: payload.token, playerId: payload.playerId, countryId: payload.countryId });
+    setCountry({ name: payload.countryName, color: payload.countryColor, flagUrl: payload.flagUrl, crestUrl: payload.crestUrl });
+  };
+
+  const currentResources = useMemo(() => {
+    if (!worldBase || !auth) {
+      return { culture: 0, science: 0, religion: 0, ducats: 0, gold: 0 };
+    }
+    return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, ducats: 0, gold: 0 };
+  }, [auth, worldBase]);
+
+  const queueBuildOrder = (provinceId?: string) => {
+    if (!auth) {
+      return;
+    }
+
+    const delta: OrderDelta = {
+      type: "ORDER_DELTA",
+      order: {
+        turnId,
+        playerId: auth.playerId,
+        countryId: auth.countryId,
+        provinceId: provinceId ?? selectedProvinceId ?? "ARG-1309",
+        type: "BUILD",
+        payload: { building: "factory" },
+      },
+    };
+
+    send(delta);
+    toast("Приказ отправлен", { description: `BUILD -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}` });
+  };
+
+  return (
+    <div className="relative h-screen overflow-hidden bg-arc-bg text-white">
+      <MapView apiBase={apiBase} activeMode={mapMode} onQueueBuildOrder={queueBuildOrder} />
+
+      <AnimatePresence>
+        {!auth && (
+          <motion.div
+            key="auth"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-40 flex items-center justify-center bg-black/15"
+          >
+            <AuthPanel onSuccess={onAuthSuccess} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {auth && (
+        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="pointer-events-none absolute inset-0 z-[70]">
+          <TopBar
+            countryName={country?.name ?? "Безымянная держава"}
+            flagUrl={country?.flagUrl}
+            crestUrl={country?.crestUrl}
+            turnId={turnId}
+            resources={currentResources}
+            onNextTurn={() => send({ type: "REQUEST_RESOLVE" })}
+          />
+          <SideNav />
+          <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
+
+          <div className="pointer-events-auto absolute bottom-24 right-4 z-30 flex flex-col gap-2">
+            <button onClick={() => queueBuildOrder()} className="rounded-lg bg-white/10 px-3 py-2 text-xs hover:text-arc-accent">
+              Тест: приказ BUILD
+            </button>
+            <button onClick={() => setCmdOpen(true)} className="rounded-lg bg-white/10 px-3 py-2 text-xs hover:text-arc-accent">
+              Команды (Ctrl/Cmd+K)
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+

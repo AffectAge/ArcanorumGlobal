@@ -1,0 +1,43 @@
+{
+  "name": "@arcanorum/client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "echo lint skipped",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit"
+  },
+  "dependencies": {
+    "@arcanorum/shared": "0.1.0",
+    "@floating-ui/react": "^0.27.5",
+    "@headlessui/react": "^2.2.0",
+    "@hookform/resolvers": "^3.9.1",
+    "@radix-ui/react-dialog": "^1.1.6",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "colord": "^2.9.3",
+    "framer-motion": "^11.15.0",
+    "lucide-react": "^0.475.0",
+    "maplibre-gl": "4.7.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.2",
+    "sonner": "^2.0.1",
+    "zod": "^3.24.1",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}
+

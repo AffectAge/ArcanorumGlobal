@@ -1,0 +1,30 @@
+{
+  "type": "FeatureCollection",
+  "name": "adm1_sample",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "id": "p-north", "name": "North March", "country": "ARC" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-10, 20], [0, 20], [0, 30], [-10, 30], [-10, 20]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "p-south", "name": "South March", "country": "ARC" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-10, 10], [0, 10], [0, 20], [-10, 20], [-10, 10]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "id": "p-east", "name": "East Crown", "country": "VAL" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[0, 10], [10, 10], [10, 30], [0, 30], [0, 10]]]
+      }
+    }
+  ]
+}

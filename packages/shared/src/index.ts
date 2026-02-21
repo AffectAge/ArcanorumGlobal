@@ -1,0 +1,108 @@
+export type ServerStatus = "online" | "offline" | "maintenance";
+
+export type Country = {
+  id: string;
+  name: string;
+  color: string;
+  flagUrl?: string | null;
+  crestUrl?: string | null;
+};
+
+export type ResourceTotals = {
+  culture: number;
+  science: number;
+  religion: number;
+  ducats: number;
+  gold: number;
+};
+
+export type OrderType = "BUILD" | "BUDGET" | "ARMY_MOVE";
+
+export type Order = {
+  id: string;
+  turnId: number;
+  playerId: string;
+  countryId: string;
+  provinceId: string;
+  type: OrderType;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type OrderDelta = {
+  type: "ORDER_DELTA";
+  order: Omit<Order, "id" | "createdAt">;
+};
+
+export type WorldBase = {
+  turnId: number;
+  resourcesByCountry: Record<string, ResourceTotals>;
+  provinceOwner: Record<string, string>;
+};
+
+export type WorldPatch = {
+  type: "WORLD_PATCH";
+  turnId: number;
+  worldBase: WorldBase;
+  rejectedOrders: Array<{ playerId: string; reason: string; tempOrderId?: string }>;
+};
+
+export type WsInMessage =
+  | { type: "AUTH"; token: string }
+  | OrderDelta
+  | { type: "PING" }
+  | { type: "REQUEST_RESOLVE" };
+
+export type WsOutMessage =
+  | { type: "CONNECTED"; serverTime: string }
+  | { type: "AUTH_OK"; playerId: string; countryId: string; worldBase: WorldBase; turnId: number }
+  | { type: "ORDER_BROADCAST"; order: Order }
+  | { type: "ERROR"; code: string; message: string }
+  | { type: "PONG" }
+  | { type: "PRESENCE"; onlinePlayerIds: string[] }
+  | WorldPatch;
+
+export type LoginPayload = {
+  countryId: string;
+  password: string;
+  rememberMe: boolean;
+};
+
+export type RegisterPayload = {
+  countryName: string;
+  countryColor: string;
+  flagUrl?: string;
+  crestUrl?: string;
+  password: string;
+};
+
+export const ADM1_GEOJSON = {
+  type: "FeatureCollection",
+  name: "adm1_sample",
+  features: [
+    {
+      type: "Feature",
+      properties: { id: "p-north", name: "North March", country: "ARC" },
+      geometry: {
+        type: "Polygon",
+        coordinates: [[[-10, 20], [0, 20], [0, 30], [-10, 30], [-10, 20]]],
+      },
+    },
+    {
+      type: "Feature",
+      properties: { id: "p-south", name: "South March", country: "ARC" },
+      geometry: {
+        type: "Polygon",
+        coordinates: [[[-10, 10], [0, 10], [0, 20], [-10, 20], [-10, 10]]],
+      },
+    },
+    {
+      type: "Feature",
+      properties: { id: "p-east", name: "East Crown", country: "VAL" },
+      geometry: {
+        type: "Polygon",
+        coordinates: [[[0, 10], [10, 10], [10, 30], [0, 30], [0, 10]]],
+      },
+    },
+  ],
+} as const;

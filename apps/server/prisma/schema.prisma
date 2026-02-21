@@ -1,0 +1,19 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Country {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  color        String
+  flagUrl      String?
+  crestUrl     String?
+  passwordHash String
+  isLocked     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
