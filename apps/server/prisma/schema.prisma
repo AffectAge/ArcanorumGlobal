@@ -15,5 +15,6 @@ model Country {
   crestUrl     String?
   passwordHash String
   isLocked     Boolean  @default(false)
+  isAdmin      Boolean  @default(false)
   createdAt    DateTime @default(now())
 }

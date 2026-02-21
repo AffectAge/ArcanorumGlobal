@@ -38,6 +38,9 @@ export default function App() {
     (msg: WsOutMessage) => {
       if (msg.type === "AUTH_OK") {
         setWorldBase(msg.worldBase, msg.turnId);
+        if (auth) {
+          setAuth({ ...auth, isAdmin: msg.isAdmin });
+        }
       }
 
       if (msg.type === "ORDER_BROADCAST") {
@@ -80,7 +83,7 @@ export default function App() {
   }, []);
 
   const onAuthSuccess = (payload: AuthSuccess) => {
-    setAuth({ token: payload.token, playerId: payload.playerId, countryId: payload.countryId });
+    setAuth({ token: payload.token, playerId: payload.playerId, countryId: payload.countryId, isAdmin: payload.isAdmin });
     setCountry({ name: payload.countryName, color: payload.countryColor, flagUrl: payload.flagUrl, crestUrl: payload.crestUrl });
   };
 
@@ -95,6 +98,16 @@ export default function App() {
     setAuth(null);
     setCountry(null);
     toast("Вы вышли из страны");
+  };
+
+  const forceResolveAsAdmin = () => {
+    if (!auth?.isAdmin) {
+      toast.error("Только для администраторов");
+      return;
+    }
+
+    send({ type: "ADMIN_FORCE_RESOLVE" });
+    toast("Админ-команда отправлена", { description: "Принудительный резолв хода" });
   };
 
   const queueBuildOrder = (provinceId?: string) => {
@@ -146,6 +159,8 @@ export default function App() {
             resources={currentResources}
             onNextTurn={() => send({ type: "REQUEST_RESOLVE" })}
             onLogout={logoutToAuth}
+            isAdmin={auth.isAdmin}
+            onAdminForceResolve={forceResolveAsAdmin}
           />
           <SideNav />
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />

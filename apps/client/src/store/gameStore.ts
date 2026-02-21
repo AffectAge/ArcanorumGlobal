@@ -7,6 +7,7 @@ type AuthState = {
   token: string;
   playerId: string;
   countryId: string;
+  isAdmin: boolean;
 };
 
 type GameState = {

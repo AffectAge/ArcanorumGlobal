@@ -6,6 +6,7 @@ export type Country = {
   color: string;
   flagUrl?: string | null;
   crestUrl?: string | null;
+  isAdmin?: boolean;
 };
 
 export type ResourceTotals = {
@@ -51,11 +52,12 @@ export type WsInMessage =
   | { type: "AUTH"; token: string }
   | OrderDelta
   | { type: "PING" }
-  | { type: "REQUEST_RESOLVE" };
+  | { type: "REQUEST_RESOLVE" }
+  | { type: "ADMIN_FORCE_RESOLVE" };
 
 export type WsOutMessage =
   | { type: "CONNECTED"; serverTime: string }
-  | { type: "AUTH_OK"; playerId: string; countryId: string; worldBase: WorldBase; turnId: number }
+  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number }
   | { type: "ORDER_BROADCAST"; order: Order }
   | { type: "ERROR"; code: string; message: string }
   | { type: "PONG" }

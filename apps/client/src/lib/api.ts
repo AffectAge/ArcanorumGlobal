@@ -46,7 +46,7 @@ export async function fetchCountries(): Promise<Country[]> {
   return countries.map(normalizeCountry);
 }
 
-export async function login(payload: LoginPayload): Promise<{ token: string; playerId: string; countryId: string; turnId: number }> {
+export async function login(payload: LoginPayload): Promise<{ token: string; playerId: string; countryId: string; isAdmin: boolean; turnId: number }> {
   const response = await fetch(`${API}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

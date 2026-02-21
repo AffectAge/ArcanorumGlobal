@@ -89,6 +89,7 @@ const countrySelect = {
   color: true,
   flagUrl: true,
   crestUrl: true,
+  isAdmin: true,
 } as const;
 
 let turnId = 1;
@@ -127,7 +128,7 @@ const loginSchema = z.object({
   rememberMe: z.boolean(),
 });
 
-function createToken(player: { id: string; countryId: string }, rememberMe: boolean): string {
+function createToken(player: { id: string; countryId: string; isAdmin: boolean }, rememberMe: boolean): string {
   const expiresIn = rememberMe ? "30d" : "8h";
   return jwt.sign(player, env.jwtSecret, { expiresIn });
 }
@@ -141,7 +142,7 @@ function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
   });
 }
 
-function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null }): Country {
+function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean }): Country {
   return row;
 }
 
@@ -193,6 +194,40 @@ app.get("/countries", async (_req, res) => {
   res.json(countries.map(countryFromDb));
 });
 
+function parseAuthHeader(req: express.Request): { id: string; countryId: string; isAdmin: boolean } | null {
+  const header = req.header("authorization");
+  if (!header || !header.startsWith("Bearer ")) {
+    return null;
+  }
+
+  try {
+    return jwt.verify(header.slice("Bearer ".length), env.jwtSecret) as { id: string; countryId: string; isAdmin: boolean };
+  } catch {
+    return null;
+  }
+}
+
+app.patch("/admin/countries/:countryId/admin", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !auth.isAdmin) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const nextIsAdmin = Boolean(req.body?.isAdmin);
+
+  try {
+    const updated = await prisma.country.update({
+      where: { id: req.params.countryId },
+      data: { isAdmin: nextIsAdmin },
+      select: countrySelect,
+    });
+
+    return res.json(countryFromDb(updated));
+  } catch {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+});
+
 app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -207,6 +242,7 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
   const passwordHash = await bcrypt.hash(password, 10);
 
   try {
+    const hasAnyAdmin = (await prisma.country.count({ where: { isAdmin: true } })) > 0;
     const country = await prisma.country.create({
       data: {
         name: countryName,
@@ -214,6 +250,7 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
         flagUrl: flagFile ? `/uploads/flags/${flagFile.filename}` : null,
         crestUrl: crestFile ? `/uploads/crests/${crestFile.filename}` : null,
         passwordHash,
+        isAdmin: !hasAnyAdmin,
       },
       select: countrySelect,
     });
@@ -250,8 +287,8 @@ app.post("/auth/login", async (req, res) => {
     return res.status(401).json({ error: "INVALID_PASSWORD" });
   }
 
-  const token = createToken({ id: `player-${country.id}`, countryId: country.id }, rememberMe);
-  return res.json({ token, playerId: `player-${country.id}`, countryId: country.id, worldBase, turnId });
+  const token = createToken({ id: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin }, rememberMe);
+  return res.json({ token, playerId: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin, worldBase, turnId });
 });
 
 app.get("/tiles/adm1/:z/:x/:y.mvt", (req, res) => {
@@ -294,6 +331,7 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (socket) => {
   let playerId: string | null = null;
+  let isAdmin = false;
 
   const send = (message: WsOutMessage) => {
     socket.send(JSON.stringify(message));
@@ -317,10 +355,11 @@ wss.on("connection", (socket) => {
 
     if (msg.type === "AUTH") {
       try {
-        const payload = jwt.verify(msg.token, env.jwtSecret) as { id: string; countryId: string };
+        const payload = jwt.verify(msg.token, env.jwtSecret) as { id: string; countryId: string; isAdmin?: boolean };
         playerId = payload.id;
+        isAdmin = Boolean(payload.isAdmin);
         onlinePlayers.add(payload.id);
-        send({ type: "AUTH_OK", playerId: payload.id, countryId: payload.countryId, worldBase, turnId });
+        send({ type: "AUTH_OK", playerId: payload.id, countryId: payload.countryId, isAdmin, worldBase, turnId });
         broadcast(wss, { type: "PRESENCE", onlinePlayerIds: [...onlinePlayers] });
       } catch {
         send({ type: "ERROR", code: "UNAUTHORIZED", message: "Token invalid" });
@@ -366,6 +405,16 @@ wss.on("connection", (socket) => {
       ordersByTurn.set(turnId, turnOrders);
 
       broadcast(wss, { type: "ORDER_BROADCAST", order });
+      return;
+    }
+
+    if (msg.type === "ADMIN_FORCE_RESOLVE") {
+      if (!isAdmin) {
+        send({ type: "ERROR", code: "FORBIDDEN", message: "Admin only" });
+        return;
+      }
+      const patch = resolveTurn();
+      broadcast(wss, patch);
       return;
     }
 

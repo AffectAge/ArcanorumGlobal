@@ -42,6 +42,7 @@ export type AuthSuccess = {
   flagUrl?: string | null;
   crestUrl?: string | null;
   turnId: number;
+  isAdmin: boolean;
 };
 
 type Props = {
