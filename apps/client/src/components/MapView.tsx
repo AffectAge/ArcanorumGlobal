@@ -107,7 +107,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
           },
         },
         layers: [
-          { id: "bg", type: "background", paint: { "background-color": "#0d4f8a" } },
+          { id: "bg", type: "background", paint: { "background-color": "#5A9EAD" } },
           {
             id: "province-fill",
             type: "fill",
@@ -115,7 +115,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             "source-layer": "adm1",
             paint: {
               "fill-color": "#ffffff",
-              "fill-opacity": 0.84,
+              "fill-opacity": 0.95,
             },
           },
           {
@@ -126,7 +126,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             filter: ["==", ["get", "id"], ""],
             paint: {
               "fill-color": "#000000",
-              "fill-opacity": 0.22,
+              "fill-opacity": 0.8,
             },
           },
           {
@@ -344,3 +344,5 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     </>
   );
 }
+
+
