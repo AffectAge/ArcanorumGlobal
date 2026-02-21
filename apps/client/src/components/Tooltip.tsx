@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { useFloating, offset, shift, flip, useHover, useInteractions, useRole, FloatingPortal } from "@floating-ui/react";
+import { useFloating, offset, shift, flip, useHover, useInteractions, useRole, FloatingPortal, type Placement } from "@floating-ui/react";
 
 type TooltipProps = {
   content: string;
   children: React.ReactNode;
+  placement?: Placement;
 };
 
-export function Tooltip({ content, children }: TooltipProps) {
+export function Tooltip({ content, children, placement = "right" }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const { refs, floatingStyles, context } = useFloating({
     open,
     onOpenChange: setOpen,
+    placement,
     middleware: [offset(10), flip(), shift({ padding: 8 })],
   });
 
@@ -28,7 +30,7 @@ export function Tooltip({ content, children }: TooltipProps) {
           <div
             ref={refs.setFloating}
             style={floatingStyles}
-            className="glass panel-border z-[200] max-w-56 rounded-lg px-3 py-2 text-xs text-arc-muted shadow-neon"
+            className="panel-border z-[200] max-w-56 rounded-md bg-arc-panel/95 px-3 py-1 text-xs text-arc-accent"
             {...getFloatingProps()}
           >
             {content}
@@ -38,3 +40,4 @@ export function Tooltip({ content, children }: TooltipProps) {
     </>
   );
 }
+
