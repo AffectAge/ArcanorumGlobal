@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, LogOut } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 
 type Resources = {
@@ -16,6 +16,7 @@ type Props = {
   turnId: number;
   resources: Resources;
   onNextTurn: () => void;
+  onLogout: () => void;
 };
 
 const cards = [
@@ -26,7 +27,7 @@ const cards = [
   { key: "gold", label: "Золото", icon: CircleDollarSign, tip: "Госказна для больших проектов" },
 ] as const;
 
-export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNextTurn }: Props) {
+export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNextTurn, onLogout }: Props) {
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
@@ -51,7 +52,11 @@ export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNe
           })}
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <button onClick={onLogout} className="panel-border inline-flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-sm text-slate-100 transition hover:text-arc-accent">
+            <LogOut size={15} />
+            Выход
+          </button>
           <button onClick={onNextTurn} className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110">
             Следующий ход #{turnId}
           </button>

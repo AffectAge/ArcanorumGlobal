@@ -154,6 +154,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       pitchWithRotate: false,
       dragRotate: false,
       touchPitch: false,
+      attributionControl: false,
     });
 
     const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: "map-hover-popup" });
@@ -355,3 +356,5 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     </>
   );
 }
+
+

@@ -91,6 +91,12 @@ export default function App() {
     return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, ducats: 0, gold: 0 };
   }, [auth, worldBase]);
 
+  const logoutToAuth = () => {
+    setAuth(null);
+    setCountry(null);
+    toast("Вы вышли из страны");
+  };
+
   const queueBuildOrder = (provinceId?: string) => {
     if (!auth) {
       return;
@@ -139,6 +145,7 @@ export default function App() {
             turnId={turnId}
             resources={currentResources}
             onNextTurn={() => send({ type: "REQUEST_RESOLVE" })}
+            onLogout={logoutToAuth}
           />
           <SideNav />
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
