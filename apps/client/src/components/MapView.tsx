@@ -103,7 +103,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
           },
         },
         layers: [
-          { id: "bg", type: "background", paint: { "background-color": "#008080" } },
+          { id: "bg", type: "background", paint: { "background-color": "#4FC1FF" } },
           {
             id: "province-fill",
             type: "fill",
