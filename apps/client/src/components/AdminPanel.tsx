@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, Palette, Shield, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
-import { adminDeleteCountry, adminUpdateCountry, fetchCountries } from "../lib/api";
+import { adminDeleteCountry, adminSetCountryPunishment, adminUpdateCountry, fetchCountries } from "../lib/api";
 
 type Props = {
   open: boolean;
@@ -18,6 +18,7 @@ const categories = [{ id: "countries", label: "Управление страна
 
 export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCountryUpdated }: Props) {
   const [activeCategory, setActiveCategory] = useState<(typeof categories)[number]["id"]>("countries");
+  const [countrySection, setCountrySection] = useState<"general" | "punishments">("general");
   const [countries, setCountries] = useState<Country[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -30,8 +31,30 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [crestFile, setCrestFile] = useState<File | null>(null);
   const [flagPreviewUrl, setFlagPreviewUrl] = useState<string | null>(null);
   const [crestPreviewUrl, setCrestPreviewUrl] = useState<string | null>(null);
+  const [turnsToBlock, setTurnsToBlock] = useState(3);
+  const [blockUntilAt, setBlockUntilAt] = useState("");
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
+
+  const punishmentStatus = useMemo(() => {
+    if (!selectedCountry) {
+      return "";
+    }
+
+    if (selectedCountry.isLocked) {
+      return "Перманентная блокировка входа";
+    }
+
+    if (selectedCountry.blockedUntilTurn) {
+      return `Блокировка до хода #${selectedCountry.blockedUntilTurn}`;
+    }
+
+    if (selectedCountry.blockedUntilAt) {
+      return `Блокировка до ${new Date(selectedCountry.blockedUntilAt).toLocaleString()}`;
+    }
+
+    return "Ограничений нет";
+  }, [selectedCountry]);
 
   useEffect(() => {
     if (!open) {
@@ -120,6 +143,26 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       } else {
         toast.error("Не удалось обновить страну");
       }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const applyPunishment = async (payload: { action: "unlock" } | { action: "permanent" } | { action: "turns"; turns: number } | { action: "time"; blockedUntilAt: string }) => {
+    if (!selectedCountry) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updated = await adminSetCountryPunishment(token, selectedCountry.id, payload);
+      setCountries((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      if (updated.id === currentCountryId) {
+        onSessionCountryUpdated(updated);
+      }
+      toast.success("Наказание обновлено");
+    } catch {
+      toast.error("Не удалось применить наказание");
     } finally {
       setSaving(false);
     }
@@ -214,6 +257,25 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
 
                   {selectedCountry && (
                     <>
+                      <div className="flex gap-2 rounded-lg bg-black/30 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setCountrySection("general")}
+                          className={`rounded-md px-3 py-1 text-xs transition ${countrySection === "general" ? "bg-arc-accent/20 text-arc-accent" : "text-slate-300 hover:text-white"}`}
+                        >
+                          Основная информация
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCountrySection("punishments")}
+                          className={`rounded-md px-3 py-1 text-xs transition ${countrySection === "punishments" ? "bg-rose-500/20 text-rose-300" : "text-slate-300 hover:text-white"}`}
+                        >
+                          Наказания
+                        </button>
+                      </div>
+
+                      {countrySection === "general" && (
+                        <>
                       <div className="grid gap-3 md:grid-cols-2">
                         <div>
                           <label className="mb-1 block text-xs text-slate-300">Название</label>
@@ -270,6 +332,74 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                           Удалить страну
                         </button>
                       </div>
+                        </>
+                      )}
+
+                      {countrySection === "punishments" && (
+                        <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-3">
+                          <div className="text-sm text-slate-200">Текущий статус: <span className="text-arc-accent">{punishmentStatus}</span></div>
+
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Блок на ходы</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={turnsToBlock}
+                                onChange={(e) => setTurnsToBlock(Math.max(1, Number(e.target.value) || 1))}
+                                className="w-28 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => applyPunishment({ action: "turns", turns: turnsToBlock })}
+                              disabled={saving}
+                              className="rounded-lg bg-rose-600/20 px-3 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
+                            >
+                              Заблокировать на ходы
+                            </button>
+                          </div>
+
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Блок до времени</label>
+                              <input
+                                type="datetime-local"
+                                value={blockUntilAt}
+                                onChange={(e) => setBlockUntilAt(e.target.value)}
+                                className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => blockUntilAt && applyPunishment({ action: "time", blockedUntilAt: new Date(blockUntilAt).toISOString() })}
+                              disabled={saving || !blockUntilAt}
+                              className="rounded-lg bg-rose-600/20 px-3 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
+                            >
+                              Заблокировать по времени
+                            </button>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => applyPunishment({ action: "permanent" })}
+                              disabled={saving}
+                              className="rounded-lg bg-rose-700/30 px-3 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
+                            >
+                              Перманентная блокировка
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => applyPunishment({ action: "unlock" })}
+                              disabled={saving}
+                              className="rounded-lg bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-300 disabled:opacity-60"
+                            >
+                              Снять блокировку
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

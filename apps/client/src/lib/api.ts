@@ -55,6 +55,20 @@ export async function login(payload: LoginPayload): Promise<{ token: string; pla
 
   if (!response.ok) {
     const err = await response.json();
+    if (err?.error === "ACCOUNT_LOCKED") {
+      if (typeof err?.blockedUntilTurn === "number") {
+        throw new Error(`ACCOUNT_LOCKED_TURN_${err.blockedUntilTurn}`);
+      }
+
+      if (typeof err?.blockedUntilAt === "string") {
+        throw new Error(`ACCOUNT_LOCKED_TIME_${err.blockedUntilAt}`);
+      }
+
+      if (err?.reason === "PERMANENT") {
+        throw new Error("ACCOUNT_LOCKED_PERMANENT");
+      }
+    }
+
     throw new Error(err.error ?? "LOGIN_FAILED");
   }
 
@@ -149,4 +163,31 @@ export async function adminDeleteCountry(token: string, countryId: string): Prom
     const err = await response.json();
     throw new Error(err.error ?? "COUNTRY_DELETE_FAILED");
   }
+}
+
+
+export async function adminSetCountryPunishment(
+  token: string,
+  countryId: string,
+  payload:
+    | { action: "unlock" }
+    | { action: "permanent" }
+    | { action: "turns"; turns: number }
+    | { action: "time"; blockedUntilAt: string },
+): Promise<Country> {
+  const response = await fetch(`${API}/admin/countries/${countryId}/punishments`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "PUNISHMENT_UPDATE_FAILED");
+  }
+
+  return normalizeCountry((await response.json()) as Country);
 }

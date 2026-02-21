@@ -14,7 +14,9 @@ model Country {
   flagUrl      String?
   crestUrl     String?
   passwordHash String
-  isLocked     Boolean  @default(false)
-  isAdmin      Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  isLocked         Boolean   @default(false)
+  isAdmin          Boolean   @default(false)
+  blockedUntilTurn Int?
+  blockedUntilAt   DateTime?
+  createdAt        DateTime  @default(now())
 }

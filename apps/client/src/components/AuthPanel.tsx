@@ -223,7 +223,22 @@ export function AuthPanel({ onSuccess }: Props) {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "LOGIN_FAILED";
-      const text = msg === "INVALID_PASSWORD" ? "Неверный пароль" : msg === "ACCOUNT_LOCKED" ? "Аккаунт заблокирован" : "Сервер недоступен";
+      let text = "Сервер недоступен";
+
+      if (msg === "INVALID_PASSWORD") {
+        text = "Неверный пароль";
+      } else if (msg === "ACCOUNT_LOCKED_PERMANENT" || msg === "ACCOUNT_LOCKED") {
+        text = "Аккаунт заблокирован бессрочно";
+      } else if (msg.startsWith("ACCOUNT_LOCKED_TURN_")) {
+        const turn = msg.replace("ACCOUNT_LOCKED_TURN_", "");
+        text = `Аккаунт заблокирован до хода #${turn}`;
+      } else if (msg.startsWith("ACCOUNT_LOCKED_TIME_")) {
+        const raw = msg.replace("ACCOUNT_LOCKED_TIME_", "");
+        const when = new Date(raw);
+        text = Number.isNaN(when.getTime())
+          ? `Аккаунт заблокирован до ${raw}`
+          : `Аккаунт заблокирован до ${when.toLocaleString()}`;
+      }
       toast.error(text);
     } finally {
       setSubmitting(false);

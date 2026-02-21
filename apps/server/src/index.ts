@@ -91,6 +91,9 @@ const countrySelect = {
   flagUrl: true,
   crestUrl: true,
   isAdmin: true,
+  isLocked: true,
+  blockedUntilTurn: true,
+  blockedUntilAt: true,
 } as const;
 
 let turnId = 1;
@@ -143,8 +146,11 @@ function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
   });
 }
 
-function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean }): Country {
-  return row;
+function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null }): Country {
+  return {
+    ...row,
+    blockedUntilAt: row.blockedUntilAt ? row.blockedUntilAt.toISOString() : null,
+  };
 }
 
 function validateImageDimensions(file: Express.Multer.File): boolean {
@@ -375,6 +381,65 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   return res.json({ ok: true });
 });
 
+const punishSchema = z
+  .object({
+    action: z.enum(["unlock", "permanent", "turns", "time"]),
+    turns: z.coerce.number().int().min(1).max(5000).optional(),
+    blockedUntilAt: z.string().datetime().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.action === "turns" && !val.turns) {
+      ctx.addIssue({ code: "custom", path: ["turns"], message: "turns_required" });
+    }
+    if (val.action === "time" && !val.blockedUntilAt) {
+      ctx.addIssue({ code: "custom", path: ["blockedUntilAt"], message: "time_required" });
+    }
+  });
+
+app.patch("/admin/countries/:countryId/punishments", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !auth.isAdmin) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const countryIdParam = String(req.params.countryId);
+  const target = await prisma.country.findUnique({ where: { id: countryIdParam } });
+  if (!target) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+
+  const parsed = punishSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const input = parsed.data;
+  let data: { isLocked?: boolean; blockedUntilTurn?: number | null; blockedUntilAt?: Date | null } = {};
+
+  if (input.action === "unlock") {
+    data = { isLocked: false, blockedUntilTurn: null, blockedUntilAt: null };
+  }
+
+  if (input.action === "permanent") {
+    data = { isLocked: true, blockedUntilTurn: null, blockedUntilAt: null };
+  }
+
+  if (input.action === "turns") {
+    data = { isLocked: false, blockedUntilTurn: turnId + (input.turns ?? 0), blockedUntilAt: null };
+  }
+
+  if (input.action === "time") {
+    const until = new Date(input.blockedUntilAt ?? "");
+    if (Number.isNaN(until.getTime()) || until <= new Date()) {
+      return res.status(400).json({ error: "INVALID_TIME" });
+    }
+    data = { isLocked: false, blockedUntilTurn: null, blockedUntilAt: until };
+  }
+
+  const updated = await prisma.country.update({ where: { id: countryIdParam }, data, select: countrySelect });
+  return res.json(countryFromDb(updated));
+});
+
 app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -439,8 +504,29 @@ app.post("/auth/login", async (req, res) => {
     return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
   }
 
-  if (country.isLocked) {
-    return res.status(403).json({ error: "ACCOUNT_LOCKED" });
+  const now = new Date();
+  const blockedByTurn = country.blockedUntilTurn != null && turnId <= country.blockedUntilTurn;
+  const blockedByTime = country.blockedUntilAt != null && country.blockedUntilAt > now;
+
+  if (country.isLocked || blockedByTurn || blockedByTime) {
+    if (country.isLocked) {
+      return res.status(403).json({ error: "ACCOUNT_LOCKED", reason: "PERMANENT" });
+    }
+
+    if (blockedByTurn) {
+      return res.status(403).json({
+        error: "ACCOUNT_LOCKED",
+        reason: "TURN",
+        blockedUntilTurn: country.blockedUntilTurn,
+        currentTurn: turnId,
+      });
+    }
+
+    return res.status(403).json({
+      error: "ACCOUNT_LOCKED",
+      reason: "TIME",
+      blockedUntilAt: country.blockedUntilAt?.toISOString() ?? null,
+    });
   }
 
   const ok = await bcrypt.compare(password, country.passwordHash);

@@ -7,6 +7,9 @@ export type Country = {
   flagUrl?: string | null;
   crestUrl?: string | null;
   isAdmin?: boolean;
+  isLocked?: boolean;
+  blockedUntilTurn?: number | null;
+  blockedUntilAt?: string | null;
 };
 
 export type ResourceTotals = {
