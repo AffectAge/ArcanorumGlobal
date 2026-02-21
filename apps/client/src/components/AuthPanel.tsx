@@ -100,6 +100,8 @@ export function AuthPanel({ onSuccess }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [flagFile, setFlagFile] = useState<File | null>(null);
   const [crestFile, setCrestFile] = useState<File | null>(null);
+  const [flagPreviewUrl, setFlagPreviewUrl] = useState<string | null>(null);
+  const [crestPreviewUrl, setCrestPreviewUrl] = useState<string | null>(null);
 
   const loginForm = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -137,6 +139,28 @@ export function AuthPanel({ onSuccess }: Props) {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!flagFile) {
+      setFlagPreviewUrl(null);
+      return;
+    }
+
+    const url = URL.createObjectURL(flagFile);
+    setFlagPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [flagFile]);
+
+  useEffect(() => {
+    if (!crestFile) {
+      setCrestPreviewUrl(null);
+      return;
+    }
+
+    const url = URL.createObjectURL(crestFile);
+    setCrestPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [crestFile]);
 
   useEffect(() => {
     if (!loading) {
@@ -372,6 +396,29 @@ export function AuthPanel({ onSuccess }: Props) {
                 <div className="grid gap-3 md:grid-cols-2">
                   <FileField label="Флаг" file={flagFile} onChange={setFlagFile} />
                   <FileField label="Герб" file={crestFile} onChange={setCrestFile} />
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="panel-border rounded-lg bg-black/25 p-2">
+                    <div className="mb-2 text-xs text-slate-400">Предпросмотр флага</div>
+                    <div className="h-20 overflow-hidden rounded-md bg-black/30">
+                      {flagPreviewUrl ? (
+                        <img src={flagPreviewUrl} alt="flag preview" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-xs text-slate-500">Не выбран</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="panel-border rounded-lg bg-black/25 p-2">
+                    <div className="mb-2 text-xs text-slate-400">Предпросмотр герба</div>
+                    <div className="h-20 overflow-hidden rounded-md bg-black/30">
+                      {crestPreviewUrl ? (
+                        <img src={crestPreviewUrl} alt="crest preview" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-xs text-slate-500">Не выбран</div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">

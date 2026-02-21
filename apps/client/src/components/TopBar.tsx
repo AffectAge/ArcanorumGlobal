@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, LogOut, Shield } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, LogOut, ShieldAlert, SkipForward } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 
 type Resources = {
@@ -43,7 +43,7 @@ export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNe
           {cards.map((card) => {
             const Icon = card.icon;
             return (
-              <Tooltip key={card.key} content={card.tip}>
+              <Tooltip key={card.key} content={card.tip} placement="top">
                 <div className="panel-border flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-xs">
                   <Icon size={14} className="text-arc-accent" />
                   <span className="text-slate-300">{card.label}:</span>
@@ -56,25 +56,38 @@ export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNe
 
         <div className="flex justify-end gap-2">
           {isAdmin && (
-            <button
-              onClick={onAdminForceResolve}
-              className="panel-border inline-flex items-center gap-2 rounded-lg bg-arc-accent/20 px-3 py-2 text-sm text-arc-accent transition hover:brightness-110"
-            >
-              <Shield size={15} />
-              Админ: Форс-резолв
-            </button>
+            <Tooltip content="Админ: форс-резолв" placement="top">
+              <button
+                onClick={onAdminForceResolve}
+                className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300 transition hover:bg-rose-500/30"
+                aria-label="Админ: форс-резолв"
+              >
+                <ShieldAlert size={16} />
+              </button>
+            </Tooltip>
           )}
-          <button onClick={onLogout} className="panel-border inline-flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-sm text-slate-100 transition hover:text-arc-accent">
-            <LogOut size={15} />
-            Выход
-          </button>
-          <button onClick={onNextTurn} className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110">
-            Следующий ход #{turnId}
-          </button>
+
+          <Tooltip content="Выход" placement="top">
+            <button
+              onClick={onLogout}
+              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
+              aria-label="Выход"
+            >
+              <LogOut size={16} />
+            </button>
+          </Tooltip>
+
+          <Tooltip content={`Следующий ход #${turnId}`} placement="top">
+            <button
+              onClick={onNextTurn}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-arc-accent text-black transition hover:brightness-110"
+              aria-label={`Следующий ход #${turnId}`}
+            >
+              <SkipForward size={16} />
+            </button>
+          </Tooltip>
         </div>
       </div>
     </header>
   );
 }
-
-
