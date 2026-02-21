@@ -38,12 +38,12 @@ body {
 
 
 .glass {
-  background: linear-gradient(160deg, rgba(12, 16, 22, 0.92), rgba(8, 11, 16, 0.88));
+  background: linear-gradient(160deg, rgba(6, 8, 11, 0.95), rgba(3, 5, 7, 0.93));
   backdrop-filter: blur(10px);
 }
 
 .panel-border {
-  border: 1px solid rgba(99, 115, 133, 0.24);
+  border: 1px solid rgba(67, 78, 92, 0.24);
 }
 
 .map-btn {
@@ -69,8 +69,8 @@ body {
 
 
 .map-hover-popup .maplibregl-popup-content {
-  background: linear-gradient(160deg, rgba(12, 16, 22, 0.96), rgba(8, 11, 16, 0.94));
-  border: 1px solid rgba(99, 115, 133, 0.24);
+  background: linear-gradient(160deg, rgba(6, 8, 11, 0.97), rgba(3, 5, 7, 0.95));
+  border: 1px solid rgba(67, 78, 92, 0.24);
   border-radius: 10px;
   color: #f8fafc;
   padding: 8px 10px;
@@ -78,5 +78,5 @@ body {
 }
 
 .map-hover-popup .maplibregl-popup-tip {
-  border-top-color: rgba(12, 16, 22, 0.95);
+  border-top-color: rgba(5, 7, 10, 0.96);
 }

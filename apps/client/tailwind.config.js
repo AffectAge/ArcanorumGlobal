@@ -5,9 +5,9 @@ export default {
     extend: {
       colors: {
         arc: {
-          bg: "#07090c",
-          panel: "#0d1117",
-          soft: "#131922",
+          bg: "#030405",
+          panel: "#06080c",
+          soft: "#0b0e13",
           accent: "#22c55e",
           muted: "#8b94a3",
         },
