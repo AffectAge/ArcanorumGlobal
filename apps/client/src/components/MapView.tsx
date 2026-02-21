@@ -15,11 +15,6 @@ type MapModeStyle = {
   fillOpacity: number;
 };
 
-type HoveredProvince = {
-  id: string;
-  name: string;
-};
-
 const MODE_STYLES: Record<string, MapModeStyle> = {
   "Политическая карта": { fillColor: "#ffffff", fillOpacity: 0.84 },
   "Торговля": { fillColor: "#d9f99d", fillOpacity: 0.78 },
@@ -31,8 +26,6 @@ const MODE_STYLES: Record<string, MapModeStyle> = {
 
 const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1.2;
-
-const PROVINCE_KEY_EXPR: any = ["coalesce", ["get", "id"], ["get", "ID_1"], ["get", "adm1_code"], ["get", "name"], ["get", "NAME_1"]];
 
 function setInteractions(map: MapLibreMap, enabled: boolean) {
   const action = enabled ? "enable" : "disable";
@@ -58,13 +51,11 @@ function readProvinceName(properties: Record<string, unknown> | undefined) {
 export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const hoverTooltipRef = useRef<HTMLDivElement | null>(null);
-  const hoverPointRef = useRef({ x: 0, y: 0 });
-  const hoverRafRef = useRef<number | null>(null);
-  const hoverProvinceIdRef = useRef("");
+  const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
+  const hoveredFeatureIdRef = useRef<string | null>(null);
+  const selectedFeatureIdRef = useRef<string | null>(null);
 
   const [interactionLocked, setInteractionLocked] = useState(false);
-  const [hoveredProvince, setHoveredProvince] = useState<HoveredProvince | null>(null);
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
   const [view, setView] = useState({ zoom: DEFAULT_ZOOM, lng: DEFAULT_CENTER[0], lat: DEFAULT_CENTER[1] });
 
@@ -93,24 +84,6 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
   const selectedProvinceOrdersCount = selectedProvinceId ? (ordersCountByProvince.get(selectedProvinceId) ?? 0) : 0;
   const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? "?") : "?";
 
-  const flushHoverPosition = () => {
-    hoverRafRef.current = null;
-    const node = hoverTooltipRef.current;
-    if (!node) {
-      return;
-    }
-
-    node.style.transform = `translate3d(${hoverPointRef.current.x + 14}px, ${hoverPointRef.current.y + 14}px, 0)`;
-  };
-
-  const scheduleHoverPosition = () => {
-    if (hoverRafRef.current != null) {
-      return;
-    }
-
-    hoverRafRef.current = window.requestAnimationFrame(flushHoverPosition);
-  };
-
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
       return;
@@ -126,10 +99,11 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             tiles: [`${apiBase}/tiles/adm1/{z}/{x}/{y}.mvt`],
             minzoom: 0,
             maxzoom: 7,
+            promoteId: { adm1: "id" },
           },
         },
         layers: [
-          { id: "bg", type: "background", paint: { "background-color": "#69CCD9" } },
+          { id: "bg", type: "background", paint: { "background-color": "#008080" } },
           {
             id: "province-fill",
             type: "fill",
@@ -145,10 +119,9 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             type: "fill",
             source: "adm1",
             "source-layer": "adm1",
-            filter: ["==", PROVINCE_KEY_EXPR, ""],
             paint: {
               "fill-color": "#000000",
-              "fill-opacity": 0.4,
+              "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.4, 0],
             },
           },
           {
@@ -156,10 +129,9 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             type: "line",
             source: "adm1",
             "source-layer": "adm1",
-            filter: ["==", PROVINCE_KEY_EXPR, ""],
             paint: {
               "line-color": "#000000",
-              "line-width": 2.5,
+              "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.5, 0],
             },
           },
           {
@@ -184,6 +156,9 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       touchPitch: false,
     });
 
+    const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: "map-hover-popup" });
+    hoverPopupRef.current = hoverPopup;
+
     map.on("load", () => {
       map.resize();
       const c = map.getCenter();
@@ -197,41 +172,61 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
 
     map.on("mousemove", "province-fill", (e) => {
       const feature = e.features?.[0];
-      const props = feature?.properties as Record<string, unknown> | undefined;
+      if (!feature) {
+        return;
+      }
+
+      const props = feature.properties as Record<string, unknown> | undefined;
       const id = readProvinceId(props);
+      const name = readProvinceName(props);
       if (!id) {
         return;
       }
 
       map.getCanvas().style.cursor = "pointer";
-      hoverPointRef.current = { x: e.point.x, y: e.point.y };
-      scheduleHoverPosition();
 
-      if (hoverProvinceIdRef.current !== id) {
-        hoverProvinceIdRef.current = id;
-        map.setFilter("province-hover", ["==", PROVINCE_KEY_EXPR, id]);
-        setHoveredProvince({ id, name: readProvinceName(props) });
+      if (hoveredFeatureIdRef.current && hoveredFeatureIdRef.current !== id) {
+        map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: hoveredFeatureIdRef.current }, { hover: false });
       }
+
+      if (hoveredFeatureIdRef.current !== id) {
+        hoveredFeatureIdRef.current = id;
+        map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id }, { hover: true });
+      }
+
+      hoverPopup
+        .setLngLat(e.lngLat)
+        .setHTML(`<div class="text-xs"><div class="font-semibold">${name}</div><div>ID: ${id}</div><div>В очереди: ${ordersCountByProvince.get(id) ?? 0}</div></div>`)
+        .addTo(map);
     });
 
     map.on("mouseleave", "province-fill", () => {
       map.getCanvas().style.cursor = "";
-      hoverProvinceIdRef.current = "";
-      map.setFilter("province-hover", ["==", PROVINCE_KEY_EXPR, ""]);
-      setHoveredProvince(null);
-      if (hoverRafRef.current != null) {
-        window.cancelAnimationFrame(hoverRafRef.current);
-        hoverRafRef.current = null;
+      if (hoveredFeatureIdRef.current) {
+        map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: hoveredFeatureIdRef.current }, { hover: false });
       }
+      hoveredFeatureIdRef.current = null;
+      hoverPopup.remove();
     });
 
     map.on("click", "province-fill", (e) => {
       const feature = e.features?.[0];
-      const props = feature?.properties as Record<string, unknown> | undefined;
+      if (!feature) {
+        return;
+      }
+
+      const props = feature.properties as Record<string, unknown> | undefined;
       const id = readProvinceId(props);
       if (!id) {
         return;
       }
+
+      if (selectedFeatureIdRef.current && selectedFeatureIdRef.current !== id) {
+        map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: selectedFeatureIdRef.current }, { selected: false });
+      }
+
+      selectedFeatureIdRef.current = id;
+      map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id }, { selected: true });
 
       setSelectedProvince(id);
       setSelectedProvinceName(readProvinceName(props));
@@ -239,10 +234,16 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
 
     map.on("click", (e) => {
       const features = map.queryRenderedFeatures(e.point, { layers: ["province-fill"] });
-      if (features.length === 0) {
-        setSelectedProvince(null);
-        setSelectedProvinceName(null);
+      if (features.length > 0) {
+        return;
       }
+
+      if (selectedFeatureIdRef.current) {
+        map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: selectedFeatureIdRef.current }, { selected: false });
+      }
+      selectedFeatureIdRef.current = null;
+      setSelectedProvince(null);
+      setSelectedProvinceName(null);
     });
 
     map.on("dblclick", "province-fill", (e) => {
@@ -252,14 +253,12 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     mapRef.current = map;
 
     return () => {
-      if (hoverRafRef.current != null) {
-        window.cancelAnimationFrame(hoverRafRef.current);
-        hoverRafRef.current = null;
-      }
+      hoverPopup.remove();
+      hoverPopupRef.current = null;
       map.remove();
       mapRef.current = null;
     };
-  }, [apiBase, setSelectedProvince]);
+  }, [apiBase, ordersCountByProvince, setSelectedProvince]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -271,23 +270,6 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     map.setPaintProperty("province-fill", "fill-color", style.fillColor);
     map.setPaintProperty("province-fill", "fill-opacity", style.fillOpacity);
   }, [activeMode]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !map.getLayer("province-selected")) {
-      return;
-    }
-
-    map.setFilter("province-selected", ["==", PROVINCE_KEY_EXPR, selectedProvinceId ?? ""]);
-  }, [selectedProvinceId]);
-
-  useEffect(() => {
-    if (!hoveredProvince) {
-      return;
-    }
-
-    scheduleHoverPosition();
-  }, [hoveredProvince]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
@@ -316,16 +298,6 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     <>
       <div ref={containerRef} className="map-surface" />
       <div className="vignette absolute inset-0 pointer-events-none" />
-
-      {hoveredProvince && (
-        <div ref={hoverTooltipRef} className="pointer-events-none absolute left-0 top-0 z-30 will-change-transform">
-          <div className="glass panel-border rounded-lg px-2 py-1 text-xs text-slate-100">
-            <div className="font-semibold text-arc-accent">{hoveredProvince.name}</div>
-            <div>ID: {hoveredProvince.id}</div>
-            <div>В очереди: {ordersCountByProvince.get(hoveredProvince.id) ?? 0}</div>
-          </div>
-        </div>
-      )}
 
       <div className="glass panel-border pointer-events-auto absolute bottom-24 right-4 z-30 flex items-center gap-1 rounded-xl p-1">
         <Tooltip content="Приблизить карту">

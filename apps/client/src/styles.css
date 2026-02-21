@@ -66,3 +66,17 @@ body {
     box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
   }
 }
+
+
+.map-hover-popup .maplibregl-popup-content {
+  background: linear-gradient(160deg, rgba(12, 16, 22, 0.96), rgba(8, 11, 16, 0.94));
+  border: 1px solid rgba(99, 115, 133, 0.24);
+  border-radius: 10px;
+  color: #f8fafc;
+  padding: 8px 10px;
+  box-shadow: none;
+}
+
+.map-hover-popup .maplibregl-popup-tip {
+  border-top-color: rgba(12, 16, 22, 0.95);
+}

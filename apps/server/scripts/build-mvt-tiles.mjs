@@ -14,6 +14,21 @@ if (!existsSync(sourcePath)) {
 }
 
 const geojson = JSON.parse(readFileSync(sourcePath, "utf-8"));
+
+if (geojson?.type === "FeatureCollection" && Array.isArray(geojson.features)) {
+  geojson.features = geojson.features.map((feature, idx) => {
+    const props = feature?.properties ?? {};
+    const normalizedId = String(props.id ?? props.ID_1 ?? props.adm1_code ?? props.name ?? props.NAME_1 ?? `f-${idx}`);
+    return {
+      ...feature,
+      properties: {
+        ...props,
+        id: normalizedId,
+      },
+    };
+  });
+}
+
 const index = geojsonvt(geojson, {
   maxZoom: zMax,
   tolerance: 3,
@@ -45,3 +60,5 @@ for (let z = zMin; z <= zMax; z += 1) {
 }
 
 console.log(`Generated ${written} tiles at ${outRoot}`);
+
+
