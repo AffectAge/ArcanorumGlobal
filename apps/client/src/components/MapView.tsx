@@ -18,8 +18,6 @@ type MapModeStyle = {
 type HoveredProvince = {
   id: string;
   name: string;
-  x: number;
-  y: number;
 };
 
 const MODE_STYLES: Record<string, MapModeStyle> = {
@@ -33,6 +31,8 @@ const MODE_STYLES: Record<string, MapModeStyle> = {
 
 const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1.2;
+
+const PROVINCE_KEY_EXPR: any = ["coalesce", ["get", "id"], ["get", "ID_1"], ["get", "adm1_code"], ["get", "name"], ["get", "NAME_1"]];
 
 function setInteractions(map: MapLibreMap, enabled: boolean) {
   const action = enabled ? "enable" : "disable";
@@ -58,6 +58,10 @@ function readProvinceName(properties: Record<string, unknown> | undefined) {
 export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const hoverTooltipRef = useRef<HTMLDivElement | null>(null);
+  const hoverPointRef = useRef({ x: 0, y: 0 });
+  const hoverRafRef = useRef<number | null>(null);
+  const hoverProvinceIdRef = useRef("");
 
   const [interactionLocked, setInteractionLocked] = useState(false);
   const [hoveredProvince, setHoveredProvince] = useState<HoveredProvince | null>(null);
@@ -89,6 +93,24 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
   const selectedProvinceOrdersCount = selectedProvinceId ? (ordersCountByProvince.get(selectedProvinceId) ?? 0) : 0;
   const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? "?") : "?";
 
+  const flushHoverPosition = () => {
+    hoverRafRef.current = null;
+    const node = hoverTooltipRef.current;
+    if (!node) {
+      return;
+    }
+
+    node.style.transform = `translate3d(${hoverPointRef.current.x + 14}px, ${hoverPointRef.current.y + 14}px, 0)`;
+  };
+
+  const scheduleHoverPosition = () => {
+    if (hoverRafRef.current != null) {
+      return;
+    }
+
+    hoverRafRef.current = window.requestAnimationFrame(flushHoverPosition);
+  };
+
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
       return;
@@ -107,7 +129,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
           },
         },
         layers: [
-          { id: "bg", type: "background", paint: { "background-color": "#5A9EAD" } },
+          { id: "bg", type: "background", paint: { "background-color": "#69CCD9" } },
           {
             id: "province-fill",
             type: "fill",
@@ -123,10 +145,10 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             type: "fill",
             source: "adm1",
             "source-layer": "adm1",
-            filter: ["==", ["get", "id"], ""],
+            filter: ["==", PROVINCE_KEY_EXPR, ""],
             paint: {
               "fill-color": "#000000",
-              "fill-opacity": 0.8,
+              "fill-opacity": 0.4,
             },
           },
           {
@@ -134,9 +156,9 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             type: "line",
             source: "adm1",
             "source-layer": "adm1",
-            filter: ["==", ["get", "id"], ""],
+            filter: ["==", PROVINCE_KEY_EXPR, ""],
             paint: {
-              "line-color": "#22c55e",
+              "line-color": "#000000",
               "line-width": 2.5,
             },
           },
@@ -146,7 +168,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
             source: "adm1",
             "source-layer": "adm1",
             paint: {
-              "line-color": "#0a0a0a",
+              "line-color": "#C0C0C0",
               "line-width": 0.9,
               "line-opacity": 0.75,
             },
@@ -177,22 +199,30 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       const feature = e.features?.[0];
       const props = feature?.properties as Record<string, unknown> | undefined;
       const id = readProvinceId(props);
-      if (id) {
-        map.getCanvas().style.cursor = "pointer";
-        map.setFilter("province-hover", ["==", ["get", "id"], id]);
-        setHoveredProvince({
-          id,
-          name: readProvinceName(props),
-          x: e.point.x,
-          y: e.point.y,
-        });
+      if (!id) {
+        return;
+      }
+
+      map.getCanvas().style.cursor = "pointer";
+      hoverPointRef.current = { x: e.point.x, y: e.point.y };
+      scheduleHoverPosition();
+
+      if (hoverProvinceIdRef.current !== id) {
+        hoverProvinceIdRef.current = id;
+        map.setFilter("province-hover", ["==", PROVINCE_KEY_EXPR, id]);
+        setHoveredProvince({ id, name: readProvinceName(props) });
       }
     });
 
     map.on("mouseleave", "province-fill", () => {
       map.getCanvas().style.cursor = "";
-      map.setFilter("province-hover", ["==", ["get", "id"], ""]);
+      hoverProvinceIdRef.current = "";
+      map.setFilter("province-hover", ["==", PROVINCE_KEY_EXPR, ""]);
       setHoveredProvince(null);
+      if (hoverRafRef.current != null) {
+        window.cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
     });
 
     map.on("click", "province-fill", (e) => {
@@ -222,6 +252,10 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     mapRef.current = map;
 
     return () => {
+      if (hoverRafRef.current != null) {
+        window.cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
       map.remove();
       mapRef.current = null;
     };
@@ -244,8 +278,16 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       return;
     }
 
-    map.setFilter("province-selected", ["==", ["get", "id"], selectedProvinceId ?? ""]);
+    map.setFilter("province-selected", ["==", PROVINCE_KEY_EXPR, selectedProvinceId ?? ""]);
   }, [selectedProvinceId]);
+
+  useEffect(() => {
+    if (!hoveredProvince) {
+      return;
+    }
+
+    scheduleHoverPosition();
+  }, [hoveredProvince]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
@@ -276,10 +318,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       <div className="vignette absolute inset-0 pointer-events-none" />
 
       {hoveredProvince && (
-        <div
-          className="pointer-events-none absolute z-30"
-          style={{ left: hoveredProvince.x + 14, top: hoveredProvince.y + 14 }}
-        >
+        <div ref={hoverTooltipRef} className="pointer-events-none absolute left-0 top-0 z-30 will-change-transform">
           <div className="glass panel-border rounded-lg px-2 py-1 text-xs text-slate-100">
             <div className="font-semibold text-arc-accent">{hoveredProvince.name}</div>
             <div>ID: {hoveredProvince.id}</div>
@@ -344,5 +383,3 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     </>
   );
 }
-
-
