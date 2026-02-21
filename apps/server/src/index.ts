@@ -2,11 +2,12 @@ import cors from "cors";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import multer from "multer";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import Redis from "ioredis";
@@ -16,7 +17,6 @@ import {
   type LoginPayload,
   type Order,
   type OrderDelta,
-  type RegisterPayload,
   type ResourceTotals,
   type ServerStatus,
   type WorldBase,
@@ -39,6 +39,40 @@ const env = {
   redisUrl: process.env.REDIS_URL,
 };
 
+const uploadsRoot = resolve(__dirname, "../uploads");
+const flagsDir = resolve(uploadsRoot, "flags");
+const crestsDir = resolve(uploadsRoot, "crests");
+mkdirSync(flagsDir, { recursive: true });
+mkdirSync(crestsDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (_req, file, cb) => {
+    if (file.fieldname === "flag") {
+      cb(null, flagsDir);
+      return;
+    }
+    cb(null, crestsDir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = extname(file.originalname) || ".png";
+    cb(null, `${randomUUID()}${ext.toLowerCase()}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 4 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error("ONLY_IMAGES"));
+  },
+});
+
 const prebuiltTileRoot = resolve(__dirname, "../data/tiles/adm1");
 if (!existsSync(prebuiltTileRoot)) {
   throw new Error(`[map] MVT root not found: ${prebuiltTileRoot}. Expected tiles at {z}/{x}/{y}.mvt`);
@@ -47,6 +81,7 @@ if (!existsSync(prebuiltTileRoot)) {
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use("/uploads", express.static(uploadsRoot));
 
 const countrySelect = {
   id: true,
@@ -83,8 +118,6 @@ if (redis) {
 const registerSchema = z.object({
   countryName: z.string().min(2).max(32),
   countryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  flagUrl: z.string().url().optional().or(z.literal("")),
-  crestUrl: z.string().url().optional().or(z.literal("")),
   password: z.string().min(8),
 });
 
@@ -160,13 +193,17 @@ app.get("/countries", async (_req, res) => {
   res.json(countries.map(countryFromDb));
 });
 
-app.post("/auth/register", async (req, res) => {
-  const parsed = registerSchema.safeParse(req.body satisfies RegisterPayload);
+app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
+  const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
   }
 
-  const { countryName, countryColor, flagUrl, crestUrl, password } = parsed.data;
+  const files = req.files as { flag?: Express.Multer.File[]; crest?: Express.Multer.File[] } | undefined;
+  const flagFile = files?.flag?.[0];
+  const crestFile = files?.crest?.[0];
+
+  const { countryName, countryColor, password } = parsed.data;
   const passwordHash = await bcrypt.hash(password, 10);
 
   try {
@@ -174,8 +211,8 @@ app.post("/auth/register", async (req, res) => {
       data: {
         name: countryName,
         color: countryColor,
-        flagUrl: flagUrl || null,
-        crestUrl: crestUrl || null,
+        flagUrl: flagFile ? `/uploads/flags/${flagFile.filename}` : null,
+        crestUrl: crestFile ? `/uploads/crests/${crestFile.filename}` : null,
         passwordHash,
       },
       select: countrySelect,
@@ -230,6 +267,26 @@ app.get("/tiles/adm1/:z/:x/:y.mvt", (req, res) => {
   const file = readFileSync(prebuiltPath);
   res.setHeader("Content-Type", "application/x-protobuf");
   res.send(file);
+});
+
+
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!err) {
+    next();
+    return;
+  }
+
+  if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+    res.status(400).json({ error: "FILE_TOO_LARGE" });
+    return;
+  }
+
+  if (err instanceof Error && err.message === "ONLY_IMAGES") {
+    res.status(400).json({ error: "ONLY_IMAGES" });
+    return;
+  }
+
+  next(err);
 });
 
 const server = createServer(app);
