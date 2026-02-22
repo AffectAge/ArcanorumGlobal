@@ -30,6 +30,7 @@ type Props = {
   resourceGrowthByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
   resourceExpenseByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
   colonizationLimit?: { active: number; max: number } | null;
+  countryDetails?: { provinceCount: number; totalAreaKm2: number } | null;
 };
 
 const cards = [
@@ -63,6 +64,10 @@ function formatCompact(value: number): string {
   return `${sign}${Math.floor(abs)}`;
 }
 
+function formatAreaKm2(value: number): string {
+  return `${new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.round(value)))} км²`;
+}
+
 export function TopBar({
   countryName,
   flagUrl,
@@ -81,14 +86,20 @@ export function TopBar({
   resourceGrowthByTurn,
   resourceExpenseByTurn,
   colonizationLimit,
+  countryDetails,
 }: Props) {
   const hoverOpenTimerRef = useRef<number | null>(null);
+  const countryHoverTimerRef = useRef<number | null>(null);
   const [hoveredResource, setHoveredResource] = useState<(typeof cards)[number]["key"] | null>(null);
+  const [countryHovered, setCountryHovered] = useState(false);
 
   useEffect(() => {
     return () => {
       if (hoverOpenTimerRef.current !== null) {
         window.clearTimeout(hoverOpenTimerRef.current);
+      }
+      if (countryHoverTimerRef.current !== null) {
+        window.clearTimeout(countryHoverTimerRef.current);
       }
     };
   }, []);
@@ -113,19 +124,73 @@ export function TopBar({
     setHoveredResource((prev) => (prev === key ? null : prev));
   };
 
+  const scheduleCountryHoverOpen = () => {
+    if (countryHoverTimerRef.current !== null) {
+      window.clearTimeout(countryHoverTimerRef.current);
+    }
+    countryHoverTimerRef.current = window.setTimeout(() => {
+      setCountryHovered(true);
+      countryHoverTimerRef.current = null;
+    }, 120);
+  };
+
+  const closeCountryHover = () => {
+    if (countryHoverTimerRef.current !== null) {
+      window.clearTimeout(countryHoverTimerRef.current);
+      countryHoverTimerRef.current = null;
+    }
+    setCountryHovered(false);
+  };
+
   return (
-    <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
+    <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-[95] rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
-        <button
-          type="button"
-          onClick={onOpenCountryCustomization}
-          className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
-          title="Изменить страну"
-        >
-          <img src={flagUrl || "/placeholder-flag.svg"} alt="flag" className="h-8 w-12 rounded object-cover" />
-          <img src={crestUrl || "/placeholder-crest.svg"} alt="crest" className="h-8 w-8 rounded-full object-cover" />
-          <div className="font-display text-xl tracking-wide">{countryName}</div>
-        </button>
+        <div className="relative z-30 w-fit" onMouseEnter={scheduleCountryHoverOpen} onMouseLeave={closeCountryHover}>
+          <button
+            type="button"
+            onClick={onOpenCountryCustomization}
+            className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
+            aria-expanded={countryHovered}
+            aria-label="Открыть детали страны"
+          >
+            <img src={flagUrl || "/placeholder-flag.svg"} alt="flag" className="h-8 w-12 rounded object-cover" />
+            <img src={crestUrl || "/placeholder-crest.svg"} alt="crest" className="h-8 w-8 rounded-full object-cover" />
+            <div className="font-display text-xl tracking-wide">{countryName}</div>
+          </button>
+          <AnimatePresence>
+            {countryHovered && (
+              <motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 6, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                className="absolute left-0 top-full z-50 mt-1 min-w-[240px] rounded-xl"
+              >
+                <div className="glass panel-border rounded-xl bg-[#0b111b]/90 p-3 text-xs shadow-2xl backdrop-blur-xl">
+                  <div className="mb-2 flex items-center gap-2 text-white/90">
+                    <img src={flagUrl || "/placeholder-flag.svg"} alt="" className="h-4 w-6 rounded object-cover" />
+                    <span className="font-semibold">{countryName}</span>
+                  </div>
+                  <div className="mb-2 text-[11px] text-white/55">Детали страны и её владений</div>
+                  <div className="space-y-1 text-white/75">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Провинций под контролем</span>
+                      <span className="text-white">{countryDetails?.provinceCount ?? 0}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Общая площадь</span>
+                      <span className="text-white">{formatAreaKm2(countryDetails?.totalAreaKm2 ?? 0)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-3 border-t border-white/10 pt-1">
+                      <span>Текущий ход</span>
+                      <span className="text-arc-accent">#{turnId}</span>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
         <div className="flex flex-wrap items-center justify-center gap-2">
           {cards.map((card) => {

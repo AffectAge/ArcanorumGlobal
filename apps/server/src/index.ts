@@ -500,9 +500,12 @@ async function tryImportPersistentStateFromFile(): Promise<boolean> {
     if (!ok) {
       return false;
     }
+    const migratedManualFlags = migrateProvinceManualCostFlags();
     const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
-    if (migratedLegacyCosts > 0) {
-      console.log(`[state] Migrated legacy province colonization costs from JSON import: ${migratedLegacyCosts}`);
+    if (migratedManualFlags > 0 || migratedLegacyCosts > 0) {
+      console.log(
+        `[state] Migrated province colonization metadata from JSON import: manualFlags=${migratedManualFlags}, legacyCosts=${migratedLegacyCosts}`,
+      );
     }
     await persistStateToDb();
     console.log("[state] Imported persistent game state from JSON file into database");
@@ -524,9 +527,12 @@ async function loadPersistentState(): Promise<void> {
         ordersByTurn: row.ordersByTurnJson,
         resolveReadyByTurn: row.resolveReadyByTurnJson,
       });
+      const migratedManualFlags = migrateProvinceManualCostFlags();
       const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
-      if (migratedLegacyCosts > 0) {
-        console.log(`[state] Migrated legacy province colonization costs from DB state: ${migratedLegacyCosts}`);
+      if (migratedManualFlags > 0 || migratedLegacyCosts > 0) {
+        console.log(
+          `[state] Migrated province colonization metadata from DB state: manualFlags=${migratedManualFlags}, legacyCosts=${migratedLegacyCosts}`,
+        );
         await persistStateToDb();
       }
       return;
@@ -589,21 +595,22 @@ function getProvinceDerivedColonizationCosts(
   };
 }
 
-function getProvinceColonizationConfig(provinceId: string): { cost: number; disabled: boolean } {
+function getProvinceColonizationConfig(provinceId: string): { cost: number; disabled: boolean; manualCost: boolean } {
   const existing = worldBase.provinceColonizationByProvince[provinceId];
   if (existing && typeof existing.cost === "number" && Number.isFinite(existing.cost)) {
     const looksLikeLegacyAutoDefault = !existing.disabled && Math.floor(existing.cost) === DEFAULT_PROVINCE_COLONIZATION_COST;
     if (looksLikeLegacyAutoDefault) {
       const derived = getProvinceDerivedColonizationCosts(provinceId);
-      return { cost: derived.pointsCost, disabled: false };
+      return { cost: derived.pointsCost, disabled: false, manualCost: false };
     }
     return {
       cost: Math.max(1, Math.floor(existing.cost)),
       disabled: Boolean(existing.disabled),
+      manualCost: Boolean((existing as { manualCost?: unknown }).manualCost),
     };
   }
   const derived = getProvinceDerivedColonizationCosts(provinceId);
-  return { cost: derived.pointsCost, disabled: false };
+  return { cost: derived.pointsCost, disabled: false, manualCost: false };
 }
 
 function migrateLegacyProvinceColonizationCosts(): number {
@@ -620,6 +627,7 @@ function migrateLegacyProvinceColonizationCosts(): number {
     worldBase.provinceColonizationByProvince[provinceId] = {
       cost: derived.pointsCost,
       disabled: false,
+      manualCost: false,
     };
     migrated += 1;
   }
@@ -636,15 +644,22 @@ function recalculateAllProvinceColonizationCosts(previousRates?: {
     const derived = getProvinceDerivedColonizationCosts(province.id);
     const nextCost = derived.pointsCost;
     const nextDisabled = Boolean(current?.disabled);
+    const nextManualCost = Boolean((current as { manualCost?: unknown } | undefined)?.manualCost);
     const prevCost = current && typeof current.cost === "number" && Number.isFinite(current.cost) ? Math.max(1, Math.floor(current.cost)) : null;
     const previousDerivedCost = previousRates
       ? getProvinceDerivedColonizationCosts(province.id, previousRates).pointsCost
       : null;
+    const isLegacyAutoDefault =
+      current != null &&
+      prevCost != null &&
+      prevCost === DEFAULT_PROVINCE_COLONIZATION_COST &&
+      !Boolean(current.disabled);
     const shouldPreserveManualCost =
       current != null &&
       prevCost != null &&
       previousDerivedCost != null &&
-      prevCost !== previousDerivedCost;
+      prevCost !== previousDerivedCost &&
+      !isLegacyAutoDefault;
     if (shouldPreserveManualCost) {
       if (!current || Boolean(current.disabled) === nextDisabled) {
         continue;
@@ -652,15 +667,17 @@ function recalculateAllProvinceColonizationCosts(previousRates?: {
       worldBase.provinceColonizationByProvince[province.id] = {
         cost: prevCost,
         disabled: nextDisabled,
+        manualCost: nextManualCost,
       };
       continue;
     }
-    if (prevCost === nextCost && Boolean(current?.disabled) === nextDisabled) {
+    if (prevCost === nextCost && Boolean(current?.disabled) === nextDisabled && nextManualCost === false) {
       continue;
     }
     worldBase.provinceColonizationByProvince[province.id] = {
       cost: nextCost,
       disabled: nextDisabled,
+      manualCost: false,
     };
     updated += 1;
   }
@@ -669,8 +686,8 @@ function recalculateAllProvinceColonizationCosts(previousRates?: {
 
 function normalizeProvinceColonizationMap(
   input: unknown,
-): Record<string, { cost: number; disabled: boolean }> {
-  const normalized: Record<string, { cost: number; disabled: boolean }> = {};
+): Record<string, { cost: number; disabled: boolean; manualCost?: boolean }> {
+  const normalized: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }> = {};
   if (!input || typeof input !== "object") {
     return normalized;
   }
@@ -681,16 +698,36 @@ function normalizeProvinceColonizationMap(
     }
     const costRaw = (raw as { cost?: unknown }).cost;
     const disabledRaw = (raw as { disabled?: unknown }).disabled;
+    const manualCostRaw = (raw as { manualCost?: unknown }).manualCost;
     normalized[provinceId] = {
       cost:
         typeof costRaw === "number" && Number.isFinite(costRaw)
           ? Math.max(1, Math.floor(costRaw))
           : DEFAULT_PROVINCE_COLONIZATION_COST,
       disabled: Boolean(disabledRaw),
+      manualCost: typeof manualCostRaw === "boolean" ? manualCostRaw : undefined,
     };
   }
 
   return normalized;
+}
+
+function migrateProvinceManualCostFlags(): number {
+  let migrated = 0;
+  for (const [provinceId, cfg] of Object.entries(worldBase.provinceColonizationByProvince ?? {})) {
+    if (!cfg || typeof cfg !== "object") continue;
+    if (typeof (cfg as { manualCost?: unknown }).manualCost === "boolean") continue;
+    const normalizedCost = Math.max(1, Math.floor(Number(cfg.cost ?? DEFAULT_PROVINCE_COLONIZATION_COST)));
+    const derived = getProvinceDerivedColonizationCosts(provinceId).pointsCost;
+    const isLegacyAutoDefault = !cfg.disabled && normalizedCost === DEFAULT_PROVINCE_COLONIZATION_COST;
+    worldBase.provinceColonizationByProvince[provinceId] = {
+      cost: normalizedCost,
+      disabled: Boolean(cfg.disabled),
+      manualCost: isLegacyAutoDefault ? false : normalizedCost !== derived,
+    };
+    migrated += 1;
+  }
+  return migrated;
 }
 
 function cleanupProvinceColonizationProgress(provinceId: string): void {
@@ -1445,6 +1482,7 @@ const adminProvinceColonizationSchema = z.object({
   colonizationCost: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
   colonizationDisabled: z.boolean().optional(),
   ownerCountryId: z.string().min(1).nullable().optional(),
+  resetColonizationCostToAuto: z.boolean().optional(),
 });
 
 app.get("/admin/provinces", async (req, res) => {
@@ -1469,6 +1507,7 @@ app.get("/admin/provinces", async (req, res) => {
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
       colonizationDisabled: cfg.disabled,
+      manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
     };
   });
@@ -1506,8 +1545,13 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
   const cfg = getProvinceColonizationConfig(provinceId);
   let clearedProgress = false;
 
-  if (typeof parsed.data.colonizationCost === "number") {
+  if (parsed.data.resetColonizationCostToAuto) {
+    const derived = getProvinceDerivedColonizationCosts(provinceId);
+    cfg.cost = derived.pointsCost;
+    cfg.manualCost = false;
+  } else if (typeof parsed.data.colonizationCost === "number") {
     cfg.cost = Math.max(1, Math.floor(parsed.data.colonizationCost));
+    cfg.manualCost = true;
   }
   if (typeof parsed.data.colonizationDisabled === "boolean") {
     cfg.disabled = parsed.data.colonizationDisabled;
@@ -1559,9 +1603,35 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
       colonizationDisabled: cfg.disabled,
+      manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
     },
   });
+});
+
+app.post("/admin/provinces/recalculate-auto-costs", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const updatedCount = recalculateAllProvinceColonizationCosts();
+  savePersistentState();
+  if (updatedCount > 0) {
+    broadcastWorldBaseSync(wss);
+    broadcast(wss, {
+      type: "NEWS_EVENT",
+      event: makeOfficialNews({
+        turn: turnId,
+        category: "colonization",
+        title: "Пересчёт цен провинций",
+        message: `Администратор пересчитал авто-цены колонизации для ${updatedCount} провинций`,
+        countryId: auth.countryId,
+        priority: "low",
+        visibility: "public",
+      }),
+    });
+  }
+  return res.json({ ok: true, updatedCount });
 });
 
 app.patch("/admin/countries/:countryId/admin", async (req, res) => {

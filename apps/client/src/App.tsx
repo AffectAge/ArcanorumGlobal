@@ -241,6 +241,19 @@ export default function App() {
     }
     return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
   }, [auth, worldBase]);
+  const currentCountryDetails = useMemo(() => {
+    if (!auth || !worldBase) {
+      return { provinceCount: 0, totalAreaKm2: 0 };
+    }
+    let provinceCount = 0;
+    let totalAreaKm2 = 0;
+    for (const [provinceId, ownerCountryId] of Object.entries(worldBase.provinceOwner ?? {})) {
+      if (ownerCountryId !== auth.countryId) continue;
+      provinceCount += 1;
+      totalAreaKm2 += Math.max(0, Number(provinceAreaKm2ById[provinceId] ?? 0));
+    }
+    return { provinceCount, totalAreaKm2: Math.round(totalAreaKm2) };
+  }, [auth, provinceAreaKm2ById, worldBase]);
 
   const myColonizationProjection = useMemo(() => {
     if (!auth || !worldBase) {
@@ -502,6 +515,7 @@ export default function App() {
             resourceGrowthByTurn={resourceGrowthByTurn}
             resourceExpenseByTurn={currentTurnExpenses}
             colonizationLimit={{ active: activeColonizationCount, max: maxActiveColonizations }}
+            countryDetails={currentCountryDetails}
           />
           <SideNav />
           <EventLogPanel

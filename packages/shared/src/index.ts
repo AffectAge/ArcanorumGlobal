@@ -63,7 +63,7 @@ export type WorldBase = {
   resourcesByCountry: Record<string, ResourceTotals>;
   provinceOwner: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
-  provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean }>;
+  provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
 };
 
 export type WorldPatch = {

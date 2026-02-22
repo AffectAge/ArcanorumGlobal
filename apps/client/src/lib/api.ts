@@ -413,6 +413,7 @@ export type AdminProvinceItem = {
   ownerCountryId: string | null;
   colonizationCost: number;
   colonizationDisabled: boolean;
+  manualCost?: boolean;
   colonyProgressByCountry: Record<string, number>;
 };
 
@@ -465,6 +466,7 @@ export async function adminUpdateProvince(
     colonizationCost?: number;
     colonizationDisabled?: boolean;
     ownerCountryId?: string | null;
+    resetColonizationCostToAuto?: boolean;
   },
 ): Promise<AdminProvinceItem> {
   const response = await fetch(`${API}/admin/provinces/${encodeURIComponent(provinceId)}`, {
@@ -481,6 +483,23 @@ export async function adminUpdateProvince(
   }
   const data = (await response.json()) as { province: AdminProvinceItem };
   return data.province;
+}
+
+export async function adminResetProvinceColonizationCostToAuto(token: string, provinceId: string): Promise<AdminProvinceItem> {
+  return adminUpdateProvince(token, provinceId, { resetColonizationCostToAuto: true });
+}
+
+export async function adminRecalculateAutoProvinceCosts(token: string): Promise<{ updatedCount: number }> {
+  const response = await fetch(`${API}/admin/provinces/recalculate-auto-costs`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_RECALCULATE_AUTO_PROVINCE_COSTS_FAILED");
+  }
+  const data = (await response.json()) as { ok: true; updatedCount: number };
+  return { updatedCount: data.updatedCount };
 }
 
 

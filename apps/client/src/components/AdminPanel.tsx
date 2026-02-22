@@ -1,10 +1,19 @@
 import { Dialog } from "@headlessui/react";
 import { Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Palette, Shield, Trash2, Upload, X } from "lucide-react";
+import { Check, ChevronDown, Palette, RotateCcw, Shield, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
-import { adminDeleteCountry, adminSetCountryPunishment, adminUpdateCountry, adminUpdateProvince, fetchAdminProvinces, fetchCountries, type AdminProvinceItem } from "../lib/api";
+import {
+  adminDeleteCountry,
+  adminResetProvinceColonizationCostToAuto,
+  adminSetCountryPunishment,
+  adminUpdateCountry,
+  adminUpdateProvince,
+  fetchAdminProvinces,
+  fetchCountries,
+  type AdminProvinceItem,
+} from "../lib/api";
 
 type Props = {
   open: boolean;
@@ -284,6 +293,20 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     }
   };
 
+  const resetProvinceCostToAuto = async () => {
+    if (!selectedProvince) return;
+    setSaving(true);
+    try {
+      const updated = await adminResetProvinceColonizationCostToAuto(token, selectedProvince.id);
+      setProvinces((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      toast.success("Цена провинции сброшена к авто");
+    } catch {
+      toast.error("Не удалось сбросить цену к авто");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[120]">
       <div className="fixed inset-0 bg-black/55" aria-hidden="true" />
@@ -352,6 +375,9 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                             </Listbox.Options>
                           </div>
                         </Listbox>
+                        <div className="mt-2 text-xs text-slate-400">
+                          Автоматические цены рассчитываются по площади и глобальным ставкам колонизации.
+                        </div>
                       </div>
 
                       {selectedProvince && (
@@ -374,6 +400,17 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                                 onChange={(e) => setProvinceColonizationCost(Math.max(1, Number(e.target.value) || 1))}
                                 className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
                               />
+                              <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
+                                <span
+                                  className={`inline-flex items-center rounded-full border px-2 py-0.5 ${
+                                    selectedProvince.manualCost
+                                      ? "border-amber-400/30 bg-amber-500/10 text-amber-200"
+                                      : "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
+                                  }`}
+                                >
+                                  {selectedProvince.manualCost ? "Ручная цена" : "Авто (по площади)"}
+                                </span>
+                              </div>
                             </div>
                             <div>
                               <label className="mb-1 block text-xs text-slate-300">Владелец</label>
@@ -442,7 +479,16 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                             ))}
                           </div>
 
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={resetProvinceCostToAuto}
+                              disabled={saving || !selectedProvince}
+                              className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200 transition hover:bg-emerald-400/15 disabled:opacity-60"
+                            >
+                              <RotateCcw size={14} />
+                              Сбросить цену к авто (по площади)
+                            </button>
                             <button onClick={saveProvince} disabled={saving} className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                               Сохранить провинцию
                             </button>

@@ -1,8 +1,8 @@
 import { Dialog } from "@headlessui/react";
 import { useEffect, useState } from "react";
-import { Coins, Flag, Save, X } from "lucide-react";
+import { Coins, Flag, RefreshCcw, Save, X } from "lucide-react";
 import { toast } from "sonner";
-import { adminUploadResourceIcons, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
+import { adminRecalculateAutoProvinceCosts, adminUploadResourceIcons, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
 
 type Props = {
   open: boolean;
@@ -138,6 +138,18 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       toast.success("Настройки колонизации сохранены");
     } catch {
       toast.error("Не удалось сохранить настройки колонизации");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const recalculateAutoProvinceCosts = async () => {
+    setSaving(true);
+    try {
+      const result = await adminRecalculateAutoProvinceCosts(token);
+      toast.success(`Пересчитаны авто-цены: ${result.updatedCount}`);
+    } catch {
+      toast.error("Не удалось пересчитать авто-цены");
     } finally {
       setSaving(false);
     }
@@ -306,10 +318,21 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                       <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-400">
                         Базовая стоимость провинции рассчитывается от площади: `ставка за 1000 км² × площадь / 1000`. Ручная стоимость провинции в админ-редакторе остаётся как override.
                       </div>
-                      <button onClick={saveColonization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
-                        <Save size={14} />
-                        Сохранить
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={saveColonization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                          <Save size={14} />
+                          Сохранить
+                        </button>
+                        <button
+                          type="button"
+                          onClick={recalculateAutoProvinceCosts}
+                          disabled={saving}
+                          className="inline-flex items-center gap-2 rounded-lg border border-arc-accent/30 bg-arc-accent/10 px-4 py-2 text-sm text-arc-accent transition hover:bg-arc-accent/15 disabled:opacity-60"
+                        >
+                          <RefreshCcw size={14} />
+                          Пересчитать все авто-цены
+                        </button>
+                      </div>
                     </div>
                   )}
 
