@@ -1,4 +1,4 @@
-﻿import cors from "cors";
+import cors from "cors";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
@@ -222,6 +222,23 @@ function getCountryBlockInfo(
   return { blocked: false, reason: null, blockedUntilTurn: null, blockedUntilAt: null };
 }
 
+async function cleanupExpiredPunishments(currentTurn: number, now: Date): Promise<void> {
+  await prisma.country.updateMany({
+    where: {
+      isLocked: false,
+      blockedUntilTurn: { lt: currentTurn },
+    },
+    data: { blockedUntilTurn: null },
+  });
+
+  await prisma.country.updateMany({
+    where: {
+      isLocked: false,
+      blockedUntilAt: { lt: now },
+    },
+    data: { blockedUntilAt: null },
+  });
+}
 function validateImageDimensions(file: Express.Multer.File): boolean {
   const dimensions = imageSize(readFileSync(file.path));
   const width = dimensions.width ?? 0;
@@ -380,12 +397,14 @@ app.get("/health", async (_req, res) => {
 });
 
 app.get("/countries", async (_req, res) => {
+  await cleanupExpiredPunishments(turnId, new Date());
   const countries = await prisma.country.findMany({ select: countrySelect, orderBy: { createdAt: "asc" } });
   res.json(countries.map(countryFromDb));
 });
 
 app.get("/turn/status", async (_req, res) => {
   const now = new Date();
+  await cleanupExpiredPunishments(turnId, now);
   const countries = await prisma.country.findMany({
     select: {
       id: true,
@@ -776,13 +795,14 @@ app.post("/auth/login", async (req, res) => {
   }
 
   const { countryId, password, rememberMe } = parsed.data;
+  const now = new Date();
+  await cleanupExpiredPunishments(turnId, now);
   const country = await prisma.country.findUnique({ where: { id: countryId } });
 
   if (!country) {
     return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
   }
 
-  const now = new Date();
   const block = getCountryBlockInfo(country, turnId, now);
 
   if (block.blocked) {
@@ -1024,6 +1044,8 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      const now = new Date();
+      await cleanupExpiredPunishments(turnId, now);
       const countries = await prisma.country.findMany({
         select: {
           id: true,
@@ -1033,7 +1055,6 @@ wss.on("connection", (socket) => {
           ignoreUntilTurn: true,
         },
       });
-      const now = new Date();
       const activeCountryIds = new Set(
         countries
           .filter((country) => {
@@ -1078,6 +1099,8 @@ wss.on("connection", (socket) => {
 server.listen(env.port, () => {
   console.log(`Arcanorum server running on http://localhost:${env.port}`);
 });
+
+
 
 
 
