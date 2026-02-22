@@ -255,12 +255,12 @@ export async function fetchPublicCustomizationPrices(): Promise<CustomizationPri
   return data.customization;
 }
 
-export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "customization" | "eventLog" | "resourceIcons">> {
+export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "resourceIcons">> {
   const response = await fetch(`${API}/game-settings/public`);
   if (!response.ok) {
     throw new Error("PUBLIC_GAME_SETTINGS_FAILED");
   }
-  const data = (await response.json()) as Pick<GameSettings, "customization" | "eventLog" | "resourceIcons">;
+  const data = (await response.json()) as Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "resourceIcons">;
   return {
     ...data,
     resourceIcons: {

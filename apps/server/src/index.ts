@@ -821,6 +821,8 @@ const gameSettingsSchema = z.object({
 
 app.get("/game-settings/public", (_req, res) => {
   return res.json({
+    economy: gameSettings.economy,
+    colonization: gameSettings.colonization,
     customization: gameSettings.customization,
     eventLog: gameSettings.eventLog,
     resourceIcons: gameSettings.resourceIcons,

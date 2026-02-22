@@ -1,4 +1,5 @@
 import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Tooltip } from "./Tooltip";
 
 type Resources = {
@@ -25,6 +26,8 @@ type Props = {
   onOpenGameSettings?: () => void;
   onOpenCountryCustomization?: () => void;
   resourceIconUrls?: Partial<Record<(typeof cards)[number]["key"], string | null>>;
+  resourceGrowthByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
+  resourceExpenseByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
 };
 
 const cards = [
@@ -51,6 +54,8 @@ export function TopBar({
   onOpenGameSettings,
   onOpenCountryCustomization,
   resourceIconUrls,
+  resourceGrowthByTurn,
+  resourceExpenseByTurn,
 }: Props) {
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
@@ -70,6 +75,9 @@ export function TopBar({
           {cards.map((card) => {
             const Icon = card.icon;
             const customIconUrl = resourceIconUrls?.[card.key] ?? null;
+            const growth = Math.max(0, Math.floor(resourceGrowthByTurn?.[card.key] ?? 0));
+            const expense = Math.max(0, Math.floor(resourceExpenseByTurn?.[card.key] ?? 0));
+            const net = growth - expense;
             return (
               <Tooltip key={card.key} content={card.tip} placement="top">
                 <div className="panel-border flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-xs">
@@ -78,7 +86,33 @@ export function TopBar({
                   ) : (
                     <Icon size={17} className="text-arc-accent" />
                   )}
-                  <strong>{resources[card.key]}</strong>
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.strong
+                      key={`${card.key}-value-${resources[card.key]}`}
+                      initial={{ opacity: 0, y: 4, scale: 0.97 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -4, scale: 0.97 }}
+                      transition={{ duration: 0.16, ease: "easeOut" }}
+                    >
+                      {resources[card.key]}
+                    </motion.strong>
+                  </AnimatePresence>
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.span
+                      key={`${card.key}-deltas-${growth}-${expense}`}
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.16, ease: "easeOut" }}
+                      className="inline-flex items-center gap-1"
+                    >
+                      <span className="text-emerald-300/90">+{growth}</span>
+                      <span className="text-white/25">•</span>
+                      <span className="text-rose-300/90">-{expense}</span>
+                      <span className="text-white/25">•</span>
+                      <span className={net >= 0 ? "text-cyan-300/90" : "text-rose-300/90"}>{net >= 0 ? `+${net}` : net}</span>
+                    </motion.span>
+                  </AnimatePresence>
                 </div>
               </Tooltip>
             );

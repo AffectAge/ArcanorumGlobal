@@ -40,10 +40,26 @@ export default function App() {
     ducats: null,
     gold: null,
   });
+  const [resourceGrowthByTurn, setResourceGrowthByTurn] = useState<{
+    culture: number;
+    science: number;
+    religion: number;
+    colonization: number;
+    ducats: number;
+    gold: number;
+  }>({
+    culture: 0,
+    science: 0,
+    religion: 0,
+    colonization: 0,
+    ducats: 0,
+    gold: 0,
+  });
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
   const worldBase = useGameStore((s) => s.worldBase);
+  const ordersByTurn = useGameStore((s) => s.ordersByTurn);
   const selectedProvinceId = useGameStore((s) => s.selectedProvinceId);
   const setAuth = useGameStore((s) => s.setAuth);
   const setWorldBase = useGameStore((s) => s.setWorldBase);
@@ -158,6 +174,14 @@ export default function App() {
       .then((ui) => {
         if (!cancelled) {
           setResourceIcons(ui.resourceIcons);
+          setResourceGrowthByTurn({
+            culture: 0,
+            science: 0,
+            religion: 0,
+            colonization: ui.colonization.pointsPerTurn,
+            ducats: ui.economy.baseDucatsPerTurn,
+            gold: ui.economy.baseGoldPerTurn,
+          });
         }
       })
       .catch(() => {
@@ -183,6 +207,33 @@ export default function App() {
     }
     return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
   }, [auth, worldBase]);
+
+  const currentTurnExpenses = useMemo(() => {
+    const empty = { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
+    if (!auth) {
+      return empty;
+    }
+
+    const byPlayer = ordersByTurn.get(turnId);
+    if (!byPlayer) {
+      return empty;
+    }
+
+    const myOrders = byPlayer.get(auth.playerId) ?? [];
+    const totals = { ...empty };
+
+    for (const order of myOrders) {
+      if (order.type === "COLONIZE") {
+        totals.ducats += 4;
+      }
+      if (order.type === "BUILD") {
+        totals.ducats += 2;
+        totals.gold += 5;
+      }
+    }
+
+    return totals;
+  }, [auth, ordersByTurn, turnId]);
 
   const logoutToAuth = () => {
     addEvent({ category: "system", title: "Выход", message: "Сессия игрока завершена", priority: "low", visibility: "private", countryId: auth?.countryId ?? null });
@@ -318,6 +369,8 @@ export default function App() {
             onOpenGameSettings={() => setGameSettingsOpen(true)}
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
             resourceIconUrls={resourceIcons}
+            resourceGrowthByTurn={resourceGrowthByTurn}
+            resourceExpenseByTurn={currentTurnExpenses}
           />
           <SideNav />
           <EventLogPanel
