@@ -13,6 +13,7 @@ type Props = {
 const categories = [
   { id: "economy", label: "Экономика" },
   { id: "colonization", label: "Колонизация" },
+  { id: "customization", label: "Кастомизация" },
 ] as const;
 
 export function GameSettingsPanel({ open, token, onClose }: Props) {
@@ -23,6 +24,10 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationPointsPerTurn, setColonizationPointsPerTurn] = useState(30);
+  const [renameDucats, setRenameDucats] = useState(20);
+  const [recolorDucats, setRecolorDucats] = useState(10);
+  const [flagDucats, setFlagDucats] = useState(15);
+  const [crestDucats, setCrestDucats] = useState(15);
 
   useEffect(() => {
     if (!open) {
@@ -41,6 +46,10 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
         setMaxActiveColonizations(settings.colonization.maxActiveColonizations);
         setColonizationPointsPerTurn(settings.colonization.pointsPerTurn);
+        setRenameDucats(settings.customization.renameDucats);
+        setRecolorDucats(settings.customization.recolorDucats);
+        setFlagDucats(settings.customization.flagDucats);
+        setCrestDucats(settings.customization.crestDucats);
       })
       .catch(() => {
         if (!cancelled) {
@@ -84,6 +93,7 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
       const updated = await updateGameSettings(token, {
         colonization: {
           maxActiveColonizations: Math.max(1, Math.floor(maxActiveColonizations)),
+          pointsPerTurn: Math.max(0, Math.floor(colonizationPointsPerTurn)),
         },
       });
 
@@ -92,6 +102,30 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
       toast.success("Настройки колонизации сохранены");
     } catch {
       toast.error("Не удалось сохранить настройки колонизации");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveCustomization = async () => {
+    setSaving(true);
+    try {
+      const updated = await updateGameSettings(token, {
+        customization: {
+          renameDucats: Math.max(0, Math.floor(renameDucats)),
+          recolorDucats: Math.max(0, Math.floor(recolorDucats)),
+          flagDucats: Math.max(0, Math.floor(flagDucats)),
+          crestDucats: Math.max(0, Math.floor(crestDucats)),
+        },
+      });
+
+      setRenameDucats(updated.customization.renameDucats);
+      setRecolorDucats(updated.customization.recolorDucats);
+      setFlagDucats(updated.customization.flagDucats);
+      setCrestDucats(updated.customization.crestDucats);
+      toast.success("Цены кастомизации сохранены");
+    } catch {
+      toast.error("Не удалось сохранить цены кастомизации");
     } finally {
       setSaving(false);
     }
@@ -202,6 +236,43 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
 
                       <button
                         onClick={saveColonization}
+                        disabled={saving}
+                        className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+                      >
+                        <Save size={14} />
+                        Сохранить
+                      </button>
+                    </div>
+                  )}
+
+                  {activeCategory === "customization" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <Coins size={15} className="text-arc-accent" />
+                        Цены на изменение страны за дукаты
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Переименование страны</label>
+                          <input type="number" min={0} value={renameDucats} onChange={(e) => setRenameDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Смена цвета</label>
+                          <input type="number" min={0} value={recolorDucats} onChange={(e) => setRecolorDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Смена флага</label>
+                          <input type="number" min={0} value={flagDucats} onChange={(e) => setFlagDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Смена герба</label>
+                          <input type="number" min={0} value={crestDucats} onChange={(e) => setCrestDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={saveCustomization}
                         disabled={saving}
                         className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
                       >

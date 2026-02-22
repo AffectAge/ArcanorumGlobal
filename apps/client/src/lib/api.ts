@@ -223,7 +223,25 @@ export type GameSettings = {
     maxActiveColonizations: number;
     pointsPerTurn: number;
   };
+  customization: {
+    renameDucats: number;
+    recolorDucats: number;
+    flagDucats: number;
+    crestDucats: number;
+  };
 };
+
+export type CustomizationPrices = GameSettings["customization"];
+
+export async function fetchPublicCustomizationPrices(): Promise<CustomizationPrices> {
+  const response = await fetch(`${API}/game-settings/public`);
+  if (!response.ok) {
+    throw new Error("PUBLIC_GAME_SETTINGS_FAILED");
+  }
+
+  const data = (await response.json()) as { customization: CustomizationPrices };
+  return data.customization;
+}
 
 export async function fetchGameSettings(token: string): Promise<GameSettings> {
   const response = await fetch(`${API}/admin/game-settings`, {
@@ -240,7 +258,11 @@ export async function fetchGameSettings(token: string): Promise<GameSettings> {
 
 export async function updateGameSettings(
   token: string,
-  payload: { economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number }; colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number } },
+  payload: {
+    economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
+    colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number };
+    customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number };
+  },
 ): Promise<GameSettings> {
   const response = await fetch(`${API}/admin/game-settings`, {
     method: "PATCH",
@@ -257,6 +279,47 @@ export async function updateGameSettings(
   }
 
   return response.json();
+}
+
+export async function updateOwnCountryCustomization(
+  token: string,
+  payload: {
+    countryName?: string;
+    countryColor?: string;
+    flagFile?: File | null;
+    crestFile?: File | null;
+  },
+): Promise<{ country: Country; chargedDucats: number; resources: { ducats: number } }> {
+  const formData = new FormData();
+  if (payload.countryName != null) {
+    formData.set("countryName", payload.countryName);
+  }
+  if (payload.countryColor != null) {
+    formData.set("countryColor", payload.countryColor);
+  }
+  if (payload.flagFile) {
+    formData.set("flag", payload.flagFile);
+  }
+  if (payload.crestFile) {
+    formData.set("crest", payload.crestFile);
+  }
+
+  const response = await fetch(`${API}/country/customization`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "COUNTRY_CUSTOMIZATION_FAILED");
+  }
+
+  const data = (await response.json()) as { country: Country; chargedDucats: number; resources: { ducats: number } };
+  return {
+    ...data,
+    country: normalizeCountry(data.country),
+  };
 }
 
 

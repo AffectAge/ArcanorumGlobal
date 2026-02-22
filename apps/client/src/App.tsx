@@ -11,6 +11,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { AdminPanel } from "./components/AdminPanel";
 import { TurnStatusModal } from "./components/TurnStatusModal";
 import { GameSettingsPanel } from "./components/GameSettingsPanel";
+import { CountryCustomizationModal } from "./components/CountryCustomizationModal";
 import { apiBase } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
@@ -29,6 +30,7 @@ export default function App() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
+  const [countryCustomizationOpen, setCountryCustomizationOpen] = useState(false);
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -39,6 +41,7 @@ export default function App() {
   const addOrder = useGameStore((s) => s.addOrder);
   const setPresence = useGameStore((s) => s.setPresence);
   const resetOverlay = useGameStore((s) => s.resetOverlay);
+  const updateCountryResources = useGameStore((s) => s.updateCountryResources);
 
   const onWsMessage = useCallback(
     (msg: WsOutMessage) => {
@@ -209,6 +212,7 @@ export default function App() {
             onAdminForceResolve={forceResolveAsAdmin}
             onOpenAdminPanel={() => setAdminOpen(true)}
             onOpenGameSettings={() => setGameSettingsOpen(true)}
+            onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
           />
           <SideNav />
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
@@ -229,6 +233,27 @@ export default function App() {
       {auth && <TurnStatusModal open={turnStatusOpen} onClose={() => setTurnStatusOpen(false)} />}
 
       {auth?.isAdmin && auth?.token && <GameSettingsPanel open={gameSettingsOpen} token={auth.token} onClose={() => setGameSettingsOpen(false)} />}
+
+      {auth?.token && country && (
+        <CountryCustomizationModal
+          open={countryCustomizationOpen}
+          token={auth.token}
+          country={country}
+          currentDucats={currentResources.ducats}
+          onClose={() => setCountryCustomizationOpen(false)}
+          onSaved={(updated) => {
+            setCountry((prev) => ({
+              name: updated.name,
+              color: updated.color,
+              flagUrl: updated.flagUrl ?? prev?.flagUrl ?? null,
+              crestUrl: updated.crestUrl ?? prev?.crestUrl ?? null,
+            }));
+            if (auth) {
+              updateCountryResources(auth.countryId, { ducats: updated.ducats });
+            }
+          }}
+        />
+      )}
 
       <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
     </div>

@@ -115,6 +115,12 @@ type GameSettings = {
     maxActiveColonizations: number;
     pointsPerTurn: number;
   };
+  customization: {
+    renameDucats: number;
+    recolorDucats: number;
+    flagDucats: number;
+    crestDucats: number;
+  };
 };
 
 const defaultGameSettings = (): GameSettings => ({
@@ -125,6 +131,12 @@ const defaultGameSettings = (): GameSettings => ({
   colonization: {
     maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
     pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
+  },
+  customization: {
+    renameDucats: 20,
+    recolorDucats: 10,
+    flagDucats: 15,
+    crestDucats: 15,
   },
 });
 
@@ -204,6 +216,24 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.colonization?.pointsPerTurn === "number"
             ? Math.max(0, Math.floor(next.colonization.pointsPerTurn))
             : defaults.colonization.pointsPerTurn,
+      },
+      customization: {
+        renameDucats:
+          typeof next.customization?.renameDucats === "number"
+            ? Math.max(0, Math.floor(next.customization.renameDucats))
+            : defaults.customization.renameDucats,
+        recolorDucats:
+          typeof next.customization?.recolorDucats === "number"
+            ? Math.max(0, Math.floor(next.customization.recolorDucats))
+            : defaults.customization.recolorDucats,
+        flagDucats:
+          typeof next.customization?.flagDucats === "number"
+            ? Math.max(0, Math.floor(next.customization.flagDucats))
+            : defaults.customization.flagDucats,
+        crestDucats:
+          typeof next.customization?.crestDucats === "number"
+            ? Math.max(0, Math.floor(next.customization.crestDucats))
+            : defaults.customization.crestDucats,
       },
     };
   }
@@ -703,6 +733,20 @@ const gameSettingsSchema = z.object({
       pointsPerTurn: z.coerce.number().int().min(0).max(100000).optional(),
     })
     .optional(),
+  customization: z
+    .object({
+      renameDucats: z.coerce.number().int().min(0).max(100000).optional(),
+      recolorDucats: z.coerce.number().int().min(0).max(100000).optional(),
+      flagDucats: z.coerce.number().int().min(0).max(100000).optional(),
+      crestDucats: z.coerce.number().int().min(0).max(100000).optional(),
+    })
+    .optional(),
+});
+
+app.get("/game-settings/public", (_req, res) => {
+  return res.json({
+    customization: gameSettings.customization,
+  });
 });
 
 app.get("/admin/game-settings", async (req, res) => {
@@ -742,6 +786,22 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
     if (typeof nextColonization.pointsPerTurn === "number") {
       gameSettings.colonization.pointsPerTurn = nextColonization.pointsPerTurn;
+    }
+  }
+
+  const nextCustomization = parsed.data.customization;
+  if (nextCustomization) {
+    if (typeof nextCustomization.renameDucats === "number") {
+      gameSettings.customization.renameDucats = nextCustomization.renameDucats;
+    }
+    if (typeof nextCustomization.recolorDucats === "number") {
+      gameSettings.customization.recolorDucats = nextCustomization.recolorDucats;
+    }
+    if (typeof nextCustomization.flagDucats === "number") {
+      gameSettings.customization.flagDucats = nextCustomization.flagDucats;
+    }
+    if (typeof nextCustomization.crestDucats === "number") {
+      gameSettings.customization.crestDucats = nextCustomization.crestDucats;
     }
   }
 
@@ -898,6 +958,131 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
 
   savePersistentState();
   return res.json({ ok: true });
+});
+
+const selfCountryCustomizationSchema = z.object({
+  countryName: z.string().min(2).max(32).optional(),
+  countryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+});
+
+app.patch("/country/customization", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = selfCountryCustomizationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const target = await prisma.country.findUnique({ where: { id: auth.countryId } });
+  if (!target) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+
+  const files = req.files as { flag?: Express.Multer.File[]; crest?: Express.Multer.File[] } | undefined;
+  const flagFile = files?.flag?.[0];
+  const crestFile = files?.crest?.[0];
+
+  if (flagFile && !validateImageDimensions(flagFile)) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+  }
+
+  if (crestFile && !validateImageDimensions(crestFile)) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+  }
+
+  const normalizedName = parsed.data.countryName?.trim();
+  const normalizedColor = parsed.data.countryColor?.toLowerCase();
+
+  const nameChanged = typeof normalizedName === "string" && normalizedName.length > 0 && normalizedName !== target.name;
+  const colorChanged = typeof normalizedColor === "string" && normalizedColor !== target.color.toLowerCase();
+  const flagChanged = Boolean(flagFile);
+  const crestChanged = Boolean(crestFile);
+
+  if (!nameChanged && !colorChanged && !flagChanged && !crestChanged) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({ error: "NO_CHANGES" });
+  }
+
+  const costBreakdown = {
+    rename: nameChanged ? gameSettings.customization.renameDucats : 0,
+    recolor: colorChanged ? gameSettings.customization.recolorDucats : 0,
+    flag: flagChanged ? gameSettings.customization.flagDucats : 0,
+    crest: crestChanged ? gameSettings.customization.crestDucats : 0,
+  };
+  const totalCost =
+    costBreakdown.rename +
+    costBreakdown.recolor +
+    costBreakdown.flag +
+    costBreakdown.crest;
+
+  ensureCountryInWorldBase(auth.countryId);
+  const countryResource = worldBase.resourcesByCountry[auth.countryId];
+  if (!countryResource) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(500).json({ error: "NO_RESOURCES" });
+  }
+  if (countryResource.ducats < totalCost) {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(400).json({
+      error: "INSUFFICIENT_DUCATS",
+      required: totalCost,
+      available: countryResource.ducats,
+      costBreakdown,
+    });
+  }
+
+  const data: { name?: string; color?: string; flagUrl?: string | null; crestUrl?: string | null } = {};
+  if (nameChanged) {
+    data.name = normalizedName;
+  }
+  if (colorChanged) {
+    data.color = normalizedColor;
+  }
+  if (flagFile) {
+    data.flagUrl = `/uploads/flags/${flagFile.filename}`;
+  }
+  if (crestFile) {
+    data.crestUrl = `/uploads/crests/${crestFile.filename}`;
+  }
+
+  try {
+    const updated = await prisma.country.update({
+      where: { id: auth.countryId },
+      data,
+      select: countrySelect,
+    });
+
+    if (flagFile) {
+      removeUploadedByUrl(target.flagUrl);
+    }
+    if (crestFile) {
+      removeUploadedByUrl(target.crestUrl);
+    }
+
+    countryResource.ducats = Math.max(0, countryResource.ducats - totalCost);
+    savePersistentState();
+
+    return res.json({
+      country: countryFromDb(updated),
+      chargedDucats: totalCost,
+      costBreakdown,
+      resources: worldBase.resourcesByCountry[auth.countryId],
+    });
+  } catch {
+    removeUploadedFile(flagFile);
+    removeUploadedFile(crestFile);
+    return res.status(409).json({ error: "COUNTRY_UPDATE_FAILED" });
+  }
 });
 
 const punishSchema = z

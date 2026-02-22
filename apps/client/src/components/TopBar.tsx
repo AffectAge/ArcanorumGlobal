@@ -23,6 +23,7 @@ type Props = {
   onAdminForceResolve?: () => void;
   onOpenAdminPanel?: () => void;
   onOpenGameSettings?: () => void;
+  onOpenCountryCustomization?: () => void;
 };
 
 const cards = [
@@ -47,15 +48,21 @@ export function TopBar({
   onAdminForceResolve,
   onOpenAdminPanel,
   onOpenGameSettings,
+  onOpenCountryCustomization,
 }: Props) {
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
-        <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onOpenCountryCustomization}
+          className="flex items-center gap-3 rounded-lg px-1 py-1 text-left transition hover:bg-white/5"
+          title="Изменить страну"
+        >
           <img src={flagUrl || "/placeholder-flag.svg"} alt="flag" className="h-8 w-12 rounded object-cover" />
           <img src={crestUrl || "/placeholder-crest.svg"} alt="crest" className="h-8 w-8 rounded-full object-cover" />
           <div className="font-display text-xl tracking-wide">{countryName}</div>
-        </div>
+        </button>
 
         <div className="flex flex-wrap items-center justify-center gap-2">
           {cards.map((card) => {

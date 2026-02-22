@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Order, WorldBase } from "@arcanorum/shared";
+import type { Order, ResourceTotals, WorldBase } from "@arcanorum/shared";
 
 type OrdersByTurn = Map<number, Map<string, Order[]>>;
 
@@ -23,6 +23,7 @@ type GameState = {
   setPresence: (ids: string[]) => void;
   setSelectedProvince: (id: string | null) => void;
   resetOverlay: (turnId: number) => void;
+  updateCountryResources: (countryId: string, patch: Partial<ResourceTotals>) => void;
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -50,6 +51,25 @@ export const useGameStore = create<GameState>((set) => ({
       const map = new Map(state.ordersByTurn);
       map.delete(nextTurnId - 1);
       return { ordersByTurn: map, turnId: nextTurnId };
+    }),
+  updateCountryResources: (countryId, patch) =>
+    set((state) => {
+      if (!state.worldBase?.resourcesByCountry[countryId]) {
+        return state;
+      }
+
+      return {
+        worldBase: {
+          ...state.worldBase,
+          resourcesByCountry: {
+            ...state.worldBase.resourcesByCountry,
+            [countryId]: {
+              ...state.worldBase.resourcesByCountry[countryId],
+              ...patch,
+            },
+          },
+        },
+      };
     }),
 }));
 
