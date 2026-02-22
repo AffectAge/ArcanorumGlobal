@@ -56,6 +56,7 @@ export default function App() {
     ducats: 0,
     gold: 0,
   });
+  const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -187,6 +188,7 @@ export default function App() {
             ducats: ui.economy.baseDucatsPerTurn,
             gold: ui.economy.baseGoldPerTurn,
           });
+          setMaxActiveColonizations(ui.colonization.maxActiveColonizations);
         }
       })
       .catch(() => {
@@ -343,6 +345,8 @@ export default function App() {
         activeMode={mapMode}
         onQueueBuildOrder={queueBuildOrder}
         onQueueColonizeOrder={queueColonizeOrder}
+        colonizationIconUrl={resourceIcons.colonization}
+        maxActiveColonizations={maxActiveColonizations}
         onOpenAdminProvinceEditor={(provinceId) => {
           setAdminInitialProvinceId(provinceId);
           setAdminOpen(true);
@@ -420,6 +424,16 @@ export default function App() {
           token={auth.token}
           onClose={() => setGameSettingsOpen(false)}
           onResourceIconsUpdated={setResourceIcons}
+          onSettingsUpdated={(updated) => {
+            setMaxActiveColonizations(updated.colonization.maxActiveColonizations);
+            setResourceGrowthByTurn((prev) => ({
+              ...prev,
+              colonization: updated.colonization.pointsPerTurn,
+              ducats: updated.economy.baseDucatsPerTurn,
+              gold: updated.economy.baseGoldPerTurn,
+            }));
+            setEventLogRetentionTurns(updated.eventLog.retentionTurns);
+          }}
         />
       )}
 

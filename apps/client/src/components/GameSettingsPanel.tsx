@@ -2,13 +2,14 @@ import { Dialog } from "@headlessui/react";
 import { useEffect, useState } from "react";
 import { Coins, Flag, Save, X } from "lucide-react";
 import { toast } from "sonner";
-import { adminUploadResourceIcons, fetchGameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
+import { adminUploadResourceIcons, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
 
 type Props = {
   open: boolean;
   token: string;
   onClose: () => void;
   onResourceIconsUpdated?: (icons: ResourceIconsMap) => void;
+  onSettingsUpdated?: (settings: GameSettings) => void;
 };
 
 const categories = [
@@ -36,7 +37,7 @@ async function isImageWithinMaxSize(file: File, maxSize = 64): Promise<boolean> 
   });
 }
 
-export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated }: Props) {
+export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated, onSettingsUpdated }: Props) {
   const [activeCategory, setActiveCategory] = useState<(typeof categories)[number]["id"]>("economy");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -105,6 +106,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       });
       setBaseDucatsPerTurn(updated.economy.baseDucatsPerTurn);
       setBaseGoldPerTurn(updated.economy.baseGoldPerTurn);
+      onSettingsUpdated?.(updated);
       toast.success("Настройки экономики сохранены");
     } catch {
       toast.error("Не удалось сохранить настройки экономики");
@@ -124,6 +126,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       });
       setMaxActiveColonizations(updated.colonization.maxActiveColonizations);
       setColonizationPointsPerTurn(updated.colonization.pointsPerTurn);
+      onSettingsUpdated?.(updated);
       toast.success("Настройки колонизации сохранены");
     } catch {
       toast.error("Не удалось сохранить настройки колонизации");
@@ -147,6 +150,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       setRecolorDucats(updated.customization.recolorDucats);
       setFlagDucats(updated.customization.flagDucats);
       setCrestDucats(updated.customization.crestDucats);
+      onSettingsUpdated?.(updated);
       toast.success("Цены кастомизации сохранены");
     } catch {
       toast.error("Не удалось сохранить цены кастомизации");
@@ -162,6 +166,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         eventLog: { retentionTurns: Math.max(1, Math.floor(eventLogRetentionTurns)) },
       });
       setEventLogRetentionTurns(updated.eventLog.retentionTurns);
+      onSettingsUpdated?.(updated);
       toast.success("Настройки журнала событий сохранены");
     } catch {
       toast.error("Не удалось сохранить настройки журнала событий");

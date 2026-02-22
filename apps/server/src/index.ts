@@ -136,6 +136,7 @@ const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
 const DEFAULT_COLONIZATION_POINTS_PER_TURN = 30;
 const COLONIZATION_GOAL = 100;
 const DEFAULT_PROVINCE_COLONIZATION_COST = 100;
+const SETTINGS_MAX_NUMBER = 1_000_000_000_000;
 
 type GameSettings = {
   economy: {
@@ -908,22 +909,22 @@ async function isAdminCountry(countryId: string): Promise<boolean> {
 const gameSettingsSchema = z.object({
   economy: z
     .object({
-      baseDucatsPerTurn: z.coerce.number().int().min(0).max(100000).optional(),
-      baseGoldPerTurn: z.coerce.number().int().min(0).max(100000).optional(),
+      baseDucatsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      baseGoldPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
     .optional(),
   colonization: z
     .object({
       maxActiveColonizations: z.coerce.number().int().min(1).max(1000).optional(),
-      pointsPerTurn: z.coerce.number().int().min(0).max(100000).optional(),
+      pointsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
     .optional(),
   customization: z
     .object({
-      renameDucats: z.coerce.number().int().min(0).max(100000).optional(),
-      recolorDucats: z.coerce.number().int().min(0).max(100000).optional(),
-      flagDucats: z.coerce.number().int().min(0).max(100000).optional(),
-      crestDucats: z.coerce.number().int().min(0).max(100000).optional(),
+      renameDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      recolorDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      flagDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      crestDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
     .optional(),
   eventLog: z
@@ -1252,7 +1253,7 @@ app.post("/country/colonization/cancel", async (req, res) => {
 });
 
 const adminProvinceColonizationSchema = z.object({
-  colonizationCost: z.coerce.number().int().min(1).max(100000).optional(),
+  colonizationCost: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
   colonizationDisabled: z.boolean().optional(),
   ownerCountryId: z.string().min(1).nullable().optional(),
 });

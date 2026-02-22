@@ -39,6 +39,28 @@ const cards = [
   { key: "gold", label: "Золото", icon: CircleDollarSign, tip: "Госказна для больших проектов" },
 ] as const;
 
+function formatCompact(value: number): string {
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  const units = [
+    { n: 1_000_000_000_000, s: "T" },
+    { n: 1_000_000_000, s: "B" },
+    { n: 1_000_000, s: "M" },
+    { n: 1_000, s: "K" },
+  ] as const;
+
+  for (const unit of units) {
+    if (abs >= unit.n) {
+      const scaled = abs / unit.n;
+      const text =
+        scaled >= 100 ? Math.floor(scaled).toString() : scaled >= 10 ? scaled.toFixed(1).replace(/\.0$/, "") : scaled.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+      return `${sign}${text}${unit.s}`;
+    }
+  }
+
+  return `${sign}${Math.floor(abs)}`;
+}
+
 export function TopBar({
   countryName,
   flagUrl,
@@ -94,7 +116,7 @@ export function TopBar({
                       exit={{ opacity: 0, y: -4, scale: 0.97 }}
                       transition={{ duration: 0.16, ease: "easeOut" }}
                     >
-                      {resources[card.key]}
+                      {formatCompact(resources[card.key])}
                     </motion.strong>
                   </AnimatePresence>
                   <AnimatePresence mode="popLayout" initial={false}>
@@ -106,11 +128,13 @@ export function TopBar({
                       transition={{ duration: 0.16, ease: "easeOut" }}
                       className="inline-flex items-center gap-1"
                     >
-                      <span className="text-emerald-300/90">+{growth}</span>
+                      <span className="text-emerald-300/90">+{formatCompact(growth)}</span>
                       <span className="text-white/25">•</span>
-                      <span className="text-rose-300/90">-{expense}</span>
+                      <span className="text-rose-300/90">-{formatCompact(expense)}</span>
                       <span className="text-white/25">•</span>
-                      <span className={net >= 0 ? "text-cyan-300/90" : "text-rose-300/90"}>{net >= 0 ? `+${net}` : net}</span>
+                      <span className={net >= 0 ? "text-cyan-300/90" : "text-rose-300/90"}>
+                        {net >= 0 ? `+${formatCompact(net)}` : formatCompact(net)}
+                      </span>
                     </motion.span>
                   </AnimatePresence>
                 </div>

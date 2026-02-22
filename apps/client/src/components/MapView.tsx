@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 import { ColonizationModal } from "./ColonizationModal";
+import { ProvinceHoverTooltip } from "./ProvinceHoverTooltip";
 import { cancelCountryColonization, startCountryColonization } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 
@@ -15,6 +16,8 @@ type Props = {
   onQueueBuildOrder: (provinceId: string) => void;
   onQueueColonizeOrder: (provinceId: string) => void;
   onOpenAdminProvinceEditor?: (provinceId: string) => void;
+  colonizationIconUrl?: string | null;
+  maxActiveColonizations?: number;
 };
 
 type MapModeStyle = {
@@ -76,11 +79,13 @@ function createPatternData(striped: boolean): { width: number; height: number; d
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const i = (y * width + x) * 4;
-      if (striped && ((x + y) % 6 <= 1)) {
-        data[i] = 0;
-        data[i + 1] = 0;
-        data[i + 2] = 0;
-        data[i + 3] = 120;
+      if (striped) {
+        // Two-tone overlay: both bands are tinted, one is stronger to create visible alternation.
+        const isLightBand = (x + y) % 6 <= 2;
+        data[i] = 255;
+        data[i + 1] = 255;
+        data[i + 2] = 255;
+        data[i + 3] = isLightBand ? 150 : 45;
       } else {
         data[i] = 0;
         data[i + 1] = 0;
@@ -106,22 +111,53 @@ function darkenHexColor(hex: string, factor = 0.45): string {
   return `#${r}${g}${b}`;
 }
 
-export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColonizeOrder, onOpenAdminProvinceEditor }: Props) {
+function lightenHexColor(hex: string, amount = 0.28): string {
+  const match = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!match) {
+    return "#cbd5e1";
+  }
+  const raw = match[1];
+  const to = (start: number) => {
+    const base = parseInt(raw.slice(start, start + 2), 16);
+    return Math.max(0, Math.min(255, Math.round(base + (255 - base) * amount)));
+  };
+  const r = to(0).toString(16).padStart(2, "0");
+  const g = to(2).toString(16).padStart(2, "0");
+  const b = to(4).toString(16).padStart(2, "0");
+  return `#${r}${g}${b}`;
+}
+
+export function MapView({
+  apiBase,
+  activeMode,
+  onQueueBuildOrder,
+  onQueueColonizeOrder,
+  onOpenAdminProvinceEditor,
+  colonizationIconUrl,
+  maxActiveColonizations,
+}: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
   const selectedFeatureIdRef = useRef<string | null>(null);
   const prevOwnedProvinceIdsRef = useRef<Set<string>>(new Set());
   const prevColonizingProvinceIdsRef = useRef<Set<string>>(new Set());
   const prevQueuedColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
   const prevConfiguredColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
+  const provinceNamesByIdRef = useRef<Map<string, string>>(new Map());
 
   const [interactionLocked, setInteractionLocked] = useState(false);
   const [showProvinceBorders, setShowProvinceBorders] = useState(true);
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
   const [view, setView] = useState({ zoom: DEFAULT_ZOOM, lng: DEFAULT_CENTER[0], lat: DEFAULT_CENTER[1] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; provinceId: string; provinceName: string } | null>(null);
+  const [hoverTooltip, setHoverTooltip] = useState<{
+    x: number;
+    y: number;
+    provinceName: string;
+    ownerName: string;
+    colonizers: Array<{ countryId: string; countryName: string; countryColor: string; percent: number; hasQueuedOrder: boolean }>;
+  } | null>(null);
   const [countries, setCountries] = useState<Country[]>([]);
   const [colonizationModalOpen, setColonizationModalOpen] = useState(false);
   const [colonizationActionPending, setColonizationActionPending] = useState(false);
@@ -186,7 +222,13 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       })
       .then((items) => {
         if (!cancelled) {
-          setCountries(items);
+          setCountries(
+            items.map((country) => ({
+              ...country,
+              flagUrl: resolveAssetUrl(apiBase, country.flagUrl),
+              crestUrl: resolveAssetUrl(apiBase, country.crestUrl),
+            })),
+          );
         }
       })
       .catch(() => {
@@ -222,6 +264,24 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     }
     return ids;
   }, [auth, ordersByTurn, turnId]);
+  const queuedColonizeCountriesByProvince = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const byPlayer = ordersByTurn.get(turnId);
+    if (!byPlayer) {
+      return map;
+    }
+    for (const orders of byPlayer.values()) {
+      for (const order of orders) {
+        if (order.type !== "COLONIZE") continue;
+        const list = map.get(order.provinceId) ?? [];
+        if (!list.includes(order.countryId)) {
+          list.push(order.countryId);
+          map.set(order.provinceId, list);
+        }
+      }
+    }
+    return map;
+  }, [ordersByTurn, turnId]);
   const selectedColonyProgress = selectedProvinceId ? (worldBase?.colonyProgressByProvince?.[selectedProvinceId] ?? {}) : {};
   const selectedColonyProgressList = Object.entries(selectedColonyProgress).sort((a, b) => b[1] - a[1]);
   const selectedIsNeutral = selectedProvinceId ? !worldBase?.provinceOwner[selectedProvinceId] : false;
@@ -244,6 +304,38 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       : politicalCountryFilter === "own"
         ? (auth?.countryId ?? null)
         : politicalCountryFilter;
+  const currentCountryActiveColonizationTargets = useMemo(() => {
+    if (!auth?.countryId) {
+      return new Set<string>();
+    }
+    const ids = new Set<string>();
+    const ownerByProvince = worldBase?.provinceOwner ?? {};
+    const cfgByProvince = worldBase?.provinceColonizationByProvince ?? {};
+    const progressByProvince = worldBase?.colonyProgressByProvince ?? {};
+    for (const [provinceId, byCountry] of Object.entries(progressByProvince)) {
+      if (ownerByProvince[provinceId]) continue;
+      if (cfgByProvince[provinceId]?.disabled) continue;
+      if (byCountry[auth.countryId] != null) {
+        ids.add(provinceId);
+      }
+    }
+    const myOrders = ordersByTurn.get(turnId)?.get(auth.playerId) ?? [];
+    for (const order of myOrders) {
+      if (order.type !== "COLONIZE") continue;
+      if (ownerByProvince[order.provinceId]) continue;
+      if (cfgByProvince[order.provinceId]?.disabled) continue;
+      ids.add(order.provinceId);
+    }
+    return ids;
+  }, [auth, ordersByTurn, turnId, worldBase]);
+  const colonizedProvinceOptions = useMemo(() => {
+    return [...currentCountryActiveColonizationTargets]
+      .sort((a, b) => a.localeCompare(b))
+      .map((id) => ({
+        id,
+        name: provinceNamesByIdRef.current.get(id) ?? id,
+      }));
+  }, [currentCountryActiveColonizationTargets]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -328,9 +420,6 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       attributionControl: false,
     });
 
-    const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: "map-hover-popup" });
-    hoverPopupRef.current = hoverPopup;
-
     map.on("load", () => {
       if (!map.hasImage(COLONIZE_EMPTY_PATTERN)) {
         map.addImage(COLONIZE_EMPTY_PATTERN, createPatternData(false));
@@ -347,6 +436,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       const c = map.getCenter();
       setView({ zoom: map.getZoom(), lng: c.lng, lat: c.lat });
       setContextMenu(null);
+      setHoverTooltip(null);
     });
 
     map.on("mousemove", "province-fill", (e) => {
@@ -358,12 +448,48 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       const props = feature.properties as Record<string, unknown> | undefined;
       const id = readProvinceId(props);
       const name = readProvinceName(props);
+      if (id && name) {
+        provinceNamesByIdRef.current.set(id, name);
+      }
       if (!id) {
         return;
       }
 
       const ownerId = worldBaseRef.current?.provinceOwner[id] ?? null;
       const ownerName = ownerId ? (countryByIdRef.current.get(ownerId)?.name ?? ownerId) : "Нейтральная";
+      const progressByCountry = worldBaseRef.current?.colonyProgressByProvince?.[id] ?? {};
+      const provinceColonizationCost = Math.max(
+        1,
+        Math.floor(worldBaseRef.current?.provinceColonizationByProvince?.[id]?.cost ?? 100),
+      );
+      const storeState = useGameStore.getState();
+      const queuedByPlayer = storeState.ordersByTurn.get(storeState.turnId);
+      const queuedCountryIds = new Set<string>();
+      if (queuedByPlayer) {
+        for (const orders of queuedByPlayer.values()) {
+          for (const order of orders) {
+            if (order.type === "COLONIZE" && order.provinceId === id) {
+              queuedCountryIds.add(order.countryId);
+            }
+          }
+        }
+      }
+      const colonizerIds = [...new Set<string>([...Object.keys(progressByCountry), ...queuedCountryIds])];
+      const colonizers = colonizerIds
+        .sort((a, b) => (progressByCountry[b] ?? 0) - (progressByCountry[a] ?? 0) || a.localeCompare(b))
+        .slice(0, 6)
+        .map((countryId) => {
+          const country = countryByIdRef.current.get(countryId);
+          const progress = progressByCountry[countryId] ?? 0;
+          const percent = Math.max(0, Math.min(100, (progress / provinceColonizationCost) * 100));
+          return {
+            countryId,
+            countryName: country?.name ?? countryId,
+            countryColor: country?.color ?? "#94a3b8",
+            percent,
+            hasQueuedOrder: queuedCountryIds.has(countryId),
+          };
+        });
 
       map.getCanvas().style.cursor = "pointer";
 
@@ -376,10 +502,13 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id }, { hover: true });
       }
 
-      hoverPopup
-        .setLngLat(e.lngLat)
-        .setHTML(`<div class=\"text-xs\"><div class=\"font-semibold\">${name}</div><div>Владелец: ${ownerName}</div><div>В очереди: ${ordersCountRef.current.get(id) ?? 0}</div></div>`)
-        .addTo(map);
+      setHoverTooltip({
+        x: e.point.x,
+        y: e.point.y,
+        provinceName: name,
+        ownerName,
+        colonizers,
+      });
     });
 
     map.on("mouseleave", "province-fill", () => {
@@ -388,7 +517,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: hoveredFeatureIdRef.current }, { hover: false });
       }
       hoveredFeatureIdRef.current = null;
-      hoverPopup.remove();
+      setHoverTooltip(null);
     });
 
     map.on("contextmenu", "province-fill", (e) => {
@@ -402,6 +531,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       if (!id) {
         return;
       }
+      provinceNamesByIdRef.current.set(id, readProvinceName(props));
 
       e.preventDefault();
       setContextMenu({
@@ -423,6 +553,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       if (!id) {
         return;
       }
+      provinceNamesByIdRef.current.set(id, readProvinceName(props));
 
       if (selectedFeatureIdRef.current && selectedFeatureIdRef.current !== id) {
         map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: selectedFeatureIdRef.current }, { selected: false });
@@ -458,8 +589,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     mapRef.current = map;
 
     return () => {
-      hoverPopup.remove();
-      hoverPopupRef.current = null;
+      setHoverTooltip(null);
       map.remove();
       mapRef.current = null;
     };
@@ -476,7 +606,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
 
     const nextOwnedIds = new Set(Object.keys(ownerByProvince));
     const nextColonizingIds = new Set(Object.keys(progressByProvince));
-    const nextQueuedIds = new Set(myQueuedColonizeProvinceIds);
+    const nextQueuedIds = new Set(queuedColonizeCountriesByProvince.keys());
     const nextConfiguredIds = new Set(Object.keys(worldBase?.provinceColonizationByProvince ?? {}));
     const allTouchedIds = new Set<string>([
       ...prevOwnedProvinceIdsRef.current,
@@ -515,9 +645,20 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         }
       }
 
-      const colonizeLeadColor = leadCountryId ? (countryById.get(leadCountryId)?.color ?? "#9ca3af") : "#9ca3af";
-      const colonizeLeadBorderColor = leadCountryId ? darkenHexColor(colonizeLeadColor, 0.5) : "#64748b";
-      const isColonizing = !ownerId && Boolean(leadCountryId);
+      const queuedCountries = queuedColonizeCountriesByProvince.get(provinceId) ?? [];
+      const queuedLeadCountryId =
+        !ownerId && !leadCountryId && queuedCountries.length > 0
+          ? [...queuedCountries].sort((a, b) => a.localeCompare(b))[0]
+          : null;
+      const effectiveLeadCountryId = leadCountryId ?? queuedLeadCountryId;
+      const selectedFilterCountryColonizes =
+        effectivePoliticalFilterCountryId != null &&
+        !ownerId &&
+        ((progressByProvince[provinceId] ?? {})[effectivePoliticalFilterCountryId] != null ||
+          queuedCountries.includes(effectivePoliticalFilterCountryId));
+      const colonizeLeadColor = effectiveLeadCountryId ? (countryById.get(effectiveLeadCountryId)?.color ?? "#9ca3af") : "#9ca3af";
+      const colonizeLeadLightColor = effectiveLeadCountryId ? lightenHexColor(colonizeLeadColor, 0.16) : "#cbd5e1";
+      const isColonizing = !ownerId && Boolean(effectiveLeadCountryId);
 
       map.setFeatureState(
         { source: "adm1", sourceLayer: "adm1", id: provinceId },
@@ -526,6 +667,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
           isOwnedByCurrent: Boolean(ownerId && auth?.countryId && ownerId === auth.countryId),
           isOwnedByPoliticalFilter: Boolean(ownerId && effectivePoliticalFilterCountryId && ownerId === effectivePoliticalFilterCountryId),
           hasPoliticalCountryFilter: Boolean(effectivePoliticalFilterCountryId),
+          isColonizedByPoliticalFilter: Boolean(selectedFilterCountryColonizes),
           isNeutral: !ownerId,
           ownerColor,
           ownerBorderColor,
@@ -536,7 +678,8 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
           colonizeDisabled: Boolean(cfg.disabled),
           colonizeCost: Math.max(1, Math.floor(cfg.cost ?? 100)),
           colonizeLeadColor,
-          colonizeLeadBorderColor,
+          colonizeLeadLightColor,
+          colonizeLeadBorderColor: effectiveLeadCountryId ? darkenHexColor(colonizeLeadColor, 0.5) : "#64748b",
         },
       );
     }
@@ -552,14 +695,17 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         [
           "all",
           ["boolean", ["feature-state", "hasPoliticalCountryFilter"], false],
-          ["boolean", ["feature-state", "isOwned"], false],
-          ["!", ["boolean", ["feature-state", "isOwnedByPoliticalFilter"], false]],
+          [
+            "any",
+            ["all", ["boolean", ["feature-state", "isOwned"], false], ["!", ["boolean", ["feature-state", "isOwnedByPoliticalFilter"], false]]],
+            ["all", ["boolean", ["feature-state", "isColonizing"], false], ["!", ["boolean", ["feature-state", "isColonizedByPoliticalFilter"], false]]],
+          ],
         ],
         "#ffffff",
         ["boolean", ["feature-state", "isOwned"], false],
         ["coalesce", ["feature-state", "ownerColor"], "#d1d5db"],
         ["boolean", ["feature-state", "isColonizing"], false],
-        ["coalesce", ["feature-state", "colonizeLeadColor"], "#9ca3af"],
+        ["coalesce", ["feature-state", "colonizeLeadLightColor"], "#cbd5e1"],
         "#ffffff",
       ]);
       map.setPaintProperty("province-fill", "fill-opacity", [
@@ -567,8 +713,11 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         [
           "all",
           ["boolean", ["feature-state", "hasPoliticalCountryFilter"], false],
-          ["boolean", ["feature-state", "isOwned"], false],
-          ["!", ["boolean", ["feature-state", "isOwnedByPoliticalFilter"], false]],
+          [
+            "any",
+            ["all", ["boolean", ["feature-state", "isOwned"], false], ["!", ["boolean", ["feature-state", "isOwnedByPoliticalFilter"], false]]],
+            ["all", ["boolean", ["feature-state", "isColonizing"], false], ["!", ["boolean", ["feature-state", "isColonizedByPoliticalFilter"], false]]],
+          ],
         ],
         1,
         ["boolean", ["feature-state", "isOwned"], false],
@@ -583,7 +732,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         COLONIZE_STRIPES_PATTERN,
         COLONIZE_EMPTY_PATTERN,
       ]);
-      map.setPaintProperty("province-colonize-stripes", "fill-opacity", ["case", ["boolean", ["feature-state", "isColonizing"], false], 0.65, 0]);
+      map.setPaintProperty("province-colonize-stripes", "fill-opacity", 0);
       map.setPaintProperty("province-line", "line-color", "#9ca3af");
       map.setPaintProperty("province-line", "line-width", 1.1);
       map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.95 : 0);
@@ -664,7 +813,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     map.setPaintProperty("province-line", "line-color", "#C0C0C0");
     map.setPaintProperty("province-line", "line-width", 0.9);
     map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.75 : 0);
-  }, [activeMode, auth?.countryId, countryById, effectivePoliticalFilterCountryId, myQueuedColonizeProvinceIds, showProvinceBorders, worldBase]);
+  }, [activeMode, auth?.countryId, countryById, effectivePoliticalFilterCountryId, myQueuedColonizeProvinceIds, queuedColonizeCountriesByProvince, showProvinceBorders, worldBase]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
@@ -756,6 +905,14 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         onContextMenu={(event) => {
           event.preventDefault();
         }}
+      />
+      <ProvinceHoverTooltip
+        open={Boolean(hoverTooltip)}
+        x={hoverTooltip?.x ?? 0}
+        y={hoverTooltip?.y ?? 0}
+        provinceName={hoverTooltip?.provinceName ?? ""}
+        ownerName={hoverTooltip?.ownerName ?? ""}
+        colonizers={hoverTooltip?.colonizers ?? []}
       />
       <div className="vignette absolute inset-0 pointer-events-none" />
 
@@ -1014,6 +1171,18 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         progressByCountry={selectedColonyProgress}
         currentCountryId={auth?.countryId ?? null}
         countries={countries}
+        colonizationIconUrl={colonizationIconUrl}
+        colonizationLimit={
+          auth?.countryId && typeof maxActiveColonizations === "number"
+            ? { active: currentCountryActiveColonizationTargets.size, max: Math.max(1, maxActiveColonizations) }
+            : null
+        }
+        colonizedProvinceOptions={colonizedProvinceOptions}
+        selectedColonizedProvinceId={selectedProvinceId}
+        onSelectColonizedProvince={(provinceId) => {
+          setSelectedProvince(provinceId);
+          setSelectedProvinceName(provinceNamesByIdRef.current.get(provinceId) ?? provinceId);
+        }}
         canStart={selectedCanStartColonization}
         canCancel={selectedCanCancelColonization}
         pending={colonizationActionPending}
