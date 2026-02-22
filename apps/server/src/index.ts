@@ -15,6 +15,10 @@ import Redis from "ioredis";
 import dotenv from "dotenv";
 import {
   type Country,
+  type EventCategory,
+  type EventLogEntry,
+  type EventPriority,
+  type EventVisibility,
   type LoginPayload,
   type Order,
   type OrderDelta,
@@ -95,6 +99,7 @@ const countrySelect = {
   blockedUntilTurn: true,
   blockedUntilAt: true,
   ignoreUntilTurn: true,
+  eventLogRetentionTurns: true,
 } as const;
 
 let turnId = 1;
@@ -121,6 +126,9 @@ type GameSettings = {
     flagDucats: number;
     crestDucats: number;
   };
+  eventLog: {
+    retentionTurns: number;
+  };
 };
 
 const defaultGameSettings = (): GameSettings => ({
@@ -137,6 +145,9 @@ const defaultGameSettings = (): GameSettings => ({
     recolorDucats: 10,
     flagDucats: 15,
     crestDucats: 15,
+  },
+  eventLog: {
+    retentionTurns: 3,
   },
 });
 
@@ -234,6 +245,12 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.customization?.crestDucats === "number"
             ? Math.max(0, Math.floor(next.customization.crestDucats))
             : defaults.customization.crestDucats,
+      },
+      eventLog: {
+        retentionTurns:
+          typeof next.eventLog?.retentionTurns === "number"
+            ? Math.max(1, Math.floor(next.eventLog.retentionTurns))
+            : defaults.eventLog.retentionTurns,
       },
     };
   }
@@ -444,7 +461,7 @@ function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
   });
 }
 
-function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null; ignoreUntilTurn: number | null }): Country {
+function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null; ignoreUntilTurn: number | null; eventLogRetentionTurns?: number | null }): Country {
   return {
     ...row,
     blockedUntilAt: row.blockedUntilAt ? row.blockedUntilAt.toISOString() : null,
@@ -536,10 +553,11 @@ function getReadySetForTurn(turn: number): Set<string> {
   }
   return readySet;
 }
-function resolveTurn(): WorldPatch {
+function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldPatch["rejectedOrders"] = [];
   const claimed = new Set<string>();
+  const news: EventLogEntry[] = [];
 
   const colonizeTargetsByCountry = new Map<string, Set<string>>();
 
@@ -621,8 +639,23 @@ function resolveTurn(): WorldPatch {
 
     candidates.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     const winnerCountryId = candidates[0][0];
+    const previousOwnerId = worldBase.provinceOwner[provinceId] ?? null;
     worldBase.provinceOwner[provinceId] = winnerCountryId;
     delete worldBase.colonyProgressByProvince[provinceId];
+    news.push(
+      makeOfficialNews({
+        turn: turnId,
+        category: "colonization",
+        title: "Успешная колонизация",
+        message:
+          previousOwnerId && previousOwnerId !== winnerCountryId
+            ? `Провинция ${provinceId} перешла от ${previousOwnerId} к ${winnerCountryId}`
+            : `Провинция ${provinceId} закреплена за ${winnerCountryId}`,
+        countryId: winnerCountryId,
+        priority: "medium",
+        visibility: "public",
+      }),
+    );
   }
 
   for (const resource of Object.values(worldBase.resourcesByCountry)) {
@@ -642,10 +675,13 @@ function resolveTurn(): WorldPatch {
   savePersistentState();
 
   return {
-    type: "WORLD_PATCH",
-    turnId,
-    worldBase,
-    rejectedOrders,
+    patch: {
+      type: "WORLD_PATCH",
+      turnId,
+      worldBase,
+      rejectedOrders,
+    },
+    news,
   };
 }
 
@@ -741,11 +777,17 @@ const gameSettingsSchema = z.object({
       crestDucats: z.coerce.number().int().min(0).max(100000).optional(),
     })
     .optional(),
+  eventLog: z
+    .object({
+      retentionTurns: z.coerce.number().int().min(1).max(100).optional(),
+    })
+    .optional(),
 });
 
 app.get("/game-settings/public", (_req, res) => {
   return res.json({
     customization: gameSettings.customization,
+    eventLog: gameSettings.eventLog,
   });
 });
 
@@ -805,7 +847,35 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
   }
 
+  const nextEventLog = parsed.data.eventLog;
+  if (nextEventLog) {
+    if (typeof nextEventLog.retentionTurns === "number") {
+      gameSettings.eventLog.retentionTurns = nextEventLog.retentionTurns;
+    }
+  }
+
+  const changedSections = [
+    parsed.data.economy ? "экономика" : null,
+    parsed.data.colonization ? "колонизация" : null,
+    parsed.data.customization ? "кастомизация" : null,
+    parsed.data.eventLog ? "журнал событий" : null,
+  ].filter((v): v is string => Boolean(v));
+
   savePersistentState();
+  if (changedSections.length > 0) {
+    broadcast(wss, {
+      type: "NEWS_EVENT",
+      event: makeOfficialNews({
+        turn: turnId,
+        category: "system",
+        title: "Настройки игры изменены",
+        message: `Администратор обновил разделы: ${changedSections.join(", ")}`,
+        countryId: auth.countryId,
+        priority: "medium",
+        visibility: "public",
+      }),
+    });
+  }
   return res.json(gameSettings);
 });
 
@@ -957,12 +1027,42 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   }
 
   savePersistentState();
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "politics",
+      title: "Страна удалена",
+      message: `Администратор удалил страну ${target.name}`,
+      countryId: countryIdParam,
+      priority: "high",
+      visibility: "public",
+    }),
+  });
   return res.json({ ok: true });
 });
 
 const selfCountryCustomizationSchema = z.object({
   countryName: z.string().min(2).max(32).optional(),
   countryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+});
+
+const clientSettingsSchema = z.object({
+  eventLogRetentionTurns: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+app.patch("/country/client-settings", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = clientSettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  return res.status(400).json({ error: "CLIENT_SETTING_MOVED_TO_ADMIN_GAME_SETTINGS" });
 });
 
 app.patch("/country/customization", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
@@ -1141,6 +1241,26 @@ app.patch("/admin/countries/:countryId/punishments", async (req, res) => {
   }
 
   const updated = await prisma.country.update({ where: { id: countryIdParam }, data, select: countrySelect });
+  const punishmentNewsMessage =
+    input.action === "unlock"
+      ? `С страны ${updated.name} сняты ограничения`
+      : input.action === "permanent"
+        ? `Страна ${updated.name} заблокирована бессрочно`
+        : input.action === "turns"
+          ? `Страна ${updated.name} заблокирована до хода #${data.blockedUntilTurn ?? turnId}`
+          : `Страна ${updated.name} заблокирована по времени`;
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "politics",
+      title: "Изменение ограничений страны",
+      message: punishmentNewsMessage,
+      countryId: updated.id,
+      priority: input.action === "unlock" ? "medium" : "high",
+      visibility: "public",
+    }),
+  });
   return res.json(countryFromDb(updated));
 });
 
@@ -1195,6 +1315,18 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
     }
 
     savePersistentState();
+    broadcast(wss, {
+      type: "NEWS_EVENT",
+      event: makeOfficialNews({
+        turn: turnId,
+        category: "politics",
+        title: "Новая страна",
+        message: `Зарегистрирована страна ${country.name}`,
+        countryId: country.id,
+        priority: "medium",
+        visibility: "public",
+      }),
+    });
     return res.status(201).json(countryFromDb(country));
   } catch {
     removeUploadedFile(flagFile);
@@ -1248,7 +1380,15 @@ app.post("/auth/login", async (req, res) => {
 
   ensureCountryInWorldBase(country.id);
   const token = createToken({ id: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin }, rememberMe);
-  return res.json({ token, playerId: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin, worldBase, turnId });
+  return res.json({
+    token,
+    playerId: `player-${country.id}`,
+    countryId: country.id,
+    isAdmin: country.isAdmin,
+    worldBase,
+    turnId,
+    clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
+  });
 });
 
 app.get("/tiles/adm1/:z/:x/:y.mvt", (req, res) => {
@@ -1321,7 +1461,7 @@ wss.on("connection", (socket) => {
         playerCountryId = payload.countryId;
         const country = await prisma.country.findUnique({
           where: { id: payload.countryId },
-          select: { id: true, isAdmin: true },
+          select: { id: true, isAdmin: true, eventLogRetentionTurns: true },
         });
         if (!country) {
           send({ type: "ERROR", code: "UNAUTHORIZED", message: "Country not found" });
@@ -1330,7 +1470,15 @@ wss.on("connection", (socket) => {
         isAdmin = Boolean(country.isAdmin);
         onlinePlayers.add(payload.id);
         ensureCountryInWorldBase(payload.countryId);
-        send({ type: "AUTH_OK", playerId: payload.id, countryId: payload.countryId, isAdmin, worldBase, turnId });
+        send({
+          type: "AUTH_OK",
+          playerId: payload.id,
+          countryId: payload.countryId,
+          isAdmin,
+          worldBase,
+          turnId,
+          clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
+        });
         broadcast(wss, { type: "PRESENCE", onlinePlayerIds: [...onlinePlayers] });
       } catch {
         send({ type: "ERROR", code: "UNAUTHORIZED", message: "Token invalid" });
@@ -1449,8 +1597,11 @@ wss.on("connection", (socket) => {
         send({ type: "ERROR", code: "FORBIDDEN", message: "Admin only" });
         return;
       }
-      const patch = resolveTurn();
+      const { patch, news } = resolveTurn();
       broadcast(wss, patch);
+      for (const event of news) {
+        broadcast(wss, { type: "NEWS_EVENT", event });
+      }
       return;
     }
 
@@ -1502,8 +1653,11 @@ wss.on("connection", (socket) => {
         return;
       }
 
-      const patch = resolveTurn();
+      const { patch, news } = resolveTurn();
       broadcast(wss, patch);
+      for (const event of news) {
+        broadcast(wss, { type: "NEWS_EVENT", event });
+      }
     }
 
   });
@@ -1521,6 +1675,28 @@ async function startServer(): Promise<void> {
   server.listen(env.port, () => {
     console.log(`Arcanorum server running on http://localhost:${env.port}`);
   });
+}
+
+function makeOfficialNews(params: {
+  turn: number;
+  category: EventCategory;
+  title?: string;
+  message: string;
+  countryId?: string | null;
+  priority?: EventPriority;
+  visibility?: EventVisibility;
+}): EventLogEntry {
+  return {
+    id: randomUUID(),
+    turn: params.turn,
+    timestamp: new Date().toISOString(),
+    category: params.category,
+    priority: params.priority ?? "medium",
+    visibility: params.visibility ?? "public",
+    title: params.title ?? null,
+    message: params.message,
+    countryId: params.countryId ?? null,
+  };
 }
 
 startServer().catch((error) => {

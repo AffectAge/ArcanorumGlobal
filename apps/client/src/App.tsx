@@ -12,6 +12,7 @@ import { AdminPanel } from "./components/AdminPanel";
 import { TurnStatusModal } from "./components/TurnStatusModal";
 import { GameSettingsPanel } from "./components/GameSettingsPanel";
 import { CountryCustomizationModal } from "./components/CountryCustomizationModal";
+import { EventLogPanel } from "./components/EventLogPanel";
 import { apiBase } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
@@ -42,6 +43,13 @@ export default function App() {
   const setPresence = useGameStore((s) => s.setPresence);
   const resetOverlay = useGameStore((s) => s.resetOverlay);
   const updateCountryResources = useGameStore((s) => s.updateCountryResources);
+  const eventLog = useGameStore((s) => s.eventLog);
+  const addEvent = useGameStore((s) => s.addEvent);
+  const pruneLogEntries = useGameStore((s) => s.pruneLogEntries);
+  const trimOldLogEntries = useGameStore((s) => s.trimOldLogEntries);
+  const clearEventLog = useGameStore((s) => s.clearEventLog);
+  const eventLogRetentionTurns = useGameStore((s) => s.eventLogRetentionTurns);
+  const setEventLogRetentionTurns = useGameStore((s) => s.setEventLogRetentionTurns);
 
   const onWsMessage = useCallback(
     (msg: WsOutMessage) => {
@@ -51,20 +59,63 @@ export default function App() {
         if (currentAuth?.token) {
           setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
         }
+        if (msg.clientSettings?.eventLogRetentionTurns) {
+          setEventLogRetentionTurns(msg.clientSettings.eventLogRetentionTurns);
+        }
+        addEvent({ category: "system", title: "Подключение", message: "Соединение с игровым сервером установлено", priority: "low", visibility: "private", countryId: msg.countryId, turn: msg.turnId });
       }
 
       if (msg.type === "ORDER_BROADCAST") {
         addOrder(msg.order);
+        addEvent({
+          category: msg.order.type === "COLONIZE" ? "colonization" : "military",
+          title: msg.order.type === "COLONIZE" ? "Новый приказ колонизации" : "Новый приказ",
+          message: `${msg.order.countryId} -> ${msg.order.type} (${msg.order.provinceId})`,
+          countryId: msg.order.countryId,
+          priority: "low",
+          visibility: "public",
+          turn: msg.order.turnId,
+        });
       }
 
       if (msg.type === "WORLD_PATCH") {
         setWorldBase(msg.worldBase, msg.turnId);
         resetOverlay(msg.turnId);
+        pruneLogEntries(msg.turnId);
         if (msg.rejectedOrders.length > 0) {
           toast.warning(`Отклонено приказов: ${msg.rejectedOrders.length}`);
+          addEvent({
+            category: "system",
+            title: `Ход #${msg.turnId} завершен`,
+            message: `Отклонено приказов: ${msg.rejectedOrders.length}`,
+            priority: "medium",
+            visibility: "public",
+            turn: msg.turnId,
+          });
         } else {
           toast.success("Ход успешно зарезолвен");
+          addEvent({
+            category: "system",
+            title: `Ход #${msg.turnId} завершен`,
+            message: "Резолв завершен без отклонений приказов",
+            priority: "low",
+            visibility: "public",
+            turn: msg.turnId,
+          });
         }
+      }
+
+      if (msg.type === "NEWS_EVENT") {
+        addEvent({
+          ...msg.event,
+          turn: msg.event.turn,
+          category: msg.event.category,
+          message: msg.event.message,
+          title: msg.event.title ?? undefined,
+          countryId: msg.event.countryId ?? null,
+          priority: msg.event.priority,
+          visibility: msg.event.visibility,
+        });
       }
 
       if (msg.type === "PRESENCE") {
@@ -73,9 +124,10 @@ export default function App() {
 
       if (msg.type === "ERROR") {
         toast.error(msg.message);
+        addEvent({ category: "system", title: "Ошибка", message: msg.message, priority: "high", visibility: "private" });
       }
     },
-    [addOrder, resetOverlay, setPresence, setWorldBase],
+    [addEvent, addOrder, pruneLogEntries, resetOverlay, setEventLogRetentionTurns, setPresence, setWorldBase],
   );
 
   const { send } = useWs(onWsMessage, auth?.token);
@@ -95,6 +147,10 @@ export default function App() {
   const onAuthSuccess = (payload: AuthSuccess) => {
     setAuth({ token: payload.token, playerId: payload.playerId, countryId: payload.countryId, isAdmin: payload.isAdmin });
     setCountry({ name: payload.countryName, color: payload.countryColor, flagUrl: payload.flagUrl, crestUrl: payload.crestUrl });
+    if (payload.clientSettings?.eventLogRetentionTurns) {
+      setEventLogRetentionTurns(payload.clientSettings.eventLogRetentionTurns);
+    }
+    addEvent({ category: "system", title: "Вход", message: `Вы вошли в страну ${payload.countryName}`, priority: "medium", visibility: "private", countryId: payload.countryId, turn: payload.turnId });
   };
 
   const currentResources = useMemo(() => {
@@ -105,6 +161,7 @@ export default function App() {
   }, [auth, worldBase]);
 
   const logoutToAuth = () => {
+    addEvent({ category: "system", title: "Выход", message: "Сессия игрока завершена", priority: "low", visibility: "private", countryId: auth?.countryId ?? null });
     setAuth(null);
     setCountry(null);
     toast("Вы вышли из страны");
@@ -118,6 +175,7 @@ export default function App() {
 
     send({ type: "ADMIN_FORCE_RESOLVE" });
     toast("Админ-команда отправлена", { description: "Принудительный резолв хода" });
+    addEvent({ category: "system", title: "Админ-команда", message: "Отправлен принудительный резолв хода", priority: "high", visibility: "private", countryId: auth.countryId });
   };
 
   const handleSessionCountryUpdated = (updated: { name: string; color: string; flagUrl?: string | null; crestUrl?: string | null; isAdmin?: boolean }) => {
@@ -153,6 +211,15 @@ export default function App() {
 
     send(delta);
     toast("Приказ отправлен", { description: `COLONIZE -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}` });
+    addEvent({
+      category: "colonization",
+      title: "Отправлен приказ",
+      message: `COLONIZE -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}`,
+      countryId: auth.countryId,
+      priority: "medium",
+      visibility: "private",
+      turn: turnId,
+    });
   };
 
   const queueBuildOrder = (provinceId?: string) => {
@@ -174,7 +241,20 @@ export default function App() {
 
     send(delta);
     toast("Приказ отправлен", { description: `BUILD -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}` });
+    addEvent({
+      category: "economy",
+      title: "Отправлен приказ",
+      message: `BUILD -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}`,
+      countryId: auth.countryId,
+      priority: "medium",
+      visibility: "private",
+      turn: turnId,
+    });
   };
+
+  useEffect(() => {
+    pruneLogEntries(turnId);
+  }, [eventLogRetentionTurns, pruneLogEntries, turnId]);
 
   return (
     <div className="relative h-screen overflow-hidden bg-arc-bg text-white">
@@ -215,6 +295,12 @@ export default function App() {
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
           />
           <SideNav />
+          <EventLogPanel
+            entries={eventLog}
+            currentCountryId={auth.countryId}
+            onTrimOld={() => trimOldLogEntries(50)}
+            onClear={clearEventLog}
+          />
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
 
         </motion.div>
@@ -250,6 +336,15 @@ export default function App() {
             }));
             if (auth) {
               updateCountryResources(auth.countryId, { ducats: updated.ducats });
+              addEvent({
+                category: "politics",
+                title: "Изменение страны",
+                message: `Кастомизация применена для ${updated.name} (-дукаты)`,
+                countryId: auth.countryId,
+                priority: "medium",
+                visibility: "private",
+                turn: turnId,
+              });
             }
           }}
         />

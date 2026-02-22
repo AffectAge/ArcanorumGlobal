@@ -46,7 +46,7 @@ export async function fetchCountries(): Promise<Country[]> {
   return countries.map(normalizeCountry);
 }
 
-export async function login(payload: LoginPayload): Promise<{ token: string; playerId: string; countryId: string; isAdmin: boolean; turnId: number }> {
+export async function login(payload: LoginPayload): Promise<{ token: string; playerId: string; countryId: string; isAdmin: boolean; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }> {
   const response = await fetch(`${API}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -229,6 +229,9 @@ export type GameSettings = {
     flagDucats: number;
     crestDucats: number;
   };
+  eventLog: {
+    retentionTurns: number;
+  };
 };
 
 export type CustomizationPrices = GameSettings["customization"];
@@ -262,6 +265,7 @@ export async function updateGameSettings(
     economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number };
+    eventLog?: { retentionTurns?: number };
   },
 ): Promise<GameSettings> {
   const response = await fetch(`${API}/admin/game-settings`, {

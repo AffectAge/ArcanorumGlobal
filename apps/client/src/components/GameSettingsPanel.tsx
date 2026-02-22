@@ -14,6 +14,7 @@ const categories = [
   { id: "economy", label: "Экономика" },
   { id: "colonization", label: "Колонизация" },
   { id: "customization", label: "Кастомизация" },
+  { id: "eventLog", label: "Журнал событий" },
 ] as const;
 
 export function GameSettingsPanel({ open, token, onClose }: Props) {
@@ -28,6 +29,7 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
   const [recolorDucats, setRecolorDucats] = useState(10);
   const [flagDucats, setFlagDucats] = useState(15);
   const [crestDucats, setCrestDucats] = useState(15);
+  const [eventLogRetentionTurns, setEventLogRetentionTurns] = useState(3);
 
   useEffect(() => {
     if (!open) {
@@ -50,6 +52,7 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
         setRecolorDucats(settings.customization.recolorDucats);
         setFlagDucats(settings.customization.flagDucats);
         setCrestDucats(settings.customization.crestDucats);
+        setEventLogRetentionTurns(settings.eventLog.retentionTurns);
       })
       .catch(() => {
         if (!cancelled) {
@@ -126,6 +129,23 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
       toast.success("Цены кастомизации сохранены");
     } catch {
       toast.error("Не удалось сохранить цены кастомизации");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveEventLogSettings = async () => {
+    setSaving(true);
+    try {
+      const updated = await updateGameSettings(token, {
+        eventLog: {
+          retentionTurns: Math.max(1, Math.floor(eventLogRetentionTurns)),
+        },
+      });
+      setEventLogRetentionTurns(updated.eventLog.retentionTurns);
+      toast.success("Настройки журнала событий сохранены");
+    } catch {
+      toast.error("Не удалось сохранить настройки журнала событий");
     } finally {
       setSaving(false);
     }
@@ -273,6 +293,36 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
 
                       <button
                         onClick={saveCustomization}
+                        disabled={saving}
+                        className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+                      >
+                        <Save size={14} />
+                        Сохранить
+                      </button>
+                    </div>
+                  )}
+
+                  {activeCategory === "eventLog" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <Coins size={15} className="text-arc-accent" />
+                        Глобальные настройки журнала событий
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-300">Хранить события за последние (ходов)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={eventLogRetentionTurns}
+                          onChange={(e) => setEventLogRetentionTurns(Math.max(1, Number(e.target.value) || 1))}
+                          className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                        />
+                      </div>
+
+                      <button
+                        onClick={saveEventLogSettings}
                         disabled={saving}
                         className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
                       >

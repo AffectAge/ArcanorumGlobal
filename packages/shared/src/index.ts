@@ -11,6 +11,7 @@ export type Country = {
   blockedUntilTurn?: number | null;
   blockedUntilAt?: string | null;
   ignoreUntilTurn?: number | null;
+  eventLogRetentionTurns?: number | null;
 };
 
 export type ResourceTotals = {
@@ -20,6 +21,23 @@ export type ResourceTotals = {
   colonization: number;
   ducats: number;
   gold: number;
+};
+
+export type EventCategory = "system" | "colonization" | "politics" | "economy" | "military" | "diplomacy";
+export type EventPriority = "low" | "medium" | "high";
+export type EventVisibility = "public" | "private";
+export type EventCountryScope = "all" | "own" | "foreign";
+
+export type EventLogEntry = {
+  id: string;
+  turn: number;
+  timestamp: string;
+  category: EventCategory;
+  priority: EventPriority;
+  visibility: EventVisibility;
+  title?: string | null;
+  message: string;
+  countryId?: string | null;
 };
 
 export type OrderType = "BUILD" | "BUDGET" | "ARMY_MOVE" | "COLONIZE";
@@ -63,8 +81,9 @@ export type WsInMessage =
 
 export type WsOutMessage =
   | { type: "CONNECTED"; serverTime: string }
-  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number }
+  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }
   | { type: "ORDER_BROADCAST"; order: Order }
+  | { type: "NEWS_EVENT"; event: EventLogEntry }
   | { type: "ERROR"; code: string; message: string }
   | { type: "PONG" }
   | { type: "PRESENCE"; onlinePlayerIds: string[] }

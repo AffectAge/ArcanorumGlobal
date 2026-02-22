@@ -44,6 +44,9 @@ export type AuthSuccess = {
   crestUrl?: string | null;
   turnId: number;
   isAdmin: boolean;
+  clientSettings?: {
+    eventLogRetentionTurns: number;
+  };
 };
 
 type Props = {

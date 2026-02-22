@@ -15,7 +15,7 @@ const navItems = [
 
 export function SideNav() {
   return (
-    <aside className="pointer-events-auto absolute left-4 top-24 z-40 flex flex-col gap-2">
+    <aside className="pointer-events-auto absolute left-4 top-24 z-40 hidden flex-col gap-2 xl:flex">
       {navItems.map((item) => {
         const Icon = item.icon;
         return (

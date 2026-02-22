@@ -19,6 +19,7 @@ model Country {
   blockedUntilTurn Int?
   blockedUntilAt   DateTime?
   ignoreUntilTurn  Int?
+  eventLogRetentionTurns Int @default(3)
   createdAt        DateTime  @default(now())
 }
 
