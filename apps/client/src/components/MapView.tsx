@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { Crosshair, Lock, LockOpen, LocateFixed, Minus, Move, Plus } from "lucide-react";
+import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 import { useGameStore } from "../store/gameStore";
 
@@ -49,23 +50,53 @@ function readProvinceName(properties: Record<string, unknown> | undefined) {
   return raw == null ? "Провинция" : String(raw);
 }
 
+function resolveAssetUrl(apiBase: string, url?: string | null): string | null {
+  if (!url) {
+    return null;
+  }
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  return `${apiBase}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
 export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColonizeOrder }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
   const selectedFeatureIdRef = useRef<string | null>(null);
+  const prevStyledProvinceIdsRef = useRef<Set<string>>(new Set());
 
   const [interactionLocked, setInteractionLocked] = useState(false);
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
   const [view, setView] = useState({ zoom: DEFAULT_ZOOM, lng: DEFAULT_CENTER[0], lat: DEFAULT_CENTER[1] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; provinceId: string; provinceName: string } | null>(null);
+  const [countries, setCountries] = useState<Country[]>([]);
 
   const turnId = useGameStore((s) => s.turnId);
   const selectedProvinceId = useGameStore((s) => s.selectedProvinceId);
   const setSelectedProvince = useGameStore((s) => s.setSelectedProvince);
   const worldBase = useGameStore((s) => s.worldBase);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
+
+  const countryById = useMemo(() => {
+    const m = new Map<string, Country>();
+    for (const country of countries) {
+      m.set(country.id, country);
+    }
+    return m;
+  }, [countries]);
+
+  const countryByIdRef = useRef(countryById);
+  useEffect(() => {
+    countryByIdRef.current = countryById;
+  }, [countryById]);
+
+  const worldBaseRef = useRef(worldBase);
+  useEffect(() => {
+    worldBaseRef.current = worldBase;
+  }, [worldBase]);
 
   const ordersCountByProvince = useMemo(() => {
     const map = new Map<string, number>();
@@ -88,8 +119,38 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     ordersCountRef.current = ordersCountByProvince;
   }, [ordersCountByProvince]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(`${apiBase}/countries`)
+      .then(async (res) => {
+        if (!res.ok) {
+          return [] as Country[];
+        }
+        return (await res.json()) as Country[];
+      })
+      .then((items) => {
+        if (!cancelled) {
+          setCountries(items);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCountries([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
+
   const selectedProvinceOrdersCount = selectedProvinceId ? (ordersCountByProvince.get(selectedProvinceId) ?? 0) : 0;
-  const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? "Нейтральная") : "Нейтральная";
+  const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? null) : null;
+  const selectedOwner = selectedOwnerId ? countryById.get(selectedOwnerId) : null;
+  const selectedOwnerLabel = selectedOwnerId ? (selectedOwner?.name ?? selectedOwnerId) : "Нейтральная";
+  const selectedOwnerFlagUrl = resolveAssetUrl(apiBase, selectedOwner?.flagUrl);
+
   const selectedProvinceColonizeOrdersCount = selectedProvinceId
     ? [...(ordersByTurn.get(turnId)?.values() ?? [])].flat().filter((o) => o.provinceId === selectedProvinceId && o.type === "COLONIZE").length
     : 0;
@@ -198,6 +259,9 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         return;
       }
 
+      const ownerId = worldBaseRef.current?.provinceOwner[id] ?? null;
+      const ownerName = ownerId ? (countryByIdRef.current.get(ownerId)?.name ?? ownerId) : "Нейтральная";
+
       map.getCanvas().style.cursor = "pointer";
 
       if (hoveredFeatureIdRef.current && hoveredFeatureIdRef.current !== id) {
@@ -211,7 +275,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
 
       hoverPopup
         .setLngLat(e.lngLat)
-        .setHTML(`<div class=\"text-xs\"><div class=\"font-semibold\">${name}</div><div>ID: ${id}</div><div>В очереди: ${ordersCountRef.current.get(id) ?? 0}</div></div>`)
+        .setHTML(`<div class=\"text-xs\"><div class=\"font-semibold\">${name}</div><div>Владелец: ${ownerName}</div><div>В очереди: ${ordersCountRef.current.get(id) ?? 0}</div></div>`)
         .addTo(map);
     });
 
@@ -306,14 +370,54 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.getLayer("province-fill")) {
+    if (!map || !map.getLayer("province-fill") || !map.getLayer("province-line")) {
+      return;
+    }
+
+    const ownerByProvince = worldBase?.provinceOwner ?? {};
+    const nextOwnedIds = new Set(Object.keys(ownerByProvince));
+    const allTouchedIds = new Set<string>([...prevStyledProvinceIdsRef.current, ...nextOwnedIds]);
+
+    for (const provinceId of allTouchedIds) {
+      const ownerId = ownerByProvince[provinceId];
+      const ownerColor = ownerId ? (countryById.get(ownerId)?.color ?? "#9ca3af") : "#C0C0C0";
+      map.setFeatureState(
+        { source: "adm1", sourceLayer: "adm1", id: provinceId },
+        {
+          isOwned: Boolean(ownerId),
+          ownerColor,
+        },
+      );
+    }
+
+    prevStyledProvinceIdsRef.current = nextOwnedIds;
+
+    if (activeMode === "Политическая карта") {
+      map.setPaintProperty("province-fill", "fill-color", [
+        "case",
+        ["boolean", ["feature-state", "isOwned"], false],
+        ["coalesce", ["feature-state", "ownerColor"], "#d1d5db"],
+        "#ffffff",
+      ]);
+      map.setPaintProperty("province-fill", "fill-opacity", ["case", ["boolean", ["feature-state", "isOwned"], false], 0.42, 0.84]);
+      map.setPaintProperty("province-line", "line-color", [
+        "case",
+        ["boolean", ["feature-state", "isOwned"], false],
+        ["coalesce", ["feature-state", "ownerColor"], "#9ca3af"],
+        "#C0C0C0",
+      ]);
+      map.setPaintProperty("province-line", "line-width", 1.1);
+      map.setPaintProperty("province-line", "line-opacity", 0.95);
       return;
     }
 
     const style = MODE_STYLES[activeMode] ?? MODE_STYLES["Политическая карта"];
     map.setPaintProperty("province-fill", "fill-color", style.fillColor);
     map.setPaintProperty("province-fill", "fill-opacity", style.fillOpacity);
-  }, [activeMode]);
+    map.setPaintProperty("province-line", "line-color", "#C0C0C0");
+    map.setPaintProperty("province-line", "line-width", 0.9);
+    map.setPaintProperty("province-line", "line-opacity", 0.75);
+  }, [activeMode, countryById, worldBase]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
@@ -410,7 +514,11 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
               </div>
               <div className="space-y-1 text-xs text-slate-300">
                 <div>ID: {selectedProvinceId}</div>
-                <div>Владелец: {selectedOwnerId}</div>
+                <div className="flex items-center gap-2">
+                  <span>Владелец:</span>
+                  {selectedOwnerFlagUrl && <img src={selectedOwnerFlagUrl} alt={selectedOwnerLabel} className="h-4 w-6 rounded-sm object-cover" />}
+                  <span>{selectedOwnerLabel}</span>
+                </div>
                 <div>Приказы в очереди: {selectedProvinceOrdersCount}</div>
                 <div>Колонизация в очереди: {selectedProvinceColonizeOrdersCount}</div>
               </div>
@@ -420,7 +528,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
                   <div className="mb-1 text-slate-400">Прогресс колонизации</div>
                   {selectedColonyProgressList.map(([countryId, points]) => (
                     <div key={countryId} className="flex items-center justify-between">
-                      <span>{countryId}</span>
+                      <span>{countryById.get(countryId)?.name ?? countryId}</span>
                       <span>{points.toFixed(1)}/100</span>
                     </div>
                   ))}
@@ -449,3 +557,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     </>
   );
 }
+
+
+
+
