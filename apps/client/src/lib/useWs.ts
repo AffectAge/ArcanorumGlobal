@@ -4,11 +4,13 @@ import { apiBase } from "./api";
 
 export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
+  const authedTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!token) {
       wsRef.current?.close();
       wsRef.current = null;
+      authedTokenRef.current = null;
       return;
     }
 
@@ -18,6 +20,7 @@ export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | n
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: "AUTH", token } satisfies WsInMessage));
+      authedTokenRef.current = token;
     };
 
     ws.onmessage = (event) => {
@@ -27,13 +30,19 @@ export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | n
 
     return () => {
       ws.close();
+      authedTokenRef.current = null;
     };
   }, [onMessage, token]);
 
   const send = (message: WsInMessage) => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !token) {
       return;
+    }
+
+    if (authedTokenRef.current !== token) {
+      ws.send(JSON.stringify({ type: "AUTH", token } satisfies WsInMessage));
+      authedTokenRef.current = token;
     }
     ws.send(JSON.stringify(message));
   };
