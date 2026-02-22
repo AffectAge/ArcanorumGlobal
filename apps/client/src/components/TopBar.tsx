@@ -72,9 +72,17 @@ function formatAreaKm2(value: number): string {
 
 function formatCountdown(secondsLeft: number): string {
   const sec = Math.max(0, Math.floor(secondsLeft));
-  const mm = Math.floor(sec / 60);
-  const ss = sec % 60;
-  return `${mm}:${String(ss).padStart(2, "0")}`;
+  const days = Math.floor(sec / 86_400);
+  const hours = Math.floor((sec % 86_400) / 3_600);
+  const minutes = Math.floor((sec % 3_600) / 60);
+  const seconds = sec % 60;
+  if (days > 0) {
+    return `${days}д ${hours}ч ${minutes}м ${seconds}с`;
+  }
+  if (hours > 0) {
+    return `${hours}ч ${minutes}м ${seconds}с`;
+  }
+  return `${minutes}м ${seconds}с`;
 }
 
 export function TopBar({

@@ -213,15 +213,22 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       const updated = await updateGameSettings(token, {
         turnTimer: {
           enabled: turnTimerEnabled,
-          secondsPerTurn: Math.max(10, Math.floor(turnTimerSeconds || 10)),
+          secondsPerTurn: Math.min(2_592_000, Math.max(10, Math.floor(turnTimerSeconds || 10))),
         },
       });
       setTurnTimerEnabled(updated.turnTimer.enabled);
       setTurnTimerSeconds(updated.turnTimer.secondsPerTurn);
       onSettingsUpdated?.(updated);
       toast.success("Таймер хода сохранён");
-    } catch {
-      toast.error("Не удалось сохранить таймер хода");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("GAME_SETTINGS_INVALID")) {
+        toast.error("Не удалось сохранить таймер хода", {
+          description: "Допустимый диапазон: от 10 до 2 592 000 секунд (до 30 дней)",
+        });
+      } else {
+        toast.error("Не удалось сохранить таймер хода");
+      }
     } finally {
       setSaving(false);
     }
@@ -371,12 +378,18 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <input
                           type="number"
                           min={10}
-                          max={86400}
+                          max={2_592_000}
                           value={turnTimerSeconds}
-                          onChange={(e) => setTurnTimerSeconds(Math.max(10, Number(e.target.value) || 10))}
+                          onChange={(e) =>
+                            setTurnTimerSeconds(
+                              Math.min(2_592_000, Math.max(10, Number(e.target.value) || 10)),
+                            )
+                          }
                           className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
                         />
-                        <div className="mt-1 text-xs text-slate-500">Минимум 10 секунд. Таймер сбрасывается после каждого резолва хода.</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Диапазон: 10–2 592 000 секунд (до 30 дней). Таймер сбрасывается после каждого резолва хода.
+                        </div>
                       </div>
                       <button onClick={saveTurnTimer} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />

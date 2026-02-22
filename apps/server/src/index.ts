@@ -1208,7 +1208,7 @@ const gameSettingsSchema = z.object({
   turnTimer: z
     .object({
       enabled: z.boolean().optional(),
-      secondsPerTurn: z.coerce.number().int().min(10).max(86_400).optional(),
+      secondsPerTurn: z.coerce.number().int().min(10).max(2_592_000).optional(),
     })
     .optional(),
   map: z

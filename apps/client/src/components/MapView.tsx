@@ -1296,7 +1296,6 @@ export function MapView({
                 <div>
                   Статус колонизации: {selectedIsColonizationDisabled ? "Запрещена" : "Доступна"}
                 </div>
-                <div>Наших COLONIZE-приказов в очереди: {selectedProvinceColonizeOrdersCount}</div>
               </div>
 
               {selectedColonyProgressList.length > 0 && (
@@ -1320,12 +1319,6 @@ export function MapView({
                 </button>
               )}
 
-              <button
-                onClick={() => onQueueBuildOrder(selectedProvinceId)}
-                className="mt-2 w-full rounded-lg bg-arc-accent/80 px-3 py-2 text-xs font-semibold text-black transition hover:brightness-110"
-              >
-                Построить фабрику (BUILD)
-              </button>
             </div>
           </Tooltip>
         </div>
