@@ -153,6 +153,11 @@ export function MapView({
   const prevConfiguredColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
   const provinceNamesByIdRef = useRef<Map<string, string>>(new Map());
   const provinceMetaByIdRef = useRef<Map<string, { name: string; areaKm2: number }>>(new Map());
+  const showMapControlsRef = useRef(showMapControls);
+  const viewRafRef = useRef<number | null>(null);
+  const hoverTooltipRafRef = useRef<number | null>(null);
+  const queuedColonizeCountriesByProvinceRef = useRef<Map<string, string[]>>(new Map());
+  const lastHoverTooltipProvinceIdRef = useRef<string | null>(null);
 
   const [interactionLocked, setInteractionLocked] = useState(() => {
     try {
@@ -204,6 +209,10 @@ export function MapView({
   const worldBase = useGameStore((s) => s.worldBase);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
   const addEvent = useGameStore((s) => s.addEvent);
+
+  useEffect(() => {
+    showMapControlsRef.current = showMapControls;
+  }, [showMapControls]);
 
   const countryById = useMemo(() => {
     const m = new Map<string, Country>();
@@ -413,6 +422,9 @@ export function MapView({
     }
     return map;
   }, [ordersByTurn, turnId]);
+  useEffect(() => {
+    queuedColonizeCountriesByProvinceRef.current = queuedColonizeCountriesByProvince;
+  }, [queuedColonizeCountriesByProvince]);
   const selectedColonyProgress = selectedProvinceId ? (worldBase?.colonyProgressByProvince?.[selectedProvinceId] ?? {}) : {};
   const selectedColonyProgressList = Object.entries(selectedColonyProgress).sort((a, b) => b[1] - a[1]);
   const selectedProvinceAreaKm2 = selectedProvinceId ? (provinceMetaByIdRef.current.get(selectedProvinceId)?.areaKm2 ?? null) : null;
@@ -521,29 +533,6 @@ export function MapView({
             },
           },
           {
-            id: "province-hover-glow",
-            type: "line",
-            source: "adm1",
-            "source-layer": "adm1",
-            paint: {
-              "line-color": "#7dd3fc",
-              "line-width": 0,
-              "line-opacity": 0,
-              "line-blur": 1,
-            },
-          },
-          {
-            id: "province-hover-outline",
-            type: "line",
-            source: "adm1",
-            "source-layer": "adm1",
-            paint: {
-              "line-color": "#dbeafe",
-              "line-width": 0,
-              "line-opacity": 0,
-            },
-          },
-          {
             id: "province-selected",
             type: "line",
             source: "adm1",
@@ -551,17 +540,6 @@ export function MapView({
             paint: {
               "line-color": "#000000",
               "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.5, 0],
-            },
-          },
-          {
-            id: "province-selected-inner",
-            type: "line",
-            source: "adm1",
-            "source-layer": "adm1",
-            paint: {
-              "line-color": "#ffffff",
-              "line-width": 0,
-              "line-opacity": 0,
             },
           },
           {
@@ -615,14 +593,8 @@ export function MapView({
         ["province-line", "line-color"],
         ["province-line", "line-opacity"],
         ["province-hover", "fill-opacity"],
-        ["province-hover-glow", "line-opacity"],
-        ["province-hover-glow", "line-width"],
-        ["province-hover-outline", "line-opacity"],
-        ["province-hover-outline", "line-width"],
         ["province-selected", "line-opacity"],
         ["province-selected", "line-width"],
-        ["province-selected-inner", "line-opacity"],
-        ["province-selected-inner", "line-width"],
       ] as const) {
         map.setPaintProperty(layerId, `${prop}-transition`, { duration: 160, delay: 0 });
       }
@@ -632,8 +604,16 @@ export function MapView({
     });
 
     map.on("move", () => {
-      const c = map.getCenter();
-      setView({ zoom: map.getZoom(), lng: c.lng, lat: c.lat });
+      if (showMapControlsRef.current) {
+        if (viewRafRef.current != null) {
+          cancelAnimationFrame(viewRafRef.current);
+        }
+        viewRafRef.current = requestAnimationFrame(() => {
+          const c = map.getCenter();
+          setView({ zoom: map.getZoom(), lng: c.lng, lat: c.lat });
+          viewRafRef.current = null;
+        });
+      }
       setContextMenu(null);
       setHoverTooltip(null);
     });
@@ -662,18 +642,7 @@ export function MapView({
         1,
         Math.floor(effectiveProvinceCfg.cost),
       );
-      const storeState = useGameStore.getState();
-      const queuedByPlayer = storeState.ordersByTurn.get(storeState.turnId);
-      const queuedCountryIds = new Set<string>();
-      if (queuedByPlayer) {
-        for (const orders of queuedByPlayer.values()) {
-          for (const order of orders) {
-            if (order.type === "COLONIZE" && order.provinceId === id) {
-              queuedCountryIds.add(order.countryId);
-            }
-          }
-        }
-      }
+      const queuedCountryIds = new Set<string>(queuedColonizeCountriesByProvinceRef.current.get(id) ?? []);
       const colonizerIds = [...new Set<string>([...Object.keys(progressByCountry), ...queuedCountryIds])];
       const colonizers = colonizerIds
         .sort((a, b) => (progressByCountry[b] ?? 0) - (progressByCountry[a] ?? 0) || a.localeCompare(b))
@@ -702,13 +671,35 @@ export function MapView({
         map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id }, { hover: true });
       }
 
-      setHoverTooltip({
+      const nextHoverTooltip = {
         x: e.point.x,
         y: e.point.y,
         provinceName: name,
         areaKm2: provinceMetaByIdRef.current.get(id)?.areaKm2 ?? null,
         ownerName,
         colonizers,
+      };
+      const sameProvince = lastHoverTooltipProvinceIdRef.current === id;
+      if (hoverTooltipRafRef.current != null) {
+        cancelAnimationFrame(hoverTooltipRafRef.current);
+      }
+      hoverTooltipRafRef.current = requestAnimationFrame(() => {
+        setHoverTooltip((prev) => {
+          if (
+            sameProvince &&
+            prev &&
+            Math.abs(prev.x - nextHoverTooltip.x) < 2 &&
+            Math.abs(prev.y - nextHoverTooltip.y) < 2 &&
+            prev.provinceName === nextHoverTooltip.provinceName &&
+            prev.ownerName === nextHoverTooltip.ownerName &&
+            prev.colonizers.length === nextHoverTooltip.colonizers.length
+          ) {
+            return prev;
+          }
+          return nextHoverTooltip;
+        });
+        hoverTooltipRafRef.current = null;
+        lastHoverTooltipProvinceIdRef.current = id;
       });
     });
 
@@ -718,6 +709,11 @@ export function MapView({
         map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: hoveredFeatureIdRef.current }, { hover: false });
       }
       hoveredFeatureIdRef.current = null;
+      lastHoverTooltipProvinceIdRef.current = null;
+      if (hoverTooltipRafRef.current != null) {
+        cancelAnimationFrame(hoverTooltipRafRef.current);
+        hoverTooltipRafRef.current = null;
+      }
       setHoverTooltip(null);
     });
 
@@ -790,6 +786,14 @@ export function MapView({
     mapRef.current = map;
 
     return () => {
+      if (hoverTooltipRafRef.current != null) {
+        cancelAnimationFrame(hoverTooltipRafRef.current);
+        hoverTooltipRafRef.current = null;
+      }
+      if (viewRafRef.current != null) {
+        cancelAnimationFrame(viewRafRef.current);
+        viewRafRef.current = null;
+      }
       setHoverTooltip(null);
       map.remove();
       mapRef.current = null;
