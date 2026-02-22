@@ -27,6 +27,7 @@ type SessionCountry = {
 };
 
 export default function App() {
+  const [entryLoadingGate, setEntryLoadingGate] = useState<"hidden" | "loading" | "ready">("hidden");
   const [turnResolveOverlay, setTurnResolveOverlay] = useState<
     | { phase: "idle" }
     | { phase: "processing"; startedAtMs: number }
@@ -79,6 +80,8 @@ export default function App() {
   const [provinceAreaKm2ById, setProvinceAreaKm2ById] = useState<Record<string, number>>({});
   const [showAntarctica, setShowAntarctica] = useState(true);
   const [showMapControls, setShowMapControls] = useState(false);
+  const [provinceIndexLoaded, setProvinceIndexLoaded] = useState(false);
+  const [publicUiLoaded, setPublicUiLoaded] = useState(false);
   const [turnTimerUi, setTurnTimerUi] = useState<{ enabled: boolean; secondsPerTurn: number; startedAtMs: number | null }>({
     enabled: false,
     secondsPerTurn: 300,
@@ -266,9 +269,13 @@ export default function App() {
         const next: Record<string, number> = {};
         for (const item of items) next[item.id] = item.areaKm2;
         setProvinceAreaKm2ById(next);
+        setProvinceIndexLoaded(true);
       })
       .catch(() => {
-        if (!cancelled) setProvinceAreaKm2ById({});
+        if (!cancelled) {
+          setProvinceAreaKm2ById({});
+          setProvinceIndexLoaded(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -303,10 +310,13 @@ export default function App() {
                 ? ui.turnTimer.currentTurnStartedAtMs
                 : Date.now(),
           });
+          setPublicUiLoaded(true);
         }
       })
       .catch(() => {
-        // keep defaults
+        if (!cancelled) {
+          setPublicUiLoaded(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -340,6 +350,7 @@ export default function App() {
   }, [auth?.countryId, country?.name]);
 
   const onAuthSuccess = (payload: AuthSuccess) => {
+    setEntryLoadingGate("loading");
     setAuth({ token: payload.token, playerId: payload.playerId, countryId: payload.countryId, isAdmin: payload.isAdmin });
     setCountry({ name: payload.countryName, color: payload.countryColor, flagUrl: payload.flagUrl, crestUrl: payload.crestUrl });
     if (payload.clientSettings?.eventLogRetentionTurns) {
@@ -482,6 +493,7 @@ export default function App() {
     addEvent({ category: "system", title: "Выход", message: "Сессия игрока завершена", priority: "low", visibility: "private", countryId: auth?.countryId ?? null });
     setAuth(null);
     setCountry(null);
+    setEntryLoadingGate("hidden");
     toast("Вы вышли из страны");
   };
 
@@ -592,6 +604,19 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [auth, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
 
+  useEffect(() => {
+    if (!auth) {
+      setEntryLoadingGate("hidden");
+      return;
+    }
+    const ready = Boolean(worldBase) && Boolean(country) && provinceIndexLoaded && publicUiLoaded;
+    setEntryLoadingGate((prev) => {
+      if (prev === "hidden") return prev;
+      if (prev === "loading" && ready) return "ready";
+      return prev;
+    });
+  }, [auth, country, provinceIndexLoaded, publicUiLoaded, worldBase]);
+
   const requestNextTurn = () => {
     if (turnResolveOverlay.phase === "processing") return;
     setTurnResolveOverlay({ phase: "processing", startedAtMs: Date.now() });
@@ -630,6 +655,72 @@ export default function App() {
             <div className="relative z-10">
               <AuthPanel onSuccess={onAuthSuccess} />
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {auth && entryLoadingGate !== "hidden" && (
+          <motion.div
+            key="entry-loading-gate"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[145] flex items-center justify-center bg-black/60 backdrop-blur-md"
+          >
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(18,26,38,0.16),rgba(4,8,12,0.82)_72%)]" />
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="glass panel-border relative z-10 w-[min(92vw,34rem)] rounded-2xl bg-[#0b111b] p-6 shadow-2xl"
+            >
+              {entryLoadingGate === "loading" ? (
+                <div className="flex flex-col items-center gap-4 text-center">
+                  <div className="relative flex h-16 w-16 items-center justify-center rounded-full border border-arc-accent/30 bg-arc-accent/10">
+                    <Loader2 className="h-8 w-8 animate-spin text-arc-accent" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold text-white">Загрузка данных игры</div>
+                    <div className="mt-1 text-sm text-white/60">
+                      Подготавливаем карту, настройки и состояние вашей страны
+                    </div>
+                  </div>
+                  <div className="grid w-full grid-cols-1 gap-2 text-left text-xs text-white/70 sm:grid-cols-2">
+                    <div className={`rounded-lg border px-3 py-2 ${worldBase ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-white/10 bg-white/5"}`}>
+                      Состояние мира {worldBase ? "готово" : "загрузка"}
+                    </div>
+                    <div className={`rounded-lg border px-3 py-2 ${provinceIndexLoaded ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-white/10 bg-white/5"}`}>
+                      Провинции {provinceIndexLoaded ? "готово" : "загрузка"}
+                    </div>
+                    <div className={`rounded-lg border px-3 py-2 ${publicUiLoaded ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-white/10 bg-white/5"}`}>
+                      UI-настройки {publicUiLoaded ? "готово" : "загрузка"}
+                    </div>
+                    <div className={`rounded-lg border px-3 py-2 ${country ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-white/10 bg-white/5"}`}>
+                      Профиль страны {country ? "готово" : "загрузка"}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-4 text-center">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full border border-emerald-400/30 bg-emerald-500/10 text-2xl text-emerald-300">
+                    ✓
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold text-white">Данные загружены</div>
+                    <div className="mt-1 text-sm text-white/60">Можно входить в игру</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEntryLoadingGate("hidden")}
+                    className="panel-border inline-flex h-11 items-center justify-center rounded-xl bg-arc-accent px-5 text-sm font-semibold text-black transition hover:brightness-110"
+                  >
+                    Войти в игру
+                  </button>
+                </div>
+              )}
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
