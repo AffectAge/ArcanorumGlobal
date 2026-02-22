@@ -44,8 +44,9 @@ export default function App() {
     (msg: WsOutMessage) => {
       if (msg.type === "AUTH_OK") {
         setWorldBase(msg.worldBase, msg.turnId);
-        if (auth) {
-          setAuth({ ...auth, isAdmin: msg.isAdmin });
+        const currentAuth = useGameStore.getState().auth;
+        if (currentAuth?.token) {
+          setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
         }
       }
 
@@ -233,6 +234,9 @@ export default function App() {
     </div>
   );
 }
+
+
+
 
 
 

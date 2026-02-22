@@ -1,4 +1,4 @@
-import cors from "cors";
+﻿import cors from "cors";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
@@ -436,6 +436,14 @@ function parseAuthHeader(req: express.Request): { id: string; countryId: string;
   }
 }
 
+async function isAdminCountry(countryId: string): Promise<boolean> {
+  const country = await prisma.country.findUnique({
+    where: { id: countryId },
+    select: { isAdmin: true },
+  });
+  return Boolean(country?.isAdmin);
+}
+
 const gameSettingsSchema = z.object({
   economy: z
     .object({
@@ -451,18 +459,18 @@ const gameSettingsSchema = z.object({
     .optional(),
 });
 
-app.get("/admin/game-settings", (req, res) => {
+app.get("/admin/game-settings", async (req, res) => {
   const auth = parseAuthHeader(req);
-  if (!auth || !auth.isAdmin) {
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
 
   return res.json(gameSettings);
 });
 
-app.patch("/admin/game-settings", (req, res) => {
+app.patch("/admin/game-settings", async (req, res) => {
   const auth = parseAuthHeader(req);
-  if (!auth || !auth.isAdmin) {
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
 
@@ -496,7 +504,7 @@ app.patch("/admin/game-settings", (req, res) => {
 
 app.patch("/admin/countries/:countryId/admin", async (req, res) => {
   const auth = parseAuthHeader(req);
-  if (!auth || !auth.isAdmin) {
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
 
@@ -536,7 +544,7 @@ const adminCountryUpdateSchema = z.object({
 
 app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
   const auth = parseAuthHeader(req);
-  if (!auth || !auth.isAdmin) {
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
 
@@ -611,7 +619,7 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
 
 app.delete("/admin/countries/:countryId", async (req, res) => {
   const auth = parseAuthHeader(req);
-  if (!auth || !auth.isAdmin) {
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
 
@@ -661,7 +669,7 @@ const punishSchema = z
 
 app.patch("/admin/countries/:countryId/punishments", async (req, res) => {
   const auth = parseAuthHeader(req);
-  if (!auth || !auth.isAdmin) {
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
 
@@ -876,7 +884,15 @@ wss.on("connection", (socket) => {
         const payload = jwt.verify(msg.token, env.jwtSecret) as { id: string; countryId: string; isAdmin?: boolean };
         playerId = payload.id;
         playerCountryId = payload.countryId;
-        isAdmin = Boolean(payload.isAdmin);
+        const country = await prisma.country.findUnique({
+          where: { id: payload.countryId },
+          select: { id: true, isAdmin: true },
+        });
+        if (!country) {
+          send({ type: "ERROR", code: "UNAUTHORIZED", message: "Country not found" });
+          return;
+        }
+        isAdmin = Boolean(country.isAdmin);
         onlinePlayers.add(payload.id);
         ensureCountryInWorldBase(payload.countryId);
         send({ type: "AUTH_OK", playerId: payload.id, countryId: payload.countryId, isAdmin, worldBase, turnId });
@@ -894,6 +910,11 @@ wss.on("connection", (socket) => {
 
     if (msg.type === "ORDER_DELTA") {
       const delta = msg as OrderDelta;
+
+      if (!playerCountryId || delta.order.playerId !== playerId || delta.order.countryId !== playerCountryId) {
+        send({ type: "ERROR", code: "FORBIDDEN", message: "Order does not match authenticated country" });
+        return;
+      }
 
       if (delta.order.turnId !== turnId) {
         send({ type: "ERROR", code: "TURN_MISMATCH", message: "Order for stale turn" });
@@ -1057,6 +1078,15 @@ wss.on("connection", (socket) => {
 server.listen(env.port, () => {
   console.log(`Arcanorum server running on http://localhost:${env.port}`);
 });
+
+
+
+
+
+
+
+
+
 
 
 
