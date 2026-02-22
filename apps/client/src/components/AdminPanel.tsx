@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, Palette, Shield, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
-import { adminDeleteCountry, adminSetCountryPunishment, adminUpdateCountry, fetchCountries } from "../lib/api";
+import { adminDeleteCountry, adminSetCountryPunishment, adminUpdateCountry, adminUpdateProvince, fetchAdminProvinces, fetchCountries, type AdminProvinceItem } from "../lib/api";
 
 type Props = {
   open: boolean;
@@ -12,14 +12,19 @@ type Props = {
   currentCountryId: string;
   onClose: () => void;
   onSessionCountryUpdated: (country: Country) => void;
+  initialProvinceId?: string | null;
 };
 
-const categories = [{ id: "countries", label: "Управление странами" }] as const;
+const categories = [
+  { id: "countries", label: "Управление странами" },
+  { id: "provinces", label: "Провинции / Колонизация" },
+] as const;
 
-export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCountryUpdated }: Props) {
+export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCountryUpdated, initialProvinceId }: Props) {
   const [activeCategory, setActiveCategory] = useState<(typeof categories)[number]["id"]>("countries");
   const [countrySection, setCountrySection] = useState<"general" | "punishments">("general");
   const [countries, setCountries] = useState<Country[]>([]);
+  const [provinces, setProvinces] = useState<AdminProvinceItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -34,8 +39,20 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [turnsToBlock, setTurnsToBlock] = useState(3);
   const [blockUntilAt, setBlockUntilAt] = useState("");
   const [ignoreUntilTurn, setIgnoreUntilTurn] = useState(0);
+  const [selectedProvinceId, setSelectedProvinceId] = useState<string>("");
+  const [provinceOwnerCountryId, setProvinceOwnerCountryId] = useState<string>("");
+  const [provinceColonizationCost, setProvinceColonizationCost] = useState(100);
+  const [provinceColonizationDisabled, setProvinceColonizationDisabled] = useState(false);
+  const [provinceSearch, setProvinceSearch] = useState("");
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
+  const selectedProvince = useMemo(() => provinces.find((p) => p.id === selectedProvinceId) ?? null, [provinces, selectedProvinceId]);
+  const selectedProvinceOwner = useMemo(() => countries.find((c) => c.id === provinceOwnerCountryId) ?? null, [countries, provinceOwnerCountryId]);
+  const filteredProvinces = useMemo(() => {
+    const q = provinceSearch.trim().toLowerCase();
+    if (!q) return provinces;
+    return provinces.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+  }, [provinceSearch, provinces]);
 
   const punishmentStatus = useMemo(() => {
     if (!selectedCountry) {
@@ -70,14 +87,18 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     let cancelled = false;
     setLoading(true);
 
-    fetchCountries()
-      .then((list) => {
+    Promise.all([fetchCountries(), fetchAdminProvinces(token)])
+      .then(([countryList, provinceList]) => {
         if (cancelled) {
           return;
         }
-        setCountries(list);
-        if (!selectedCountryId && list.length > 0) {
-          setSelectedCountryId(list[0].id);
+        setCountries(countryList);
+        setProvinces(provinceList);
+        if (!selectedCountryId && countryList.length > 0) {
+          setSelectedCountryId(countryList[0].id);
+        }
+        if (!selectedProvinceId && provinceList.length > 0) {
+          setSelectedProvinceId(provinceList[0].id);
         }
       })
       .finally(() => {
@@ -89,7 +110,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, token]);
 
   useEffect(() => {
     if (!selectedCountry) {
@@ -104,6 +125,23 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     setCrestPreviewUrl(selectedCountry.crestUrl ?? null);
     setIgnoreUntilTurn(selectedCountry.ignoreUntilTurn ?? 0);
   }, [selectedCountryId, selectedCountry]);
+
+  useEffect(() => {
+    if (!selectedProvince) {
+      return;
+    }
+    setProvinceOwnerCountryId(selectedProvince.ownerCountryId ?? "");
+    setProvinceColonizationCost(selectedProvince.colonizationCost);
+    setProvinceColonizationDisabled(selectedProvince.colonizationDisabled);
+  }, [selectedProvince]);
+
+  useEffect(() => {
+    if (!open || !initialProvinceId) {
+      return;
+    }
+    setActiveCategory("provinces");
+    setSelectedProvinceId(initialProvinceId);
+  }, [initialProvinceId, open]);
 
   useEffect(() => {
     if (!flagFile) {
@@ -226,6 +264,26 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     }
   };
 
+  const saveProvince = async () => {
+    if (!selectedProvince) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await adminUpdateProvince(token, selectedProvince.id, {
+        colonizationCost: Math.max(1, Math.floor(provinceColonizationCost)),
+        colonizationDisabled: provinceColonizationDisabled,
+        ownerCountryId: provinceOwnerCountryId.trim() === "" ? null : provinceOwnerCountryId,
+      });
+      setProvinces((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      toast.success("Провинция обновлена");
+    } catch {
+      toast.error("Не удалось обновить провинцию");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[120]">
       <div className="fixed inset-0 bg-black/55" aria-hidden="true" />
@@ -256,6 +314,138 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                 <div className="text-sm text-slate-400">Загрузка стран...</div>
               ) : (
                 <div className="space-y-4">
+                  {activeCategory === "provinces" && (
+                    <>
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-300">Провинция</label>
+                        <input
+                          value={provinceSearch}
+                          onChange={(e) => setProvinceSearch(e.target.value)}
+                          placeholder="Поиск по названию или ID..."
+                          className="mb-2 w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                        />
+                        <Listbox value={selectedProvinceId} onChange={setSelectedProvinceId}>
+                          <div className="relative">
+                            <Listbox.Button className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 pr-10 text-left text-sm text-slate-100">
+                              {selectedProvince ? `${selectedProvince.name} (${selectedProvince.id})` : "Выберите провинцию"}
+                              <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            </Listbox.Button>
+                            <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-72 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-sm shadow-2xl outline-none">
+                              {filteredProvinces.map((province) => (
+                                <Listbox.Option
+                                  key={province.id}
+                                  value={province.id}
+                                  className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-9 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                                >
+                                  {({ selected }) => (
+                                    <>
+                                      <div className={selected ? "text-arc-accent" : ""}>{province.name}</div>
+                                      <div className="text-[11px] text-slate-400">{province.id}</div>
+                                      {selected && <Check size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                                    </>
+                                  )}
+                                </Listbox.Option>
+                              ))}
+                              {filteredProvinces.length === 0 && (
+                                <div className="px-3 py-2 text-xs text-slate-400">Ничего не найдено</div>
+                              )}
+                            </Listbox.Options>
+                          </div>
+                        </Listbox>
+                      </div>
+
+                      {selectedProvince && (
+                        <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-3">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Стоимость колонизации</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={provinceColonizationCost}
+                                onChange={(e) => setProvinceColonizationCost(Math.max(1, Number(e.target.value) || 1))}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Владелец</label>
+                              <Listbox value={provinceOwnerCountryId} onChange={setProvinceOwnerCountryId}>
+                                <div className="relative">
+                                  <Listbox.Button className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 pr-10 text-left text-sm text-slate-100">
+                                    {provinceOwnerCountryId ? (selectedProvinceOwner?.name ?? provinceOwnerCountryId) : "Нейтральная провинция"}
+                                    <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                  </Listbox.Button>
+                                  <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-64 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-sm shadow-2xl outline-none">
+                                    <Listbox.Option
+                                      value=""
+                                      className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-9 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                                    >
+                                      {({ selected }) => (
+                                        <>
+                                          <span className={selected ? "text-arc-accent" : ""}>Нейтральная провинция</span>
+                                          {selected && <Check size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                                        </>
+                                      )}
+                                    </Listbox.Option>
+                                    {countries.map((country) => (
+                                      <Listbox.Option
+                                        key={country.id}
+                                        value={country.id}
+                                        className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-9 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                                      >
+                                        {({ selected }) => (
+                                          <>
+                                            <div className="flex items-center gap-2">
+                                              {country.flagUrl ? (
+                                                <img src={country.flagUrl} alt="" className="h-4 w-5 rounded-sm object-cover" />
+                                              ) : (
+                                                <span className="h-3 w-3 rounded-full" style={{ backgroundColor: country.color }} />
+                                              )}
+                                              <span className={selected ? "text-arc-accent" : ""}>{country.name}</span>
+                                            </div>
+                                            {selected && <Check size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                                          </>
+                                        )}
+                                      </Listbox.Option>
+                                    ))}
+                                  </Listbox.Options>
+                                </div>
+                              </Listbox>
+                            </div>
+                          </div>
+
+                          <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                            <input
+                              type="checkbox"
+                              checked={provinceColonizationDisabled}
+                              onChange={(e) => setProvinceColonizationDisabled(e.target.checked)}
+                              className="accent-arc-accent"
+                            />
+                            Запретить колонизацию (прогресс будет сброшен)
+                          </label>
+
+                          <div className="rounded-lg border border-white/10 bg-black/20 p-2 text-xs text-slate-300">
+                            <div>Участников гонки: {Object.keys(selectedProvince.colonyProgressByCountry ?? {}).length}</div>
+                            {Object.entries(selectedProvince.colonyProgressByCountry ?? {}).slice(0, 8).map(([countryId, progress]) => (
+                              <div key={countryId} className="flex items-center justify-between">
+                                <span>{countries.find((c) => c.id === countryId)?.name ?? countryId}</span>
+                                <span>{progress.toFixed(1)}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="flex gap-2">
+                            <button onClick={saveProvince} disabled={saving} className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                              Сохранить провинцию
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {activeCategory === "countries" && (
+                  <>
                   <div>
                     <label className="mb-1 block text-xs text-slate-300">Страна</label>
                     <Listbox value={selectedCountryId} onChange={setSelectedCountryId}>
@@ -462,6 +652,8 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                         </div>
                       )}
                     </>
+                  )}
+                  </>
                   )}
                 </div>
               )}

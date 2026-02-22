@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Building2, HandCoins, Handshake, Hammer, Landmark, Users } from "lucide-react";
+import { Building2, Flag, HandCoins, Handshake, Hammer, Landmark, Users } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 
 const modes = [
@@ -9,6 +9,7 @@ const modes = [
   { key: "Население", icon: Users },
   { key: "Постройки", icon: Hammer },
   { key: "Дипломатия", icon: Handshake },
+  { key: "Колонизация", icon: Flag },
 ] as const;
 
 type Props = {

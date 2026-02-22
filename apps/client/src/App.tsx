@@ -29,6 +29,7 @@ export default function App() {
   const [mapMode, setMapMode] = useState("Политическая карта");
   const [cmdOpen, setCmdOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
   const [countryCustomizationOpen, setCountryCustomizationOpen] = useState(false);
@@ -127,6 +128,10 @@ export default function App() {
             turn: msg.turnId,
           });
         }
+      }
+
+      if (msg.type === "WORLD_BASE_SYNC") {
+        setWorldBase(msg.worldBase, msg.turnId);
       }
 
       if (msg.type === "NEWS_EVENT") {
@@ -333,7 +338,16 @@ export default function App() {
 
   return (
     <div className="relative h-screen overflow-hidden bg-arc-bg text-white">
-      <MapView apiBase={apiBase} activeMode={mapMode} onQueueBuildOrder={queueBuildOrder} onQueueColonizeOrder={queueColonizeOrder} />
+      <MapView
+        apiBase={apiBase}
+        activeMode={mapMode}
+        onQueueBuildOrder={queueBuildOrder}
+        onQueueColonizeOrder={queueColonizeOrder}
+        onOpenAdminProvinceEditor={(provinceId) => {
+          setAdminInitialProvinceId(provinceId);
+          setAdminOpen(true);
+        }}
+      />
 
       <AnimatePresence>
         {!auth && (
@@ -389,8 +403,12 @@ export default function App() {
           open={adminOpen}
           token={auth.token}
           currentCountryId={auth.countryId}
-          onClose={() => setAdminOpen(false)}
+          onClose={() => {
+            setAdminOpen(false);
+            setAdminInitialProvinceId(null);
+          }}
           onSessionCountryUpdated={handleSessionCountryUpdated}
+          initialProvinceId={adminInitialProvinceId}
         />
       )}
 

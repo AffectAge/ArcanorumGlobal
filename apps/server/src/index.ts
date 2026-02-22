@@ -90,6 +90,23 @@ const prebuiltTileRoot = resolve(__dirname, "../data/tiles/adm1");
 if (!existsSync(prebuiltTileRoot)) {
   throw new Error(`[map] MVT root not found: ${prebuiltTileRoot}. Expected tiles at {z}/{x}/{y}.mvt`);
 }
+const adm1GeojsonPath = resolve(__dirname, "../data/adm1.geojson");
+const adm1Geojson = JSON.parse(readFileSync(adm1GeojsonPath, "utf8")) as {
+  type: "FeatureCollection";
+  features: Array<{ properties?: Record<string, unknown> }>;
+};
+const adm1ProvinceIndex = (() => {
+  const byId = new Map<string, { id: string; name: string }>();
+  for (const feature of adm1Geojson.features) {
+    const properties = feature.properties as Record<string, unknown> | undefined;
+    const id = readProvinceId(properties);
+    if (!id) continue;
+    if (!byId.has(id)) {
+      byId.set(id, { id, name: readProvinceName(properties) });
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, "ru") || a.id.localeCompare(b.id));
+})();
 
 const app = express();
 app.use(cors());
@@ -118,6 +135,7 @@ const COLONIZATION_ORDER_COST_DUCATS = 4;
 const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
 const DEFAULT_COLONIZATION_POINTS_PER_TURN = 30;
 const COLONIZATION_GOAL = 100;
+const DEFAULT_PROVINCE_COLONIZATION_COST = 100;
 
 type GameSettings = {
   economy: {
@@ -188,6 +206,7 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
       "p-east": "VAL",
     },
     colonyProgressByProvince: {},
+    provinceColonizationByProvince: {},
   };
 }
 
@@ -305,6 +324,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         resourcesByCountry: candidate.resourcesByCountry,
         provinceOwner: candidate.provinceOwner,
         colonyProgressByProvince: candidate.colonyProgressByProvince,
+        provinceColonizationByProvince: normalizeProvinceColonizationMap(
+          (candidate as Partial<WorldBase> & { provinceColonizationByProvince?: unknown }).provinceColonizationByProvince,
+        ),
       };
     } else {
       worldBase = defaultWorldBase(turnId);
@@ -482,6 +504,67 @@ function ensureCountryInWorldBase(countryId: string): void {
   }
 }
 
+function getProvinceColonizationConfig(provinceId: string): { cost: number; disabled: boolean } {
+  const existing = worldBase.provinceColonizationByProvince[provinceId];
+  if (existing && typeof existing.cost === "number" && Number.isFinite(existing.cost)) {
+    return {
+      cost: Math.max(1, Math.floor(existing.cost)),
+      disabled: Boolean(existing.disabled),
+    };
+  }
+
+  const next = { cost: DEFAULT_PROVINCE_COLONIZATION_COST, disabled: false };
+  worldBase.provinceColonizationByProvince[provinceId] = next;
+  return next;
+}
+
+function normalizeProvinceColonizationMap(
+  input: unknown,
+): Record<string, { cost: number; disabled: boolean }> {
+  const normalized: Record<string, { cost: number; disabled: boolean }> = {};
+  if (!input || typeof input !== "object") {
+    return normalized;
+  }
+
+  for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const costRaw = (raw as { cost?: unknown }).cost;
+    const disabledRaw = (raw as { disabled?: unknown }).disabled;
+    normalized[provinceId] = {
+      cost:
+        typeof costRaw === "number" && Number.isFinite(costRaw)
+          ? Math.max(1, Math.floor(costRaw))
+          : DEFAULT_PROVINCE_COLONIZATION_COST,
+      disabled: Boolean(disabledRaw),
+    };
+  }
+
+  return normalized;
+}
+
+function cleanupProvinceColonizationProgress(provinceId: string): void {
+  delete worldBase.colonyProgressByProvince[provinceId];
+  const turnOrders = ordersByTurn.get(turnId);
+  if (!turnOrders) {
+    return;
+  }
+  for (const [playerId, orders] of turnOrders.entries()) {
+    const nextOrders = orders.filter((order) => !(order.type === "COLONIZE" && order.provinceId === provinceId));
+    if (nextOrders.length !== orders.length) {
+      if (nextOrders.length > 0) {
+        turnOrders.set(playerId, nextOrders);
+      } else {
+        turnOrders.delete(playerId);
+      }
+    }
+  }
+  if (turnOrders.size === 0) {
+    ordersByTurn.delete(turnId);
+  }
+}
+
 function createToken(player: { id: string; countryId: string; isAdmin: boolean }, rememberMe: boolean): string {
   const expiresIn = rememberMe ? "30d" : "8h";
   return jwt.sign(player, env.jwtSecret, { expiresIn });
@@ -501,6 +584,17 @@ function countryFromDb(row: { id: string; name: string; color: string; flagUrl: 
     ...row,
     blockedUntilAt: row.blockedUntilAt ? row.blockedUntilAt.toISOString() : null,
   };
+}
+
+function broadcastWorldBaseSync(wss: WebSocketServer): void {
+  broadcast(wss, {
+    type: "WORLD_BASE_SYNC",
+    worldBase: {
+      ...worldBase,
+      turnId,
+    },
+    turnId,
+  });
 }
 
 function getCountrySkipInfo(country: { ignoreUntilTurn: number | null }, currentTurn: number): { ignored: boolean; ignoreUntilTurn: number | null } {
@@ -554,6 +648,16 @@ function validateImageDimensions(file: Express.Multer.File, maxSize = 256): bool
   return width > 0 && height > 0 && width <= maxSize && height <= maxSize;
 }
 
+function readProvinceId(properties: Record<string, unknown> | undefined) {
+  const raw = properties?.id ?? properties?.ID_1 ?? properties?.adm1_code ?? properties?.name;
+  return raw == null ? "" : String(raw);
+}
+
+function readProvinceName(properties: Record<string, unknown> | undefined) {
+  const raw = properties?.name ?? properties?.NAME_1 ?? properties?.gn_name ?? properties?.id;
+  return raw == null ? "Провинция" : String(raw);
+}
+
 function removeUploadedFile(file?: Express.Multer.File): void {
   if (!file) {
     return;
@@ -597,7 +701,8 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
   const colonizeTargetsByCountry = new Map<string, Set<string>>();
 
   for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
-    if (worldBase.provinceOwner[provinceId]) {
+    const provinceConfig = getProvinceColonizationConfig(provinceId);
+    if (worldBase.provinceOwner[provinceId] || provinceConfig.disabled) {
       continue;
     }
     for (const countryId of Object.keys(progressByCountry)) {
@@ -624,7 +729,8 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
       }
 
       if (order.type === "COLONIZE") {
-        if (worldBase.provinceOwner[order.provinceId]) {
+        const provinceConfig = getProvinceColonizationConfig(order.provinceId);
+        if (worldBase.provinceOwner[order.provinceId] || provinceConfig.disabled) {
           rejectedOrders.push({ playerId, reason: "PROVINCE_NOT_NEUTRAL", tempOrderId: order.id });
           continue;
         }
@@ -652,6 +758,9 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
       if (worldBase.provinceOwner[provinceId]) {
         continue;
       }
+      if (getProvinceColonizationConfig(provinceId).disabled) {
+        continue;
+      }
       const byCountry = worldBase.colonyProgressByProvince[provinceId] ?? {};
       byCountry[countryId] = (byCountry[countryId] ?? 0) + gain;
       worldBase.colonyProgressByProvince[provinceId] = byCountry;
@@ -666,8 +775,13 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
       delete worldBase.colonyProgressByProvince[provinceId];
       continue;
     }
+    if (getProvinceColonizationConfig(provinceId).disabled) {
+      delete worldBase.colonyProgressByProvince[provinceId];
+      continue;
+    }
 
-    const candidates = Object.entries(progressByCountry).filter(([, value]) => value >= COLONIZATION_GOAL);
+    const provinceCost = getProvinceColonizationConfig(provinceId).cost || COLONIZATION_GOAL;
+    const candidates = Object.entries(progressByCountry).filter(([, value]) => value >= provinceCost);
     if (candidates.length === 0) {
       continue;
     }
@@ -985,6 +1099,269 @@ app.patch("/admin/game-settings", async (req, res) => {
   return res.json(gameSettings);
 });
 
+const colonizationActionSchema = z.object({
+  provinceId: z.string().min(1),
+});
+
+app.post("/country/colonization/start", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = colonizationActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId } = parsed.data;
+  const provinceConfig = getProvinceColonizationConfig(provinceId);
+
+  if (worldBase.provinceOwner[provinceId]) {
+    return res.status(400).json({ error: "PROVINCE_NOT_NEUTRAL" });
+  }
+  if (provinceConfig.disabled) {
+    return res.status(400).json({ error: "COLONIZATION_DISABLED" });
+  }
+
+  ensureCountryInWorldBase(auth.countryId);
+  const resources = worldBase.resourcesByCountry[auth.countryId];
+  if (!resources) {
+    return res.status(500).json({ error: "NO_RESOURCES" });
+  }
+
+  const existing = worldBase.colonyProgressByProvince[provinceId] ?? {};
+  if (existing[auth.countryId] != null) {
+    return res.status(400).json({ error: "ALREADY_COLONIZING" });
+  }
+
+  const activeColonizeTargets = new Set<string>();
+  for (const [pid, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
+    if (!worldBase.provinceOwner[pid] && !getProvinceColonizationConfig(pid).disabled && progressByCountry[auth.countryId] != null) {
+      activeColonizeTargets.add(pid);
+    }
+  }
+  const turnOrders = ordersByTurn.get(turnId);
+  if (turnOrders) {
+    for (const list of turnOrders.values()) {
+      for (const order of list) {
+        if (order.type === "COLONIZE" && order.countryId === auth.countryId) {
+          activeColonizeTargets.add(order.provinceId);
+        }
+      }
+    }
+  }
+
+  if (activeColonizeTargets.size >= gameSettings.colonization.maxActiveColonizations) {
+    return res.status(400).json({
+      error: "COLONIZE_LIMIT",
+      current: activeColonizeTargets.size,
+      limit: gameSettings.colonization.maxActiveColonizations,
+    });
+  }
+
+  if (resources.ducats < COLONIZATION_ORDER_COST_DUCATS) {
+    return res.status(400).json({
+      error: "INSUFFICIENT_DUCATS",
+      required: COLONIZATION_ORDER_COST_DUCATS,
+      available: resources.ducats,
+    });
+  }
+
+  resources.ducats -= COLONIZATION_ORDER_COST_DUCATS;
+  worldBase.colonyProgressByProvince[provinceId] = {
+    ...existing,
+    [auth.countryId]: 0,
+  };
+
+  savePersistentState();
+  broadcastWorldBaseSync(wss);
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "colonization",
+      title: "Начало колонизации",
+      message: `${auth.countryId} начал колонизацию провинции ${provinceId}`,
+      countryId: auth.countryId,
+      priority: "low",
+      visibility: "public",
+    }),
+  });
+
+  return res.json({ ok: true, worldBase, turnId, chargedDucats: COLONIZATION_ORDER_COST_DUCATS });
+});
+
+app.post("/country/colonization/cancel", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = colonizationActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId } = parsed.data;
+  const progress = worldBase.colonyProgressByProvince[provinceId];
+  if (!progress || progress[auth.countryId] == null) {
+    return res.status(404).json({ error: "COLONIZATION_NOT_FOUND" });
+  }
+
+  delete progress[auth.countryId];
+  if (Object.keys(progress).length === 0) {
+    delete worldBase.colonyProgressByProvince[provinceId];
+  } else {
+    worldBase.colonyProgressByProvince[provinceId] = progress;
+  }
+
+  const turnOrders = ordersByTurn.get(turnId);
+  if (turnOrders) {
+    for (const [playerId, orders] of turnOrders.entries()) {
+      const filtered = orders.filter((order) => !(order.type === "COLONIZE" && order.countryId === auth.countryId && order.provinceId === provinceId));
+      if (filtered.length !== orders.length) {
+        if (filtered.length > 0) {
+          turnOrders.set(playerId, filtered);
+        } else {
+          turnOrders.delete(playerId);
+        }
+      }
+    }
+    if (turnOrders.size === 0) {
+      ordersByTurn.delete(turnId);
+    }
+  }
+
+  savePersistentState();
+  broadcastWorldBaseSync(wss);
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "colonization",
+      title: "Отмена колонизации",
+      message: `${auth.countryId} отменил колонизацию провинции ${provinceId}`,
+      countryId: auth.countryId,
+      priority: "low",
+      visibility: "public",
+    }),
+  });
+
+  return res.json({ ok: true, worldBase, turnId });
+});
+
+const adminProvinceColonizationSchema = z.object({
+  colonizationCost: z.coerce.number().int().min(1).max(100000).optional(),
+  colonizationDisabled: z.boolean().optional(),
+  ownerCountryId: z.string().min(1).nullable().optional(),
+});
+
+app.get("/admin/provinces", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const searchQuery = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+  const source = searchQuery
+    ? adm1ProvinceIndex.filter((province) => province.name.toLowerCase().includes(searchQuery) || province.id.toLowerCase().includes(searchQuery))
+    : adm1ProvinceIndex;
+
+  const provinces = source.map((province) => {
+    const provinceId = province.id;
+    const provinceName = province.name;
+    const cfg = getProvinceColonizationConfig(provinceId);
+    return {
+      id: provinceId,
+      name: provinceName,
+      ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
+      colonizationCost: cfg.cost,
+      colonizationDisabled: cfg.disabled,
+      colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
+    };
+  });
+
+  return res.json({ provinces });
+});
+
+app.patch("/admin/provinces/:provinceId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const parsed = adminProvinceColonizationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const provinceId = String(req.params.provinceId);
+  const provinceIndexEntry = adm1ProvinceIndex.find((f) => f.id === provinceId);
+  if (!provinceIndexEntry) {
+    return res.status(404).json({ error: "PROVINCE_NOT_FOUND" });
+  }
+
+  const cfg = getProvinceColonizationConfig(provinceId);
+  let clearedProgress = false;
+
+  if (typeof parsed.data.colonizationCost === "number") {
+    cfg.cost = Math.max(1, Math.floor(parsed.data.colonizationCost));
+  }
+  if (typeof parsed.data.colonizationDisabled === "boolean") {
+    cfg.disabled = parsed.data.colonizationDisabled;
+    if (cfg.disabled) {
+      cleanupProvinceColonizationProgress(provinceId);
+      clearedProgress = true;
+    }
+  }
+  worldBase.provinceColonizationByProvince[provinceId] = cfg;
+
+  if (parsed.data.ownerCountryId !== undefined) {
+    const nextOwner = parsed.data.ownerCountryId;
+    if (nextOwner) {
+      const ownerExists = await prisma.country.findUnique({ where: { id: nextOwner }, select: { id: true } });
+      if (!ownerExists) {
+        return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+      }
+      ensureCountryInWorldBase(nextOwner);
+      worldBase.provinceOwner[provinceId] = nextOwner;
+    } else {
+      delete worldBase.provinceOwner[provinceId];
+    }
+    cleanupProvinceColonizationProgress(provinceId);
+    clearedProgress = true;
+  }
+
+  savePersistentState();
+  broadcastWorldBaseSync(wss);
+  if (parsed.data.colonizationDisabled !== undefined || parsed.data.colonizationCost !== undefined || parsed.data.ownerCountryId !== undefined) {
+    broadcast(wss, {
+      type: "NEWS_EVENT",
+      event: makeOfficialNews({
+        turn: turnId,
+        category: "colonization",
+        title: "Провинция обновлена",
+        message: `Администратор обновил колонизационные параметры провинции ${provinceId}${clearedProgress ? " (прогресс очищен)" : ""}`,
+        countryId: auth.countryId,
+        priority: "low",
+        visibility: "public",
+      }),
+    });
+  }
+
+  return res.json({
+    province: {
+      id: provinceId,
+      name: provinceIndexEntry.name,
+      ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
+      colonizationCost: cfg.cost,
+      colonizationDisabled: cfg.disabled,
+      colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
+    },
+  });
+});
+
 app.patch("/admin/countries/:countryId/admin", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth || !(await isAdminCountry(auth.countryId))) {
@@ -1131,8 +1508,14 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   for (const progress of Object.values(worldBase.colonyProgressByProvince)) {
     delete progress[countryIdParam];
   }
+  for (const [provinceId, progress] of Object.entries(worldBase.colonyProgressByProvince)) {
+    if (Object.keys(progress).length === 0) {
+      delete worldBase.colonyProgressByProvince[provinceId];
+    }
+  }
 
   savePersistentState();
+  broadcastWorldBaseSync(wss);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -1632,8 +2015,13 @@ wss.on("connection", (socket) => {
       const playerOrders = turnOrders.get(playerId) ?? [];
 
       if (delta.order.type === "COLONIZE") {
+        const provinceConfig = getProvinceColonizationConfig(delta.order.provinceId);
         if (worldBase.provinceOwner[delta.order.provinceId]) {
           send({ type: "ERROR", code: "PROVINCE_NOT_NEUTRAL", message: "Province is not neutral" });
+          return;
+        }
+        if (provinceConfig.disabled) {
+          send({ type: "ERROR", code: "COLONIZATION_DISABLED", message: "Колонизация этой провинции запрещена" });
           return;
         }
 
@@ -1645,7 +2033,7 @@ wss.on("connection", (socket) => {
         const activeColonizeTargets = new Set<string>();
 
         for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
-          if (!worldBase.provinceOwner[provinceId] && progressByCountry[delta.order.countryId] != null) {
+          if (!worldBase.provinceOwner[provinceId] && !getProvinceColonizationConfig(provinceId).disabled && progressByCountry[delta.order.countryId] != null) {
             activeColonizeTargets.add(provinceId);
           }
         }

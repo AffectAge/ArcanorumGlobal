@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { Crosshair, Lock, LockOpen, LocateFixed, Minus, Move, Plus } from "lucide-react";
+import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
+import { ColonizationModal } from "./ColonizationModal";
+import { cancelCountryColonization, startCountryColonization } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 
 type Props = {
@@ -10,6 +13,7 @@ type Props = {
   activeMode: string;
   onQueueBuildOrder: (provinceId: string) => void;
   onQueueColonizeOrder: (provinceId: string) => void;
+  onOpenAdminProvinceEditor?: (provinceId: string) => void;
 };
 
 type MapModeStyle = {
@@ -24,6 +28,7 @@ const MODE_STYLES: Record<string, MapModeStyle> = {
   "Население": { fillColor: "#fecaca", fillOpacity: 0.78 },
   "Постройки": { fillColor: "#e9d5ff", fillOpacity: 0.78 },
   "Дипломатия": { fillColor: "#fde68a", fillOpacity: 0.78 },
+  "Колонизация": { fillColor: "#e2e8f0", fillOpacity: 0.85 },
 };
 
 const DEFAULT_CENTER: [number, number] = [0, 20];
@@ -87,7 +92,7 @@ function createPatternData(striped: boolean): { width: number; height: number; d
   return { width, height, data };
 }
 
-export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColonizeOrder }: Props) {
+export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColonizeOrder, onOpenAdminProvinceEditor }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
@@ -95,18 +100,24 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
   const selectedFeatureIdRef = useRef<string | null>(null);
   const prevOwnedProvinceIdsRef = useRef<Set<string>>(new Set());
   const prevColonizingProvinceIdsRef = useRef<Set<string>>(new Set());
+  const prevQueuedColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
+  const prevConfiguredColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
 
   const [interactionLocked, setInteractionLocked] = useState(false);
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
   const [view, setView] = useState({ zoom: DEFAULT_ZOOM, lng: DEFAULT_CENTER[0], lat: DEFAULT_CENTER[1] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; provinceId: string; provinceName: string } | null>(null);
   const [countries, setCountries] = useState<Country[]>([]);
+  const [colonizationModalOpen, setColonizationModalOpen] = useState(false);
+  const [colonizationActionPending, setColonizationActionPending] = useState(false);
 
+  const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
   const selectedProvinceId = useGameStore((s) => s.selectedProvinceId);
   const setSelectedProvince = useGameStore((s) => s.setSelectedProvince);
   const worldBase = useGameStore((s) => s.worldBase);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
+  const addEvent = useGameStore((s) => s.addEvent);
 
   const countryById = useMemo(() => {
     const m = new Map<string, Country>();
@@ -182,9 +193,35 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
   const selectedProvinceColonizeOrdersCount = selectedProvinceId
     ? [...(ordersByTurn.get(turnId)?.values() ?? [])].flat().filter((o) => o.provinceId === selectedProvinceId && o.type === "COLONIZE").length
     : 0;
+  const myQueuedColonizeProvinceIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!auth) {
+      return ids;
+    }
+    const myOrders = ordersByTurn.get(turnId)?.get(auth.playerId) ?? [];
+    for (const order of myOrders) {
+      if (order.type === "COLONIZE") {
+        ids.add(order.provinceId);
+      }
+    }
+    return ids;
+  }, [auth, ordersByTurn, turnId]);
   const selectedColonyProgress = selectedProvinceId ? (worldBase?.colonyProgressByProvince?.[selectedProvinceId] ?? {}) : {};
   const selectedColonyProgressList = Object.entries(selectedColonyProgress).sort((a, b) => b[1] - a[1]);
   const selectedIsNeutral = selectedProvinceId ? !worldBase?.provinceOwner[selectedProvinceId] : false;
+  const selectedColonizationCfg = selectedProvinceId
+    ? (worldBase?.provinceColonizationByProvince?.[selectedProvinceId] ?? { cost: 100, disabled: false })
+    : { cost: 100, disabled: false };
+  const selectedIsColonizationDisabled = Boolean(selectedColonizationCfg.disabled);
+  const selectedColonizationCost = Math.max(1, Math.floor(selectedColonizationCfg.cost ?? 100));
+  const selectedMyColonyProgress = auth?.countryId && selectedProvinceId ? (selectedColonyProgress[auth.countryId] ?? null) : null;
+  const selectedCanCancelColonization = selectedProvinceId != null && selectedMyColonyProgress != null;
+  const selectedCanStartColonization =
+    Boolean(auth?.token) &&
+    Boolean(selectedProvinceId) &&
+    selectedIsNeutral &&
+    !selectedIsColonizationDisabled &&
+    selectedMyColonyProgress == null;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -423,22 +460,37 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
 
     const nextOwnedIds = new Set(Object.keys(ownerByProvince));
     const nextColonizingIds = new Set(Object.keys(progressByProvince));
+    const nextQueuedIds = new Set(myQueuedColonizeProvinceIds);
+    const nextConfiguredIds = new Set(Object.keys(worldBase?.provinceColonizationByProvince ?? {}));
     const allTouchedIds = new Set<string>([
       ...prevOwnedProvinceIdsRef.current,
       ...prevColonizingProvinceIdsRef.current,
+      ...prevQueuedColonizeProvinceIdsRef.current,
+      ...prevConfiguredColonizeProvinceIdsRef.current,
       ...nextOwnedIds,
       ...nextColonizingIds,
+      ...nextQueuedIds,
+      ...nextConfiguredIds,
     ]);
 
     for (const provinceId of allTouchedIds) {
       const ownerId = ownerByProvince[provinceId];
       const ownerColor = ownerId ? (countryById.get(ownerId)?.color ?? "#9ca3af") : "#C0C0C0";
+      const cfg = worldBase?.provinceColonizationByProvince?.[provinceId] ?? { cost: 100, disabled: false };
+      const hasQueuedOwnColonizeOrder = myQueuedColonizeProvinceIds.has(provinceId);
 
       let leadCountryId: string | null = null;
       let leadPoints = -1;
+      let hasOwnColony = false;
+      let hasForeignColony = false;
       if (!ownerId) {
         const progress = progressByProvince[provinceId] ?? {};
         for (const [countryId, points] of Object.entries(progress)) {
+          if (auth?.countryId && countryId === auth.countryId) {
+            hasOwnColony = true;
+          } else {
+            hasForeignColony = true;
+          }
           if (points > leadPoints) {
             leadCountryId = countryId;
             leadPoints = points;
@@ -453,8 +505,15 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         { source: "adm1", sourceLayer: "adm1", id: provinceId },
         {
           isOwned: Boolean(ownerId),
+          isOwnedByCurrent: Boolean(ownerId && auth?.countryId && ownerId === auth.countryId),
+          isNeutral: !ownerId,
           ownerColor,
           isColonizing,
+          hasOwnColony,
+          hasForeignColony,
+          hasQueuedOwnColonizeOrder,
+          colonizeDisabled: Boolean(cfg.disabled),
+          colonizeCost: Math.max(1, Math.floor(cfg.cost ?? 100)),
           colonizeLeadColor,
         },
       );
@@ -462,6 +521,8 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
 
     prevOwnedProvinceIdsRef.current = nextOwnedIds;
     prevColonizingProvinceIdsRef.current = nextColonizingIds;
+    prevQueuedColonizeProvinceIdsRef.current = nextQueuedIds;
+    prevConfiguredColonizeProvinceIdsRef.current = nextConfiguredIds;
 
     if (activeMode === "Политическая карта") {
       map.setPaintProperty("province-fill", "fill-color", [
@@ -500,6 +561,72 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       return;
     }
 
+    if (activeMode === "Колонизация") {
+      map.setPaintProperty("province-fill", "fill-color", [
+        "case",
+        ["boolean", ["feature-state", "colonizeDisabled"], false],
+        "#b91c1c",
+        ["boolean", ["feature-state", "isOwnedByCurrent"], false],
+        "#16a34a",
+        ["boolean", ["feature-state", "isOwned"], false],
+        "#64748b",
+        ["boolean", ["feature-state", "hasOwnColony"], false],
+        "#22c55e",
+        ["boolean", ["feature-state", "hasForeignColony"], false],
+        "#f59e0b",
+        ["step", ["coalesce", ["feature-state", "colonizeCost"], 100], "#d1fae5", 50, "#86efac", 100, "#4ade80", 200, "#16a34a", 350, "#166534"],
+      ]);
+      map.setPaintProperty("province-fill", "fill-opacity", [
+        "case",
+        ["boolean", ["feature-state", "colonizeDisabled"], false],
+        0.9,
+        ["boolean", ["feature-state", "isOwned"], false],
+        0.7,
+        0.85,
+      ]);
+      map.setPaintProperty("province-colonize-stripes", "fill-pattern", [
+        "case",
+        ["boolean", ["feature-state", "hasOwnColony"], false],
+        COLONIZE_STRIPES_PATTERN,
+        ["boolean", ["feature-state", "hasForeignColony"], false],
+        COLONIZE_STRIPES_PATTERN,
+        COLONIZE_EMPTY_PATTERN,
+      ]);
+      map.setPaintProperty("province-colonize-stripes", "fill-opacity", [
+        "case",
+        ["boolean", ["feature-state", "hasOwnColony"], false],
+        0.62,
+        ["boolean", ["feature-state", "hasForeignColony"], false],
+        0.45,
+        0,
+      ]);
+      map.setPaintProperty("province-line", "line-color", [
+        "case",
+        ["boolean", ["feature-state", "hasQueuedOwnColonizeOrder"], false],
+        "#22d3ee",
+        ["boolean", ["feature-state", "hasOwnColony"], false],
+        "#22c55e",
+        ["boolean", ["feature-state", "hasForeignColony"], false],
+        "#f59e0b",
+        ["boolean", ["feature-state", "colonizeDisabled"], false],
+        "#fca5a5",
+        "#d1d5db",
+      ]);
+      map.setPaintProperty("province-line", "line-width", 1.2);
+      map.setPaintProperty("province-line", "line-opacity", 0.95);
+      map.setPaintProperty("province-colonize-stripes", "fill-opacity", [
+        "case",
+        ["boolean", ["feature-state", "hasQueuedOwnColonizeOrder"], false],
+        0.72,
+        ["boolean", ["feature-state", "hasOwnColony"], false],
+        0.62,
+        ["boolean", ["feature-state", "hasForeignColony"], false],
+        0.45,
+        0,
+      ]);
+      return;
+    }
+
     const style = MODE_STYLES[activeMode] ?? MODE_STYLES["Политическая карта"];
     map.setPaintProperty("province-fill", "fill-color", style.fillColor);
     map.setPaintProperty("province-fill", "fill-opacity", style.fillOpacity);
@@ -508,7 +635,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     map.setPaintProperty("province-line", "line-color", "#C0C0C0");
     map.setPaintProperty("province-line", "line-width", 0.9);
     map.setPaintProperty("province-line", "line-opacity", 0.75);
-  }, [activeMode, countryById, worldBase]);
+  }, [activeMode, auth?.countryId, countryById, myQueuedColonizeProvinceIds, worldBase]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
@@ -531,6 +658,65 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     const nextState = !interactionLocked;
     setInteractions(map, !nextState);
     setInteractionLocked(nextState);
+  };
+
+  const handleStartColonization = async () => {
+    if (!auth?.token || !selectedProvinceId) {
+      return;
+    }
+    setColonizationActionPending(true);
+    try {
+      await startCountryColonization(auth.token, selectedProvinceId);
+      toast.success("Колонизация начата");
+      addEvent({
+        category: "colonization",
+        title: "Начало колонизации",
+        message: `Вы начали колонизацию провинции ${selectedProvinceId}`,
+        visibility: "private",
+        countryId: auth.countryId,
+      });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "COLONIZATION_START_FAILED";
+      if (code === "COLONIZE_LIMIT") {
+        toast.error("Достигнут лимит активных колонизаций");
+        addEvent({
+          category: "colonization",
+          title: "Лимит колонизаций",
+          message: "Достигнут лимит активных колонизаций",
+          priority: "medium",
+          visibility: "private",
+          countryId: auth.countryId,
+        });
+      } else if (code === "COLONIZATION_DISABLED") {
+        toast.error("Колонизация этой провинции запрещена");
+      } else {
+        toast.error("Не удалось начать колонизацию");
+      }
+    } finally {
+      setColonizationActionPending(false);
+    }
+  };
+
+  const handleCancelColonization = async () => {
+    if (!auth?.token || !selectedProvinceId) {
+      return;
+    }
+    setColonizationActionPending(true);
+    try {
+      await cancelCountryColonization(auth.token, selectedProvinceId);
+      toast.success("Колонизация отменена");
+      addEvent({
+        category: "colonization",
+        title: "Отмена колонизации",
+        message: `Вы отменили колонизацию провинции ${selectedProvinceId}`,
+        visibility: "private",
+        countryId: auth.countryId,
+      });
+    } catch {
+      toast.error("Не удалось отменить колонизацию");
+    } finally {
+      setColonizationActionPending(false);
+    }
   };
 
   return (
@@ -585,12 +771,14 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
           <div className="px-2 pb-2 text-xs text-slate-300">{contextMenu.provinceName}</div>
           <button
             onClick={() => {
-              onQueueColonizeOrder(contextMenu.provinceId);
+              setSelectedProvince(contextMenu.provinceId);
+              setSelectedProvinceName(contextMenu.provinceName);
+              setColonizationModalOpen(true);
               setContextMenu(null);
             }}
             className="w-full rounded-md bg-emerald-500/80 px-2 py-2 text-xs font-semibold text-black transition hover:brightness-110"
           >
-            Колонизировать
+            Открыть колонизацию
           </button>
         </div>
       )}
@@ -610,6 +798,11 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
                   {selectedOwnerFlagUrl && <img src={selectedOwnerFlagUrl} alt={selectedOwnerLabel} className="h-4 w-6 rounded-sm object-cover" />}
                   <span>{selectedOwnerLabel}</span>
                 </div>
+                <div>Стоимость колонизации: {selectedColonizationCost}</div>
+                <div>
+                  Статус колонизации: {selectedIsColonizationDisabled ? "Запрещена" : "Доступна"}
+                </div>
+                <div>Наших COLONIZE-приказов в очереди: {selectedProvinceColonizeOrdersCount}</div>
               </div>
 
               {selectedColonyProgressList.length > 0 && (
@@ -618,7 +811,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
                   {selectedColonyProgressList.map(([countryId, points]) => (
                     <div key={countryId} className="flex items-center justify-between">
                       <span>{countryById.get(countryId)?.name ?? countryId}</span>
-                      <span>{points.toFixed(1)}/100</span>
+                      <span>{points.toFixed(1)}/{selectedColonizationCost}</span>
                     </div>
                   ))}
                 </div>
@@ -626,10 +819,10 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
 
               {selectedIsNeutral && (
                 <button
-                  onClick={() => onQueueColonizeOrder(selectedProvinceId)}
+                  onClick={() => setColonizationModalOpen(true)}
                   className="mt-3 w-full rounded-lg bg-emerald-500/80 px-3 py-2 text-xs font-semibold text-black transition hover:brightness-110"
                 >
-                  Колонизировать (COLONIZE)
+                  Колонизация...
                 </button>
               )}
 
@@ -643,6 +836,48 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
           </Tooltip>
         </div>
       )}
+
+      {activeMode === "Колонизация" && (
+        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-4 md:ml-[13.6rem] md:w-72 md:translate-x-0">
+          <div className="mb-2 font-semibold text-white">Легенда колонизации</div>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#b91c1c]" /> Запрещено</div>
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22d3ee]" /> Наш приказ в очереди</div>
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#16a34a]" /> Наши провинции</div>
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#64748b]" /> Чужие провинции</div>
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22c55e]" /> Наша активная колония</div>
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#f59e0b]" /> Чужая активная колония</div>
+            <div className="pt-1 text-white/60">Свободные провинции по стоимости: светлее = дешевле, темнее = дороже</div>
+          </div>
+        </div>
+      )}
+
+      <ColonizationModal
+        open={colonizationModalOpen && Boolean(selectedProvinceId)}
+        provinceId={selectedProvinceId}
+        provinceName={selectedProvinceName}
+        ownerCountryId={selectedOwnerId}
+        colonizationCost={selectedColonizationCost}
+        colonizationDisabled={selectedIsColonizationDisabled}
+        progressByCountry={selectedColonyProgress}
+        currentCountryId={auth?.countryId ?? null}
+        countries={countries}
+        canStart={selectedCanStartColonization}
+        canCancel={selectedCanCancelColonization}
+        pending={colonizationActionPending}
+        onClose={() => setColonizationModalOpen(false)}
+        onStart={handleStartColonization}
+        onCancel={handleCancelColonization}
+        canOpenAdminProvinceEditor={Boolean(auth?.isAdmin && selectedProvinceId)}
+        onOpenAdminProvinceEditor={
+          auth?.isAdmin && selectedProvinceId
+            ? () => {
+                setColonizationModalOpen(false);
+                onOpenAdminProvinceEditor?.(selectedProvinceId);
+              }
+            : undefined
+        }
+      />
     </>
   );
 }

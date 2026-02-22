@@ -63,6 +63,7 @@ export type WorldBase = {
   resourcesByCountry: Record<string, ResourceTotals>;
   provinceOwner: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
+  provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean }>;
 };
 
 export type WorldPatch = {
@@ -83,6 +84,7 @@ export type WsOutMessage =
   | { type: "CONNECTED"; serverTime: string }
   | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }
   | { type: "ORDER_BROADCAST"; order: Order }
+  | { type: "WORLD_BASE_SYNC"; worldBase: WorldBase; turnId: number }
   | { type: "NEWS_EVENT"; event: EventLogEntry }
   | { type: "ERROR"; code: string; message: string }
   | { type: "PONG" }

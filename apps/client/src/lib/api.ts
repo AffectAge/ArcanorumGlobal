@@ -389,4 +389,80 @@ export async function updateOwnCountryCustomization(
   };
 }
 
+export type AdminProvinceItem = {
+  id: string;
+  name: string;
+  ownerCountryId: string | null;
+  colonizationCost: number;
+  colonizationDisabled: boolean;
+  colonyProgressByCountry: Record<string, number>;
+};
+
+export async function startCountryColonization(token: string, provinceId: string): Promise<void> {
+  const response = await fetch(`${API}/country/colonization/start`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ provinceId }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "COLONIZATION_START_FAILED");
+  }
+}
+
+export async function cancelCountryColonization(token: string, provinceId: string): Promise<void> {
+  const response = await fetch(`${API}/country/colonization/cancel`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ provinceId }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "COLONIZATION_CANCEL_FAILED");
+  }
+}
+
+export async function fetchAdminProvinces(token: string): Promise<AdminProvinceItem[]> {
+  const response = await fetch(`${API}/admin/provinces`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_PROVINCES_FAILED");
+  }
+  const data = (await response.json()) as { provinces: AdminProvinceItem[] };
+  return data.provinces;
+}
+
+export async function adminUpdateProvince(
+  token: string,
+  provinceId: string,
+  payload: {
+    colonizationCost?: number;
+    colonizationDisabled?: boolean;
+    ownerCountryId?: string | null;
+  },
+): Promise<AdminProvinceItem> {
+  const response = await fetch(`${API}/admin/provinces/${encodeURIComponent(provinceId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_PROVINCE_UPDATE_FAILED");
+  }
+  const data = (await response.json()) as { province: AdminProvinceItem };
+  return data.province;
+}
+
 
