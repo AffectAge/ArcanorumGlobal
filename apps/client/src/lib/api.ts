@@ -117,6 +117,7 @@ export async function adminUpdateCountry(
     countryName?: string;
     countryColor?: string;
     isAdmin?: boolean;
+    ignoreUntilTurn?: number | null;
     flagFile?: File | null;
     crestFile?: File | null;
   },
@@ -131,6 +132,9 @@ export async function adminUpdateCountry(
   }
   if (payload.isAdmin != null) {
     formData.set("isAdmin", String(payload.isAdmin));
+  }
+  if (payload.ignoreUntilTurn !== undefined) {
+    formData.set("ignoreUntilTurn", payload.ignoreUntilTurn == null ? "0" : String(payload.ignoreUntilTurn));
   }
   if (payload.flagFile) {
     formData.set("flag", payload.flagFile);
@@ -195,10 +199,11 @@ export async function adminSetCountryPunishment(
 export type TurnStatusItem = {
   id: string;
   name: string;
-  status: "ready" | "waiting" | "blocked";
+  status: "ready" | "waiting" | "blocked" | "ignored";
   blockedReason: "PERMANENT" | "TURN" | "TIME" | null;
   blockedUntilTurn: number | null;
   blockedUntilAt: string | null;
+  ignoreUntilTurn: number | null;
 };
 
 export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: number; requiredCount: number; countries: TurnStatusItem[] }> {

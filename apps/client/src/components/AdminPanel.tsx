@@ -33,6 +33,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [crestPreviewUrl, setCrestPreviewUrl] = useState<string | null>(null);
   const [turnsToBlock, setTurnsToBlock] = useState(3);
   const [blockUntilAt, setBlockUntilAt] = useState("");
+  const [ignoreUntilTurn, setIgnoreUntilTurn] = useState(0);
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
 
@@ -51,6 +52,11 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
 
     if (selectedCountry.blockedUntilAt) {
       return `Блокировка до ${new Date(selectedCountry.blockedUntilAt).toLocaleString()}`;
+    }
+
+
+    if (selectedCountry.ignoreUntilTurn) {
+      return `Не учитывать при пропуске хода до #${selectedCountry.ignoreUntilTurn}`;
     }
 
     return "Ограничений нет";
@@ -96,6 +102,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     setCrestFile(null);
     setFlagPreviewUrl(selectedCountry.flagUrl ?? null);
     setCrestPreviewUrl(selectedCountry.crestUrl ?? null);
+    setIgnoreUntilTurn(selectedCountry.ignoreUntilTurn ?? 0);
   }, [selectedCountryId, selectedCountry]);
 
   useEffect(() => {
@@ -163,6 +170,28 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       toast.success("Наказание обновлено");
     } catch {
       toast.error("Не удалось применить наказание");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+
+  const saveIgnoreUntilTurn = async (value: number | null) => {
+    if (!selectedCountry) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updated = await adminUpdateCountry(token, selectedCountry.id, { ignoreUntilTurn: value });
+      setCountries((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      if (updated.id === currentCountryId) {
+        onSessionCountryUpdated(updated);
+      }
+      setIgnoreUntilTurn(updated.ignoreUntilTurn ?? 0);
+      toast.success("Исключение из пропуска хода обновлено");
+    } catch {
+      toast.error("Не удалось обновить исключение");
     } finally {
       setSaving(false);
     }
@@ -397,6 +426,38 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                             >
                               Снять блокировку
                             </button>
+                          </div>
+
+                          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                            <div className="mb-2 text-xs text-slate-300">Не учитывать страну при ожидании пропуска хода</div>
+                            <div className="flex flex-wrap items-end gap-2">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-400">До хода (включительно)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={ignoreUntilTurn}
+                                  onChange={(e) => setIgnoreUntilTurn(Math.max(0, Number(e.target.value) || 0))}
+                                  className="w-36 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => saveIgnoreUntilTurn(ignoreUntilTurn <= 0 ? null : ignoreUntilTurn)}
+                                disabled={saving}
+                                className="rounded-lg bg-amber-600/20 px-3 py-2 text-sm font-semibold text-amber-300 disabled:opacity-60"
+                              >
+                                Применить исключение
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => saveIgnoreUntilTurn(null)}
+                                disabled={saving}
+                                className="rounded-lg bg-slate-600/20 px-3 py-2 text-sm font-semibold text-slate-200 disabled:opacity-60"
+                              >
+                                Сбросить
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}

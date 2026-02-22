@@ -18,5 +18,6 @@ model Country {
   isAdmin          Boolean   @default(false)
   blockedUntilTurn Int?
   blockedUntilAt   DateTime?
+  ignoreUntilTurn  Int?
   createdAt        DateTime  @default(now())
 }

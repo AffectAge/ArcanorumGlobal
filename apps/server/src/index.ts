@@ -94,6 +94,7 @@ const countrySelect = {
   isLocked: true,
   blockedUntilTurn: true,
   blockedUntilAt: true,
+  ignoreUntilTurn: true,
 } as const;
 
 let turnId = 1;
@@ -147,11 +148,18 @@ function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
   });
 }
 
-function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null }): Country {
+function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null; ignoreUntilTurn: number | null }): Country {
   return {
     ...row,
     blockedUntilAt: row.blockedUntilAt ? row.blockedUntilAt.toISOString() : null,
   };
+}
+
+function getCountrySkipInfo(country: { ignoreUntilTurn: number | null }, currentTurn: number): { ignored: boolean; ignoreUntilTurn: number | null } {
+  if (country.ignoreUntilTurn != null && currentTurn <= country.ignoreUntilTurn) {
+    return { ignored: true, ignoreUntilTurn: country.ignoreUntilTurn };
+  }
+  return { ignored: false, ignoreUntilTurn: null };
 }
 
 function getCountryBlockInfo(
@@ -273,6 +281,7 @@ app.get("/turn/status", async (_req, res) => {
       isLocked: true,
       blockedUntilTurn: true,
       blockedUntilAt: true,
+      ignoreUntilTurn: true,
     },
     orderBy: { createdAt: "asc" },
   });
@@ -281,8 +290,9 @@ app.get("/turn/status", async (_req, res) => {
 
   const items = countries.map((country) => {
     const block = getCountryBlockInfo(country, turnId, now);
-    const ready = !block.blocked && readySet.has(country.id);
-    const status = block.blocked ? "blocked" : ready ? "ready" : "waiting";
+    const skip = getCountrySkipInfo(country, turnId);
+    const ready = !block.blocked && !skip.ignored && readySet.has(country.id);
+    const status = block.blocked ? "blocked" : skip.ignored ? "ignored" : ready ? "ready" : "waiting";
 
     return {
       id: country.id,
@@ -291,10 +301,11 @@ app.get("/turn/status", async (_req, res) => {
       blockedReason: block.reason,
       blockedUntilTurn: block.blockedUntilTurn,
       blockedUntilAt: block.blockedUntilAt ? block.blockedUntilAt.toISOString() : null,
+      ignoreUntilTurn: skip.ignoreUntilTurn,
     };
   });
 
-  const requiredCount = items.filter((item) => item.status !== "blocked").length;
+  const requiredCount = items.filter((item) => item.status !== "blocked" && item.status !== "ignored").length;
   const readyCount = items.filter((item) => item.status === "ready").length;
 
   res.json({ turnId, readyCount, requiredCount, countries: items });
@@ -341,6 +352,16 @@ const adminCountryUpdateSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v == null ? undefined : v === "true")),
+  ignoreUntilTurn: z
+    .string()
+    .optional()
+    .transform((v) => {
+      if (v == null || v.trim() === "") {
+        return undefined;
+      }
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : undefined;
+    }),
 });
 
 app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
@@ -376,7 +397,7 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
     return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
   }
 
-  const data: { name?: string; color?: string; isAdmin?: boolean; flagUrl?: string | null; crestUrl?: string | null } = {};
+  const data: { name?: string; color?: string; isAdmin?: boolean; ignoreUntilTurn?: number | null; flagUrl?: string | null; crestUrl?: string | null } = {};
   if (parsed.data.countryName) {
     data.name = parsed.data.countryName;
   }
@@ -385,6 +406,9 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
   }
   if (parsed.data.isAdmin !== undefined) {
     data.isAdmin = parsed.data.isAdmin;
+  }
+  if (parsed.data.ignoreUntilTurn !== undefined) {
+    data.ignoreUntilTurn = parsed.data.ignoreUntilTurn === 0 ? null : parsed.data.ignoreUntilTurn;
   }
   if (flagFile) {
     data.flagUrl = `/uploads/flags/${flagFile.filename}`;
@@ -744,12 +768,17 @@ wss.on("connection", (socket) => {
           isLocked: true,
           blockedUntilTurn: true,
           blockedUntilAt: true,
+          ignoreUntilTurn: true,
         },
       });
       const now = new Date();
       const activeCountryIds = new Set(
         countries
-          .filter((country) => !getCountryBlockInfo(country, turnId, now).blocked)
+          .filter((country) => {
+            const blocked = getCountryBlockInfo(country, turnId, now).blocked;
+            const ignored = getCountrySkipInfo(country, turnId).ignored;
+            return !blocked && !ignored;
+          })
           .map((country) => country.id),
       );
 
@@ -773,6 +802,7 @@ wss.on("connection", (socket) => {
       const patch = resolveTurn();
       broadcast(wss, patch);
     }
+
   });
 
   socket.on("close", () => {
