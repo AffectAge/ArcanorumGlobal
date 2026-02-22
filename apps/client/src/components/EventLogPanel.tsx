@@ -191,36 +191,57 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
   }, [entries.length]);
 
   useEffect(() => {
+    const scope = currentCountryId ?? "guest";
     try {
-      localStorage.setItem("arc.ui.eventLog.collapsed", collapsed ? "1" : "0");
+      setCollapsed(localStorage.getItem(`arc.ui.${scope}.eventLog.collapsed`) === "1");
+      const savedSort = localStorage.getItem(`arc.ui.${scope}.eventLog.sortMode`);
+      setSortMode(savedSort === "priority" ? "priority" : "time");
+      const savedCountryScope = localStorage.getItem(`arc.ui.${scope}.eventLog.countryScope`);
+      setCountryScope(savedCountryScope === "own" || savedCountryScope === "foreign" ? savedCountryScope : "all");
+      const savedCategories = localStorage.getItem(`arc.ui.${scope}.eventLog.enabledCategories`);
+      if (savedCategories) {
+        const parsed = JSON.parse(savedCategories) as unknown;
+        if (Array.isArray(parsed)) {
+          const next = parsed.filter((v): v is EventCategory => allCategoryIds.includes(v as EventCategory));
+          setEnabledCategories(new Set(next.length > 0 ? (["system", ...next.filter((v) => v !== "system")] as EventCategory[]) : allCategoryIds));
+        }
+      }
     } catch {
       // ignore
     }
-  }, [collapsed]);
+  }, [currentCountryId]);
 
   useEffect(() => {
     try {
-      localStorage.setItem("arc.ui.eventLog.sortMode", sortMode);
+      localStorage.setItem(`arc.ui.${currentCountryId ?? "guest"}.eventLog.collapsed`, collapsed ? "1" : "0");
     } catch {
       // ignore
     }
-  }, [sortMode]);
+  }, [collapsed, currentCountryId]);
 
   useEffect(() => {
     try {
-      localStorage.setItem("arc.ui.eventLog.countryScope", countryScope);
+      localStorage.setItem(`arc.ui.${currentCountryId ?? "guest"}.eventLog.sortMode`, sortMode);
     } catch {
       // ignore
     }
-  }, [countryScope]);
+  }, [currentCountryId, sortMode]);
 
   useEffect(() => {
     try {
-      localStorage.setItem("arc.ui.eventLog.enabledCategories", JSON.stringify([...enabledCategories]));
+      localStorage.setItem(`arc.ui.${currentCountryId ?? "guest"}.eventLog.countryScope`, countryScope);
     } catch {
       // ignore
     }
-  }, [enabledCategories]);
+  }, [countryScope, currentCountryId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`arc.ui.${currentCountryId ?? "guest"}.eventLog.enabledCategories`, JSON.stringify([...enabledCategories]));
+    } catch {
+      // ignore
+    }
+  }, [currentCountryId, enabledCategories]);
 
   useEffect(() => {
     let cancelled = false;

@@ -215,28 +215,42 @@ export function MapView({
   }, [worldBase]);
 
   useEffect(() => {
+    const scope = auth?.countryId ?? "guest";
     try {
-      localStorage.setItem("arc.ui.map.interactionLocked", interactionLocked ? "1" : "0");
+      const rawLocked = localStorage.getItem(`arc.ui.${scope}.map.interactionLocked`);
+      const rawBorders = localStorage.getItem(`arc.ui.${scope}.map.showProvinceBorders`);
+      const rawFilter = localStorage.getItem(`arc.ui.${scope}.map.politicalCountryFilter`);
+      setInteractionLocked(rawLocked === "1");
+      setShowProvinceBorders(rawBorders == null ? true : rawBorders === "1");
+      setPoliticalCountryFilter(rawFilter || "all");
     } catch {
       // ignore
     }
-  }, [interactionLocked]);
+  }, [auth?.countryId]);
 
   useEffect(() => {
     try {
-      localStorage.setItem("arc.ui.map.showProvinceBorders", showProvinceBorders ? "1" : "0");
+      localStorage.setItem(`arc.ui.${auth?.countryId ?? "guest"}.map.interactionLocked`, interactionLocked ? "1" : "0");
     } catch {
       // ignore
     }
-  }, [showProvinceBorders]);
+  }, [auth?.countryId, interactionLocked]);
 
   useEffect(() => {
     try {
-      localStorage.setItem("arc.ui.map.politicalCountryFilter", politicalCountryFilter);
+      localStorage.setItem(`arc.ui.${auth?.countryId ?? "guest"}.map.showProvinceBorders`, showProvinceBorders ? "1" : "0");
     } catch {
       // ignore
     }
-  }, [politicalCountryFilter]);
+  }, [auth?.countryId, showProvinceBorders]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`arc.ui.${auth?.countryId ?? "guest"}.map.politicalCountryFilter`, politicalCountryFilter);
+    } catch {
+      // ignore
+    }
+  }, [auth?.countryId, politicalCountryFilter]);
 
   const ordersCountByProvince = useMemo(() => {
     const map = new Map<string, number>();

@@ -188,11 +188,23 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem("arc.ui.mapMode", mapMode);
+      const key = `arc.ui.${auth?.countryId ?? "guest"}.mapMode`;
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        setMapMode(saved);
+      }
     } catch {
       // ignore storage failures
     }
-  }, [mapMode]);
+  }, [auth?.countryId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`arc.ui.${auth?.countryId ?? "guest"}.mapMode`, mapMode);
+    } catch {
+      // ignore storage failures
+    }
+  }, [auth?.countryId, mapMode]);
 
   useEffect(() => {
     let cancelled = false;
