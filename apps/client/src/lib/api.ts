@@ -260,6 +260,16 @@ export type GameSettings = {
 
 export type CustomizationPrices = GameSettings["customization"];
 export type ResourceIconsMap = GameSettings["resourceIcons"];
+export type CivilopediaEntry = {
+  id: string;
+  category: string;
+  title: string;
+  summary: string;
+  keywords: string[];
+  imageUrl: string | null;
+  relatedEntryIds: string[];
+  sections: Array<{ title: string; paragraphs: string[] }>;
+};
 
 function normalizeResourceIcons(icons?: Partial<ResourceIconsMap> | null): ResourceIconsMap {
   return {
@@ -307,6 +317,95 @@ export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "e
     ...data,
     resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
+}
+
+export async function fetchCivilopedia(): Promise<{ categories: string[]; entries: CivilopediaEntry[] }> {
+  const response = await fetch(`${API}/civilopedia`);
+  if (!response.ok) throw new Error("CIVILOPEDIA_FAILED");
+  const data = (await response.json()) as { civilopedia?: { categories?: string[]; entries?: CivilopediaEntry[] } };
+  return {
+    categories: data.civilopedia?.categories ?? [],
+    entries: (data.civilopedia?.entries ?? []).map((entry) => ({
+      ...entry,
+      imageUrl: withAssetBase(entry.imageUrl) ?? null,
+    })),
+  };
+}
+
+export async function fetchAdminCivilopedia(token: string): Promise<{ categories: string[]; entries: CivilopediaEntry[] }> {
+  const response = await fetch(`${API}/admin/civilopedia`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_CIVILOPEDIA_FAILED");
+  }
+  const data = (await response.json()) as { civilopedia?: { categories?: string[]; entries?: CivilopediaEntry[] } };
+  return {
+    categories: data.civilopedia?.categories ?? [],
+    entries: (data.civilopedia?.entries ?? []).map((entry) => ({
+      ...entry,
+      imageUrl: withAssetBase(entry.imageUrl) ?? null,
+    })),
+  };
+}
+
+export async function updateAdminCivilopedia(
+  token: string,
+  payload: { categories: string[]; entries: CivilopediaEntry[] },
+): Promise<{ categories: string[]; entries: CivilopediaEntry[] }> {
+  const response = await fetch(`${API}/admin/civilopedia`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_CIVILOPEDIA_UPDATE_FAILED");
+  }
+  const data = (await response.json()) as { civilopedia?: { categories?: string[]; entries?: CivilopediaEntry[] } };
+  return {
+    categories: data.civilopedia?.categories ?? [],
+    entries: (data.civilopedia?.entries ?? []).map((entry) => ({
+      ...entry,
+      imageUrl: withAssetBase(entry.imageUrl) ?? null,
+    })),
+  };
+}
+
+export async function uploadCivilopediaImage(token: string, file: File): Promise<{ imageUrl: string }> {
+  const formData = new FormData();
+  formData.set("civilopediaImage", file);
+  const response = await fetch(`${API}/admin/civilopedia/image`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "CIVILOPEDIA_IMAGE_UPLOAD_FAILED");
+  }
+  const data = (await response.json()) as { imageUrl: string };
+  return { imageUrl: withAssetBase(data.imageUrl) ?? data.imageUrl };
+}
+
+export async function uploadCivilopediaInlineImage(token: string, file: File): Promise<{ imageUrl: string }> {
+  const formData = new FormData();
+  formData.set("civilopediaImage", file);
+  const response = await fetch(`${API}/admin/civilopedia/inline-image`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "CIVILOPEDIA_INLINE_IMAGE_UPLOAD_FAILED");
+  }
+  const data = (await response.json()) as { imageUrl: string };
+  return { imageUrl: withAssetBase(data.imageUrl) ?? data.imageUrl };
 }
 
 export async function fetchGameSettings(token: string): Promise<GameSettings> {

@@ -17,6 +17,8 @@ type Props = {
   onQueueBuildOrder: (provinceId: string) => void;
   onQueueColonizeOrder: (provinceId: string) => void;
   onOpenAdminProvinceEditor?: (provinceId: string) => void;
+  onOpenProvinceKnowledge?: (provinceId: string, provinceName: string) => void;
+  onCreateProvinceKnowledge?: (provinceId: string, provinceName: string) => void;
   colonizationIconUrl?: string | null;
   ducatsIconUrl?: string | null;
   maxActiveColonizations?: number;
@@ -138,6 +140,8 @@ export function MapView({
   onQueueBuildOrder,
   onQueueColonizeOrder,
   onOpenAdminProvinceEditor,
+  onOpenProvinceKnowledge,
+  onCreateProvinceKnowledge,
   colonizationIconUrl,
   ducatsIconUrl,
   maxActiveColonizations,
@@ -1261,6 +1265,28 @@ export function MapView({
           >
             Открыть колонизацию
           </button>
+          {onOpenProvinceKnowledge && (
+            <button
+              onClick={() => {
+                onOpenProvinceKnowledge(contextMenu.provinceId, contextMenu.provinceName);
+                setContextMenu(null);
+              }}
+              className="mt-2 w-full rounded-md border border-white/10 bg-white/5 px-2 py-2 text-xs font-semibold text-white/85 transition hover:border-arc-accent/30 hover:text-arc-accent"
+            >
+              Статья о провинции
+            </button>
+          )}
+          {auth?.isAdmin && onCreateProvinceKnowledge && (
+            <button
+              onClick={() => {
+                onCreateProvinceKnowledge(contextMenu.provinceId, contextMenu.provinceName);
+                setContextMenu(null);
+              }}
+              className="mt-2 w-full rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-2 text-xs font-semibold text-rose-200 transition hover:border-rose-300/50 hover:bg-rose-400/15"
+            >
+              Создать статью о провинции
+            </button>
+          )}
           {auth?.isAdmin && onOpenAdminProvinceEditor && (
             <button
               onClick={() => {

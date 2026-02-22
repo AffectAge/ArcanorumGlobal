@@ -27,6 +27,7 @@ type Props = {
   onOpenGameSettings?: () => void;
   onOpenCountryCustomization?: () => void;
   onOpenClientSettings?: () => void;
+  onOpenCivilopedia?: () => void;
   resourceIconUrls?: Partial<Record<(typeof cards)[number]["key"], string | null>>;
   resourceGrowthByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
   resourceExpenseByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
@@ -100,6 +101,7 @@ export function TopBar({
   onOpenGameSettings,
   onOpenCountryCustomization,
   onOpenClientSettings,
+  onOpenCivilopedia,
   resourceIconUrls,
   resourceGrowthByTurn,
   resourceExpenseByTurn,
@@ -350,6 +352,16 @@ export function TopBar({
         </div>
 
         <div className="flex justify-end gap-2">
+          <Tooltip content="Хранилище знаний" placement="top">
+            <button
+              onClick={onOpenCivilopedia}
+              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
+              aria-label="Хранилище знаний"
+            >
+              <BookOpen size={16} />
+            </button>
+          </Tooltip>
+
           <Tooltip content="Настройки клиента" placement="top">
             <button
               onClick={onOpenClientSettings}

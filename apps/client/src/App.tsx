@@ -15,6 +15,7 @@ import { GameSettingsPanel } from "./components/GameSettingsPanel";
 import { CountryCustomizationModal } from "./components/CountryCustomizationModal";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
+import { CivilopediaModal } from "./components/CivilopediaModal";
 import { apiBase, fetchCountries, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
@@ -48,6 +49,12 @@ export default function App() {
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
   const [countryCustomizationOpen, setCountryCustomizationOpen] = useState(false);
   const [clientSettingsOpen, setClientSettingsOpen] = useState(false);
+  const [civilopediaOpen, setCivilopediaOpen] = useState(false);
+  const [civilopediaIntent, setCivilopediaIntent] = useState<
+    | { type: "open-entry"; entryId: string }
+    | { type: "province"; provinceId: string; provinceName: string; createIfMissing: boolean }
+    | null
+  >(null);
   const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
     culture: null,
     science: null,
@@ -640,6 +647,24 @@ export default function App() {
           setAdminInitialProvinceId(provinceId);
           setAdminOpen(true);
         }}
+        onOpenProvinceKnowledge={(provinceId, provinceName) => {
+          setCivilopediaIntent({
+            type: "province",
+            provinceId,
+            provinceName,
+            createIfMissing: false,
+          });
+          setCivilopediaOpen(true);
+        }}
+        onCreateProvinceKnowledge={(provinceId, provinceName) => {
+          setCivilopediaIntent({
+            type: "province",
+            provinceId,
+            provinceName,
+            createIfMissing: true,
+          });
+          setCivilopediaOpen(true);
+        }}
       />
 
       <AnimatePresence>
@@ -742,6 +767,10 @@ export default function App() {
             onOpenGameSettings={() => setGameSettingsOpen(true)}
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
             onOpenClientSettings={() => setClientSettingsOpen(true)}
+            onOpenCivilopedia={() => {
+              setCivilopediaIntent(null);
+              setCivilopediaOpen(true);
+            }}
             resourceIconUrls={resourceIcons}
             resourceGrowthByTurn={resourceGrowthByTurn}
             resourceExpenseByTurn={currentTurnExpenses}
@@ -854,6 +883,18 @@ export default function App() {
           }}
         />
       )}
+
+      <CivilopediaModal
+        open={civilopediaOpen}
+        onClose={() => {
+          setCivilopediaOpen(false);
+          setCivilopediaIntent(null);
+        }}
+        isAdmin={Boolean(auth?.isAdmin)}
+        adminToken={auth?.token ?? null}
+        initialIntent={civilopediaIntent}
+        onIntentHandled={() => setCivilopediaIntent(null)}
+      />
 
       <AnimatePresence>
         {auth && turnResolveOverlay.phase !== "idle" && (
