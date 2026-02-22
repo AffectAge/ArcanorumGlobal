@@ -322,7 +322,7 @@ export function CivilopediaModal({
         return;
       }
 
-      const category = categories.includes("provinces") ? "provinces" : "provinces";
+      const category = "Провинции";
       const nextEntry: CivilopediaEntry = {
         id: provinceArticleId,
         category,
