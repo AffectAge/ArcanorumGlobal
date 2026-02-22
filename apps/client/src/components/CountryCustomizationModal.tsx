@@ -14,8 +14,9 @@ type Props = {
     crestUrl?: string | null;
   };
   currentDucats: number;
+  ducatsIconUrl?: string | null;
   onClose: () => void;
-  onSaved: (payload: { name: string; color: string; flagUrl?: string | null; crestUrl?: string | null; ducats: number }) => void;
+  onSaved: (payload: { name: string; color: string; flagUrl?: string | null; crestUrl?: string | null; ducats: number; chargedDucats: number }) => void;
 };
 
 const defaultPrices: CustomizationPrices = {
@@ -24,6 +25,45 @@ const defaultPrices: CustomizationPrices = {
   flagDucats: 15,
   crestDucats: 15,
 };
+
+function formatCompact(value: number): string {
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  const units = [
+    { n: 1_000_000_000_000, s: "T" },
+    { n: 1_000_000_000, s: "B" },
+    { n: 1_000_000, s: "M" },
+    { n: 1_000, s: "K" },
+  ] as const;
+
+  for (const unit of units) {
+    if (abs >= unit.n) {
+      const scaled = abs / unit.n;
+      const text =
+        scaled >= 100
+          ? Math.floor(scaled).toString()
+          : scaled >= 10
+            ? scaled.toFixed(1).replace(/\.0$/, "")
+            : scaled.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+      return `${sign}${text}${unit.s}`;
+    }
+  }
+
+  return `${sign}${Math.floor(abs)}`;
+}
+
+function DucatValue({ value, iconUrl, className = "" }: { value: number; iconUrl?: string | null; className?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1 ${className}`.trim()}>
+      {iconUrl ? (
+        <img src={iconUrl} alt="" className="h-[13px] w-[13px] rounded-sm object-contain" />
+      ) : (
+        <Coins size={13} className="text-amber-300" />
+      )}
+      <span>{formatCompact(value)}</span>
+    </span>
+  );
+}
 
 async function isImageWithinMaxSize(file: File, maxSize = 256): Promise<boolean> {
   return new Promise((resolve) => {
@@ -56,7 +96,7 @@ function FilePicker({ label, file, onChange }: { label: string; file: File | nul
   );
 }
 
-export function CountryCustomizationModal({ open, token, country, currentDucats, onClose, onSaved }: Props) {
+export function CountryCustomizationModal({ open, token, country, currentDucats, ducatsIconUrl, onClose, onSaved }: Props) {
   const [loadingPrices, setLoadingPrices] = useState(false);
   const [saving, setSaving] = useState(false);
   const [prices, setPrices] = useState<CustomizationPrices>(defaultPrices);
@@ -188,6 +228,7 @@ export function CountryCustomizationModal({ open, token, country, currentDucats,
         flagUrl: result.country.flagUrl,
         crestUrl: result.country.crestUrl,
         ducats: result.resources.ducats,
+        chargedDucats: result.chargedDucats,
       });
       toast.success(`Изменения применены (-${result.chargedDucats} дукатов)`);
       onClose();
@@ -221,7 +262,7 @@ export function CountryCustomizationModal({ open, token, country, currentDucats,
               <Dialog.Title className="font-display text-2xl tracking-wide text-arc-accent">Кастомизация страны</Dialog.Title>
               <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
                 <Coins size={13} />
-                Доступно: <span className="font-semibold text-slate-200">{currentDucats}</span> дукатов
+                Доступно: <DucatValue value={currentDucats} iconUrl={ducatsIconUrl} className="font-semibold text-slate-200" />
               </div>
             </div>
             <button onClick={onClose} className="panel-border inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-slate-300 hover:text-arc-accent">
@@ -299,7 +340,7 @@ export function CountryCustomizationModal({ open, token, country, currentDucats,
                 {changes.map((item) => (
                   <div key={item.label} className={`flex items-center justify-between rounded-lg px-2 py-1 ${item.enabled ? "bg-white/5 text-slate-100" : "text-slate-500"}`}>
                     <span>{item.label}</span>
-                    <span>{item.enabled ? item.cost : 0}</span>
+                    <DucatValue value={item.enabled ? item.cost : 0} iconUrl={ducatsIconUrl} className={item.enabled ? "text-slate-200" : "text-slate-500"} />
                   </div>
                 ))}
               </div>
@@ -307,11 +348,13 @@ export function CountryCustomizationModal({ open, token, country, currentDucats,
               <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-300">Итого</span>
-                  <strong className="text-arc-accent">{totalCost} дукатов</strong>
+                  <strong className="text-arc-accent">
+                    <DucatValue value={totalCost} iconUrl={ducatsIconUrl} className="text-arc-accent" />
+                  </strong>
                 </div>
                 <div className="mt-1 flex items-center justify-between text-xs">
                   <span className="text-slate-400">После покупки</span>
-                  <span className={canAfford ? "text-slate-300" : "text-rose-300"}>{currentDucats - totalCost}</span>
+                  <DucatValue value={currentDucats - totalCost} iconUrl={ducatsIconUrl} className={canAfford ? "text-slate-300" : "text-rose-300"} />
                 </div>
               </div>
 

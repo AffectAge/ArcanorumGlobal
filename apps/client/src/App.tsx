@@ -13,7 +13,7 @@ import { TurnStatusModal } from "./components/TurnStatusModal";
 import { GameSettingsPanel } from "./components/GameSettingsPanel";
 import { CountryCustomizationModal } from "./components/CountryCustomizationModal";
 import { EventLogPanel } from "./components/EventLogPanel";
-import { apiBase, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
+import { apiBase, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
 
@@ -56,7 +56,13 @@ export default function App() {
     ducats: 0,
     gold: 0,
   });
+  const [customizationDucatSpend, setCustomizationDucatSpend] = useState<{ turnId: number; amount: number }>({
+    turnId: 0,
+    amount: 0,
+  });
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
+  const [colonizationCostPer1000Km2, setColonizationCostPer1000Km2] = useState({ points: 5, ducats: 5 });
+  const [provinceAreaKm2ById, setProvinceAreaKm2ById] = useState<Record<string, number>>({});
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -176,6 +182,23 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    fetchProvinceIndex()
+      .then((items) => {
+        if (cancelled) return;
+        const next: Record<string, number> = {};
+        for (const item of items) next[item.id] = item.areaKm2;
+        setProvinceAreaKm2ById(next);
+      })
+      .catch(() => {
+        if (!cancelled) setProvinceAreaKm2ById({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     fetchPublicGameUiSettings()
       .then((ui) => {
         if (!cancelled) {
@@ -189,6 +212,10 @@ export default function App() {
             gold: ui.economy.baseGoldPerTurn,
           });
           setMaxActiveColonizations(ui.colonization.maxActiveColonizations);
+          setColonizationCostPer1000Km2({
+            points: ui.colonization.pointsCostPer1000Km2,
+            ducats: ui.colonization.ducatsCostPer1000Km2,
+          });
         }
       })
       .catch(() => {
@@ -215,6 +242,75 @@ export default function App() {
     return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
   }, [auth, worldBase]);
 
+  const myColonizationProjection = useMemo(() => {
+    if (!auth || !worldBase) {
+      return { activeCount: 0, predictedPointsSpend: 0, predictedSupportDucatSpend: 0 };
+    }
+
+    const targetIds = new Set<string>();
+    for (const [provinceId, byCountry] of Object.entries(worldBase.colonyProgressByProvince ?? {})) {
+      if (worldBase.provinceOwner[provinceId]) continue;
+      if (worldBase.provinceColonizationByProvince?.[provinceId]?.disabled) continue;
+      if (byCountry[auth.countryId] != null) {
+        targetIds.add(provinceId);
+      }
+    }
+
+    const myOrders = ordersByTurn.get(turnId)?.get(auth.playerId) ?? [];
+    for (const order of myOrders) {
+      if (order.type !== "COLONIZE") continue;
+      if (worldBase.provinceOwner[order.provinceId]) continue;
+      if (worldBase.provinceColonizationByProvince?.[order.provinceId]?.disabled) continue;
+      targetIds.add(order.provinceId);
+    }
+
+    const activeCount = targetIds.size;
+    if (activeCount === 0) {
+      return { activeCount, predictedPointsSpend: 0, predictedSupportDucatSpend: 0 };
+    }
+
+    const availablePoints = Math.max(0, Math.floor(currentResources.colonization ?? 0));
+    if (availablePoints <= 0) {
+      return { activeCount, predictedPointsSpend: 0, predictedSupportDucatSpend: 0 };
+    }
+
+    const gainPerProvince = availablePoints / activeCount;
+    let predictedPointsSpend = 0;
+    let predictedSupportDucatSpend = 0;
+    let remainingSupportDucats = Math.max(0, Number(currentResources.ducats ?? 0));
+
+    for (const provinceId of targetIds) {
+      const provinceCfg = worldBase.provinceColonizationByProvince?.[provinceId];
+      const areaKm2 = Math.max(1, Number(provinceAreaKm2ById[provinceId] ?? 1000));
+      const areaFactor = Math.max(0.001, areaKm2 / 1000);
+      const derivedPointsCost = Math.max(1, Math.round(colonizationCostPer1000Km2.points * areaFactor));
+      const derivedDucatsCost = Math.max(0, Math.round(colonizationCostPer1000Km2.ducats * areaFactor));
+      const provinceCost = Math.max(1, Math.floor(provinceCfg?.cost ?? derivedPointsCost));
+      const currentProgress = Math.max(
+        0,
+        Number(worldBase.colonyProgressByProvince?.[provinceId]?.[auth.countryId] ?? 0),
+      );
+      const remainingPoints = Math.max(0, provinceCost - currentProgress);
+      const ducatRatio = provinceCost > 0 ? derivedDucatsCost / provinceCost : 0;
+      const spentDucatsForCurrentProgress = currentProgress * ducatRatio;
+      const remainingProvinceDucats = Math.max(0, derivedDucatsCost - spentDucatsForCurrentProgress);
+      const maxGainByCountryDucats = ducatRatio > 0 ? remainingSupportDucats / ducatRatio : Number.POSITIVE_INFINITY;
+      const maxGainByProvinceDucats = ducatRatio > 0 ? remainingProvinceDucats / ducatRatio : Number.POSITIVE_INFINITY;
+      const appliedPoints = Math.min(gainPerProvince, remainingPoints, maxGainByCountryDucats, maxGainByProvinceDucats);
+      if (appliedPoints <= 0) continue;
+      const appliedDucats = ducatRatio > 0 ? Math.min(remainingSupportDucats, remainingProvinceDucats, appliedPoints * ducatRatio) : 0;
+      predictedPointsSpend += appliedPoints;
+      predictedSupportDucatSpend += appliedDucats;
+      remainingSupportDucats = Math.max(0, remainingSupportDucats - appliedDucats);
+    }
+
+    return {
+      activeCount,
+      predictedPointsSpend: Math.max(0, Math.floor(predictedPointsSpend)),
+      predictedSupportDucatSpend: Math.max(0, Math.floor(predictedSupportDucatSpend)),
+    };
+  }, [auth, colonizationCostPer1000Km2.ducats, colonizationCostPer1000Km2.points, currentResources.colonization, currentResources.ducats, ordersByTurn, provinceAreaKm2ById, turnId, worldBase]);
+  const activeColonizationCount = myColonizationProjection.activeCount;
   const currentTurnExpenses = useMemo(() => {
     const empty = { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
     if (!auth) {
@@ -222,25 +318,39 @@ export default function App() {
     }
 
     const byPlayer = ordersByTurn.get(turnId);
-    if (!byPlayer) {
-      return empty;
-    }
-
-    const myOrders = byPlayer.get(auth.playerId) ?? [];
+    const myOrders = byPlayer?.get(auth.playerId) ?? [];
     const totals = { ...empty };
+    let queuedOrderDucatSpend = 0;
 
     for (const order of myOrders) {
       if (order.type === "COLONIZE") {
-        totals.ducats += 4;
+        continue;
       }
       if (order.type === "BUILD") {
         totals.ducats += 2;
         totals.gold += 5;
+        queuedOrderDucatSpend += 2;
       }
     }
 
+    if (customizationDucatSpend.turnId === turnId && customizationDucatSpend.amount > 0) {
+      totals.ducats += customizationDucatSpend.amount;
+    }
+
+    if (myColonizationProjection.predictedPointsSpend > 0) {
+      totals.colonization += myColonizationProjection.predictedPointsSpend;
+      const supportDucatSpend = Math.min(
+        myColonizationProjection.predictedSupportDucatSpend,
+        Math.max(0, Math.floor((currentResources.ducats ?? 0) - queuedOrderDucatSpend)),
+      );
+      totals.ducats += supportDucatSpend;
+    }
+
     return totals;
-  }, [auth, ordersByTurn, turnId]);
+  }, [auth, currentResources.ducats, customizationDucatSpend.amount, customizationDucatSpend.turnId, myColonizationProjection.predictedPointsSpend, myColonizationProjection.predictedSupportDucatSpend, ordersByTurn, turnId]);
+  useEffect(() => {
+    setCustomizationDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
+  }, [turnId]);
 
   const logoutToAuth = () => {
     addEvent({ category: "system", title: "Выход", message: "Сессия игрока завершена", priority: "low", visibility: "private", countryId: auth?.countryId ?? null });
@@ -346,7 +456,9 @@ export default function App() {
         onQueueBuildOrder={queueBuildOrder}
         onQueueColonizeOrder={queueColonizeOrder}
         colonizationIconUrl={resourceIcons.colonization}
+        ducatsIconUrl={resourceIcons.ducats}
         maxActiveColonizations={maxActiveColonizations}
+        colonizationCostPer1000Km2={colonizationCostPer1000Km2}
         onOpenAdminProvinceEditor={(provinceId) => {
           setAdminInitialProvinceId(provinceId);
           setAdminOpen(true);
@@ -389,6 +501,7 @@ export default function App() {
             resourceIconUrls={resourceIcons}
             resourceGrowthByTurn={resourceGrowthByTurn}
             resourceExpenseByTurn={currentTurnExpenses}
+            colonizationLimit={{ active: activeColonizationCount, max: maxActiveColonizations }}
           />
           <SideNav />
           <EventLogPanel
@@ -426,6 +539,10 @@ export default function App() {
           onResourceIconsUpdated={setResourceIcons}
           onSettingsUpdated={(updated) => {
             setMaxActiveColonizations(updated.colonization.maxActiveColonizations);
+            setColonizationCostPer1000Km2({
+              points: updated.colonization.pointsCostPer1000Km2,
+              ducats: updated.colonization.ducatsCostPer1000Km2,
+            });
             setResourceGrowthByTurn((prev) => ({
               ...prev,
               colonization: updated.colonization.pointsPerTurn,
@@ -443,6 +560,7 @@ export default function App() {
           token={auth.token}
           country={country}
           currentDucats={currentResources.ducats}
+          ducatsIconUrl={resourceIcons.ducats}
           onClose={() => setCountryCustomizationOpen(false)}
           onSaved={(updated) => {
             setCountry((prev) => ({
@@ -453,6 +571,13 @@ export default function App() {
             }));
             if (auth) {
               updateCountryResources(auth.countryId, { ducats: updated.ducats });
+              if (updated.chargedDucats > 0) {
+                setCustomizationDucatSpend((prev) =>
+                  prev.turnId === turnId
+                    ? { turnId, amount: prev.amount + updated.chargedDucats }
+                    : { turnId, amount: updated.chargedDucats },
+                );
+              }
               addEvent({
                 category: "politics",
                 title: "Изменение страны",

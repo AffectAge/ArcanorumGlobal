@@ -45,6 +45,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationPointsPerTurn, setColonizationPointsPerTurn] = useState(30);
+  const [colonizationPointsCostPer1000Km2, setColonizationPointsCostPer1000Km2] = useState(5);
+  const [colonizationDucatsCostPer1000Km2, setColonizationDucatsCostPer1000Km2] = useState(5);
   const [renameDucats, setRenameDucats] = useState(20);
   const [recolorDucats, setRecolorDucats] = useState(10);
   const [flagDucats, setFlagDucats] = useState(15);
@@ -75,6 +77,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
         setMaxActiveColonizations(settings.colonization.maxActiveColonizations);
         setColonizationPointsPerTurn(settings.colonization.pointsPerTurn);
+        setColonizationPointsCostPer1000Km2(settings.colonization.pointsCostPer1000Km2);
+        setColonizationDucatsCostPer1000Km2(settings.colonization.ducatsCostPer1000Km2);
         setRenameDucats(settings.customization.renameDucats);
         setRecolorDucats(settings.customization.recolorDucats);
         setFlagDucats(settings.customization.flagDucats);
@@ -122,10 +126,14 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         colonization: {
           maxActiveColonizations: Math.max(1, Math.floor(maxActiveColonizations)),
           pointsPerTurn: Math.max(0, Math.floor(colonizationPointsPerTurn)),
+          pointsCostPer1000Km2: Math.max(1, Math.floor(colonizationPointsCostPer1000Km2)),
+          ducatsCostPer1000Km2: Math.max(0, Math.floor(colonizationDucatsCostPer1000Km2)),
         },
       });
       setMaxActiveColonizations(updated.colonization.maxActiveColonizations);
       setColonizationPointsPerTurn(updated.colonization.pointsPerTurn);
+      setColonizationPointsCostPer1000Km2(updated.colonization.pointsCostPer1000Km2);
+      setColonizationDucatsCostPer1000Km2(updated.colonization.ducatsCostPer1000Km2);
       onSettingsUpdated?.(updated);
       toast.success("Настройки колонизации сохранены");
     } catch {
@@ -286,6 +294,17 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           <label className="mb-1 block text-xs text-slate-300">Прирост очков колонизации / ход</label>
                           <input type="number" min={0} value={colonizationPointsPerTurn} onChange={(e) => setColonizationPointsPerTurn(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
                         </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Цена (очки колонизации) за 1000 км²</label>
+                          <input type="number" min={1} value={colonizationPointsCostPer1000Km2} onChange={(e) => setColonizationPointsCostPer1000Km2(Math.max(1, Number(e.target.value) || 1))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Цена (дукаты) за 1000 км²</label>
+                          <input type="number" min={0} value={colonizationDucatsCostPer1000Km2} onChange={(e) => setColonizationDucatsCostPer1000Km2(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-400">
+                        Базовая стоимость провинции рассчитывается от площади: `ставка за 1000 км² × площадь / 1000`. Ручная стоимость провинции в админ-редакторе остаётся как override.
                       </div>
                       <button onClick={saveColonization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />

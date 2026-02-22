@@ -1,5 +1,5 @@
 import { Dialog, Listbox } from "@headlessui/react";
-import { Check, ChevronDown, Flag, Lock, Settings, Trophy, X } from "lucide-react";
+import { Check, ChevronDown, Coins, Flag, Lock, Settings, Trophy, X } from "lucide-react";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 
@@ -7,13 +7,16 @@ type Props = {
   open: boolean;
   provinceId: string | null;
   provinceName: string | null;
+  provinceAreaKm2?: number | null;
   ownerCountryId: string | null;
   colonizationCost: number;
+  colonizationDucatsCost?: number;
   colonizationDisabled: boolean;
   progressByCountry: Record<string, number>;
   currentCountryId: string | null;
   countries: Country[];
   colonizationIconUrl?: string | null;
+  ducatsIconUrl?: string | null;
   colonizationLimit?: { active: number; max: number } | null;
   colonizedProvinceOptions?: Array<{ id: string; name: string }>;
   selectedColonizedProvinceId?: string | null;
@@ -32,13 +35,16 @@ export function ColonizationModal({
   open,
   provinceId,
   provinceName,
+  provinceAreaKm2,
   ownerCountryId,
   colonizationCost,
+  colonizationDucatsCost = 0,
   colonizationDisabled,
   progressByCountry,
   currentCountryId,
   countries,
   colonizationIconUrl,
+  ducatsIconUrl,
   colonizationLimit,
   colonizedProvinceOptions = [],
   selectedColonizedProvinceId,
@@ -52,6 +58,10 @@ export function ColonizationModal({
   canOpenAdminProvinceEditor,
   onOpenAdminProvinceEditor,
 }: Props) {
+  const formattedAreaKm2 =
+    provinceAreaKm2 != null && Number.isFinite(provinceAreaKm2) && provinceAreaKm2 > 0
+      ? `${new Intl.NumberFormat("ru-RU").format(Math.round(provinceAreaKm2))} км²`
+      : null;
   const countryById = new Map(countries.map((c) => [c.id, c] as const));
   const participants = Object.entries(progressByCountry).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const leadersTop3 = participants.slice(0, 3);
@@ -72,6 +82,7 @@ export function ColonizationModal({
                 <span className="truncate">Колонизация: {provinceName ?? provinceId ?? "Провинция"}</span>
               </Dialog.Title>
               {provinceId && <div className="text-xs text-white/50">{provinceId}</div>}
+              {formattedAreaKm2 && <div className="text-xs text-white/45">Площадь: {formattedAreaKm2}</div>}
             </div>
             <Tooltip content="Закрыть окно колонизации" placement="left">
               <button onClick={onClose} className="panel-border inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-white/70 hover:text-white">
@@ -128,6 +139,17 @@ export function ColonizationModal({
                 )}
                 <span>{colonizationCost}</span>
               </div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-white/60">
+                <span>Цена в дукатах (по площади):</span>
+                <span className="inline-flex items-center gap-1 text-amber-300">
+                  {ducatsIconUrl ? (
+                    <img src={ducatsIconUrl} alt="" className="h-3.5 w-3.5 rounded-sm object-contain" />
+                  ) : (
+                    <Coins size={13} className="text-amber-300" />
+                  )}
+                  <span>{colonizationDucatsCost}</span>
+                </span>
+              </div>
               <div className="mt-2 text-xs text-white/60">
                 Статус:{" "}
                 {ownerCountryId
@@ -136,6 +158,7 @@ export function ColonizationModal({
                     ? "запрещено"
                     : "доступно"}
               </div>
+              {formattedAreaKm2 && <div className="mt-1 text-xs text-white/60">Площадь провинции: {formattedAreaKm2}</div>}
               <div className="mt-1 flex items-center justify-between gap-2 text-xs text-white/60">
                 <span>Ваш прогресс: {myProgress.toFixed(1)} / {colonizationCost}</span>
                 <span className="text-emerald-300">{myProgressPct.toFixed(0)}%</span>

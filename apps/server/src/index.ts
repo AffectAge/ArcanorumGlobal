@@ -93,20 +93,66 @@ if (!existsSync(prebuiltTileRoot)) {
 const adm1GeojsonPath = resolve(__dirname, "../data/adm1.geojson");
 const adm1Geojson = JSON.parse(readFileSync(adm1GeojsonPath, "utf8")) as {
   type: "FeatureCollection";
-  features: Array<{ properties?: Record<string, unknown> }>;
+  features: Array<{ properties?: Record<string, unknown>; geometry?: { type?: string; coordinates?: unknown } | null }>;
 };
+const EARTH_RADIUS_METERS = 6_378_137;
+
+function ringAreaOnSphereSqMeters(ring: Array<[number, number]>): number {
+  if (!Array.isArray(ring) || ring.length < 3) return 0;
+  let total = 0;
+  for (let i = 0; i < ring.length; i += 1) {
+    const p1 = ring[i];
+    const p2 = ring[(i + 1) % ring.length];
+    if (!p1 || !p2) continue;
+    const lon1 = (p1[0] * Math.PI) / 180;
+    const lon2 = (p2[0] * Math.PI) / 180;
+    const lat1 = (p1[1] * Math.PI) / 180;
+    const lat2 = (p2[1] * Math.PI) / 180;
+    total += (lon2 - lon1) * (2 + Math.sin(lat1) + Math.sin(lat2));
+  }
+  return Math.abs(total * EARTH_RADIUS_METERS * EARTH_RADIUS_METERS * 0.5);
+}
+
+function polygonAreaSqMeters(coords: unknown): number {
+  if (!Array.isArray(coords) || coords.length === 0) return 0;
+  const rings = coords as Array<Array<[number, number]>>;
+  let area = 0;
+  for (let i = 0; i < rings.length; i += 1) {
+    const ringArea = ringAreaOnSphereSqMeters(rings[i] ?? []);
+    area += i === 0 ? ringArea : -ringArea;
+  }
+  return Math.max(0, area);
+}
+
+function geometryAreaKm2(geometry: { type?: string; coordinates?: unknown } | null | undefined): number {
+  if (!geometry?.type) return 0;
+  if (geometry.type === "Polygon") {
+    return polygonAreaSqMeters(geometry.coordinates) / 1_000_000;
+  }
+  if (geometry.type === "MultiPolygon" && Array.isArray(geometry.coordinates)) {
+    return geometry.coordinates.reduce((sum, polygon) => sum + polygonAreaSqMeters(polygon) / 1_000_000, 0);
+  }
+  return 0;
+}
 const adm1ProvinceIndex = (() => {
-  const byId = new Map<string, { id: string; name: string }>();
+  const byId = new Map<string, { id: string; name: string; areaKm2: number }>();
   for (const feature of adm1Geojson.features) {
     const properties = feature.properties as Record<string, unknown> | undefined;
     const id = readProvinceId(properties);
     if (!id) continue;
-    if (!byId.has(id)) {
-      byId.set(id, { id, name: readProvinceName(properties) });
+    const areaKm2 = geometryAreaKm2(feature.geometry);
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, { id, name: readProvinceName(properties), areaKm2 });
+      continue;
     }
+    existing.areaKm2 += areaKm2;
   }
-  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, "ru") || a.id.localeCompare(b.id));
+  return [...byId.values()]
+    .map((province) => ({ ...province, areaKm2: Math.max(0, Math.round(province.areaKm2)) }))
+    .sort((a, b) => a.name.localeCompare(b.name, "ru") || a.id.localeCompare(b.id));
 })();
+const adm1ProvinceAreaById = new Map(adm1ProvinceIndex.map((province) => [province.id, province.areaKm2] as const));
 
 const app = express();
 app.use(cors());
@@ -131,7 +177,6 @@ let turnId = 1;
 const onlinePlayers = new Set<string>();
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
 const resolveReadyByTurn = new Map<number, Set<string>>();
-const COLONIZATION_ORDER_COST_DUCATS = 4;
 const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
 const DEFAULT_COLONIZATION_POINTS_PER_TURN = 30;
 const COLONIZATION_GOAL = 100;
@@ -146,6 +191,8 @@ type GameSettings = {
   colonization: {
     maxActiveColonizations: number;
     pointsPerTurn: number;
+    pointsCostPer1000Km2: number;
+    ducatsCostPer1000Km2: number;
   };
   customization: {
     renameDucats: number;
@@ -174,6 +221,8 @@ const defaultGameSettings = (): GameSettings => ({
   colonization: {
     maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
     pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
+    pointsCostPer1000Km2: 5,
+    ducatsCostPer1000Km2: 5,
   },
   customization: {
     renameDucats: 20,
@@ -271,6 +320,14 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.colonization?.pointsPerTurn === "number"
             ? Math.max(0, Math.floor(next.colonization.pointsPerTurn))
             : defaults.colonization.pointsPerTurn,
+        pointsCostPer1000Km2:
+          typeof next.colonization?.pointsCostPer1000Km2 === "number"
+            ? Math.max(1, Math.floor(next.colonization.pointsCostPer1000Km2))
+            : defaults.colonization.pointsCostPer1000Km2,
+        ducatsCostPer1000Km2:
+          typeof next.colonization?.ducatsCostPer1000Km2 === "number"
+            ? Math.max(0, Math.floor(next.colonization.ducatsCostPer1000Km2))
+            : defaults.colonization.ducatsCostPer1000Km2,
       },
       customization: {
         renameDucats:
@@ -443,6 +500,10 @@ async function tryImportPersistentStateFromFile(): Promise<boolean> {
     if (!ok) {
       return false;
     }
+    const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
+    if (migratedLegacyCosts > 0) {
+      console.log(`[state] Migrated legacy province colonization costs from JSON import: ${migratedLegacyCosts}`);
+    }
     await persistStateToDb();
     console.log("[state] Imported persistent game state from JSON file into database");
     return true;
@@ -463,6 +524,11 @@ async function loadPersistentState(): Promise<void> {
         ordersByTurn: row.ordersByTurnJson,
         resolveReadyByTurn: row.resolveReadyByTurnJson,
       });
+      const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
+      if (migratedLegacyCosts > 0) {
+        console.log(`[state] Migrated legacy province colonization costs from DB state: ${migratedLegacyCosts}`);
+        await persistStateToDb();
+      }
       return;
     }
 
@@ -505,18 +571,100 @@ function ensureCountryInWorldBase(countryId: string): void {
   }
 }
 
+function getProvinceAreaKm2(provinceId: string): number {
+  return Math.max(1, adm1ProvinceAreaById.get(provinceId) ?? 1_000);
+}
+
+function getProvinceDerivedColonizationCosts(
+  provinceId: string,
+  rates?: { pointsCostPer1000Km2: number; ducatsCostPer1000Km2: number },
+): { pointsCost: number; ducatsCost: number } {
+  const areaKm2 = getProvinceAreaKm2(provinceId);
+  const areaFactor = Math.max(0.001, areaKm2 / 1000);
+  const pointsRate = rates?.pointsCostPer1000Km2 ?? gameSettings.colonization.pointsCostPer1000Km2;
+  const ducatsRate = rates?.ducatsCostPer1000Km2 ?? gameSettings.colonization.ducatsCostPer1000Km2;
+  return {
+    pointsCost: Math.max(1, Math.round(pointsRate * areaFactor)),
+    ducatsCost: Math.max(0, Math.round(ducatsRate * areaFactor)),
+  };
+}
+
 function getProvinceColonizationConfig(provinceId: string): { cost: number; disabled: boolean } {
   const existing = worldBase.provinceColonizationByProvince[provinceId];
   if (existing && typeof existing.cost === "number" && Number.isFinite(existing.cost)) {
+    const looksLikeLegacyAutoDefault = !existing.disabled && Math.floor(existing.cost) === DEFAULT_PROVINCE_COLONIZATION_COST;
+    if (looksLikeLegacyAutoDefault) {
+      const derived = getProvinceDerivedColonizationCosts(provinceId);
+      return { cost: derived.pointsCost, disabled: false };
+    }
     return {
       cost: Math.max(1, Math.floor(existing.cost)),
       disabled: Boolean(existing.disabled),
     };
   }
+  const derived = getProvinceDerivedColonizationCosts(provinceId);
+  return { cost: derived.pointsCost, disabled: false };
+}
 
-  const next = { cost: DEFAULT_PROVINCE_COLONIZATION_COST, disabled: false };
-  worldBase.provinceColonizationByProvince[provinceId] = next;
-  return next;
+function migrateLegacyProvinceColonizationCosts(): number {
+  let migrated = 0;
+  for (const [provinceId, cfg] of Object.entries(worldBase.provinceColonizationByProvince ?? {})) {
+    if (!cfg || typeof cfg !== "object") continue;
+    const normalizedCost = Number(cfg.cost);
+    const isLegacyDefault =
+      Number.isFinite(normalizedCost) &&
+      Math.floor(normalizedCost) === DEFAULT_PROVINCE_COLONIZATION_COST &&
+      !cfg.disabled;
+    if (!isLegacyDefault) continue;
+    const derived = getProvinceDerivedColonizationCosts(provinceId);
+    worldBase.provinceColonizationByProvince[provinceId] = {
+      cost: derived.pointsCost,
+      disabled: false,
+    };
+    migrated += 1;
+  }
+  return migrated;
+}
+
+function recalculateAllProvinceColonizationCosts(previousRates?: {
+  pointsCostPer1000Km2: number;
+  ducatsCostPer1000Km2: number;
+}): number {
+  let updated = 0;
+  for (const province of adm1ProvinceIndex) {
+    const current = worldBase.provinceColonizationByProvince[province.id];
+    const derived = getProvinceDerivedColonizationCosts(province.id);
+    const nextCost = derived.pointsCost;
+    const nextDisabled = Boolean(current?.disabled);
+    const prevCost = current && typeof current.cost === "number" && Number.isFinite(current.cost) ? Math.max(1, Math.floor(current.cost)) : null;
+    const previousDerivedCost = previousRates
+      ? getProvinceDerivedColonizationCosts(province.id, previousRates).pointsCost
+      : null;
+    const shouldPreserveManualCost =
+      current != null &&
+      prevCost != null &&
+      previousDerivedCost != null &&
+      prevCost !== previousDerivedCost;
+    if (shouldPreserveManualCost) {
+      if (!current || Boolean(current.disabled) === nextDisabled) {
+        continue;
+      }
+      worldBase.provinceColonizationByProvince[province.id] = {
+        cost: prevCost,
+        disabled: nextDisabled,
+      };
+      continue;
+    }
+    if (prevCost === nextCost && Boolean(current?.disabled) === nextDisabled) {
+      continue;
+    }
+    worldBase.provinceColonizationByProvince[province.id] = {
+      cost: nextCost,
+      disabled: nextDisabled,
+    };
+    updated += 1;
+  }
+  return updated;
 }
 
 function normalizeProvinceColonizationMap(
@@ -751,23 +899,48 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
 
     const countryResource = worldBase.resourcesByCountry[countryId];
     const countryColonizationPoints = countryResource?.colonization ?? gameSettings.colonization.pointsPerTurn;
+    let remainingCountrySupportDucats = Math.max(0, countryResource?.ducats ?? 0);
     if (countryColonizationPoints <= 0) {
       continue;
     }
     const gain = countryColonizationPoints / provinces.length;
+    let spentColonizationPoints = 0;
+    let spentSupportDucats = 0;
     for (const provinceId of provinces) {
       if (worldBase.provinceOwner[provinceId]) {
         continue;
       }
-      if (getProvinceColonizationConfig(provinceId).disabled) {
+      const provinceConfig = getProvinceColonizationConfig(provinceId);
+      if (provinceConfig.disabled) {
         continue;
       }
       const byCountry = worldBase.colonyProgressByProvince[provinceId] ?? {};
-      byCountry[countryId] = (byCountry[countryId] ?? 0) + gain;
+      const currentProgress = byCountry[countryId] ?? 0;
+      const provinceCost = provinceConfig.cost || COLONIZATION_GOAL;
+      const derivedCosts = getProvinceDerivedColonizationCosts(provinceId);
+      const ducatRatio = provinceCost > 0 ? derivedCosts.ducatsCost / provinceCost : 0;
+      const remainingToCapture = Math.max(0, provinceCost - currentProgress);
+      if (remainingToCapture <= 0) {
+        continue;
+      }
+      const spentDucatsForCurrentProgress = currentProgress * ducatRatio;
+      const remainingProvinceDucats = Math.max(0, derivedCosts.ducatsCost - spentDucatsForCurrentProgress);
+      const maxGainByCountryDucats = ducatRatio > 0 ? remainingCountrySupportDucats / ducatRatio : Number.POSITIVE_INFINITY;
+      const maxGainByProvinceDucats = ducatRatio > 0 ? remainingProvinceDucats / ducatRatio : Number.POSITIVE_INFINITY;
+      const appliedGain = Math.min(gain, remainingToCapture, maxGainByCountryDucats, maxGainByProvinceDucats);
+      if (appliedGain <= 0) {
+        continue;
+      }
+      const appliedDucats = ducatRatio > 0 ? Math.min(remainingProvinceDucats, appliedGain * ducatRatio, remainingCountrySupportDucats) : 0;
+      byCountry[countryId] = currentProgress + appliedGain;
+      spentColonizationPoints += appliedGain;
+      spentSupportDucats += appliedDucats;
+      remainingCountrySupportDucats = Math.max(0, remainingCountrySupportDucats - appliedDucats);
       worldBase.colonyProgressByProvince[provinceId] = byCountry;
     }
     if (countryResource) {
-      countryResource.colonization = 0;
+      countryResource.colonization = Math.max(0, countryResource.colonization - spentColonizationPoints);
+      countryResource.ducats = Math.max(0, countryResource.ducats - spentSupportDucats);
     }
 
   }
@@ -917,6 +1090,8 @@ const gameSettingsSchema = z.object({
     .object({
       maxActiveColonizations: z.coerce.number().int().min(1).max(1000).optional(),
       pointsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      pointsCostPer1000Km2: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
+      ducatsCostPer1000Km2: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
     .optional(),
   customization: z
@@ -1043,12 +1218,30 @@ app.patch("/admin/game-settings", async (req, res) => {
   }
 
   const nextColonization = parsed.data.colonization;
+  let provinceColonizationCostsRecalculated = 0;
   if (nextColonization) {
+    const prevPointsCostPer1000Km2 = gameSettings.colonization.pointsCostPer1000Km2;
+    const prevDucatsCostPer1000Km2 = gameSettings.colonization.ducatsCostPer1000Km2;
     if (typeof nextColonization.maxActiveColonizations === "number") {
       gameSettings.colonization.maxActiveColonizations = nextColonization.maxActiveColonizations;
     }
     if (typeof nextColonization.pointsPerTurn === "number") {
       gameSettings.colonization.pointsPerTurn = nextColonization.pointsPerTurn;
+    }
+    if (typeof nextColonization.pointsCostPer1000Km2 === "number") {
+      gameSettings.colonization.pointsCostPer1000Km2 = nextColonization.pointsCostPer1000Km2;
+    }
+    if (typeof nextColonization.ducatsCostPer1000Km2 === "number") {
+      gameSettings.colonization.ducatsCostPer1000Km2 = nextColonization.ducatsCostPer1000Km2;
+    }
+    const colonizationPriceFormulaChanged =
+      prevPointsCostPer1000Km2 !== gameSettings.colonization.pointsCostPer1000Km2 ||
+      prevDucatsCostPer1000Km2 !== gameSettings.colonization.ducatsCostPer1000Km2;
+    if (colonizationPriceFormulaChanged) {
+      provinceColonizationCostsRecalculated = recalculateAllProvinceColonizationCosts({
+        pointsCostPer1000Km2: prevPointsCostPer1000Km2,
+        ducatsCostPer1000Km2: prevDucatsCostPer1000Km2,
+      });
     }
   }
 
@@ -1083,6 +1276,9 @@ app.patch("/admin/game-settings", async (req, res) => {
   ].filter((v): v is string => Boolean(v));
 
   savePersistentState();
+  if (provinceColonizationCostsRecalculated > 0) {
+    broadcastWorldBaseSync(wss);
+  }
   if (changedSections.length > 0) {
     broadcast(wss, {
       type: "NEWS_EVENT",
@@ -1090,7 +1286,9 @@ app.patch("/admin/game-settings", async (req, res) => {
         turn: turnId,
         category: "system",
         title: "Настройки игры изменены",
-        message: `Администратор обновил разделы: ${changedSections.join(", ")}`,
+        message:
+          `Администратор обновил разделы: ${changedSections.join(", ")}` +
+          (provinceColonizationCostsRecalculated > 0 ? `; пересчитаны цены провинций: ${provinceColonizationCostsRecalculated}` : ""),
         countryId: auth.countryId,
         priority: "medium",
         visibility: "public",
@@ -1161,15 +1359,6 @@ app.post("/country/colonization/start", async (req, res) => {
     });
   }
 
-  if (resources.ducats < COLONIZATION_ORDER_COST_DUCATS) {
-    return res.status(400).json({
-      error: "INSUFFICIENT_DUCATS",
-      required: COLONIZATION_ORDER_COST_DUCATS,
-      available: resources.ducats,
-    });
-  }
-
-  resources.ducats -= COLONIZATION_ORDER_COST_DUCATS;
   worldBase.colonyProgressByProvince[provinceId] = {
     ...existing,
     [auth.countryId]: 0,
@@ -1190,7 +1379,7 @@ app.post("/country/colonization/start", async (req, res) => {
     }),
   });
 
-  return res.json({ ok: true, worldBase, turnId, chargedDucats: COLONIZATION_ORDER_COST_DUCATS });
+  return res.json({ ok: true, worldBase, turnId, chargedDucats: 0 });
 });
 
 app.post("/country/colonization/cancel", async (req, res) => {
@@ -1276,6 +1465,7 @@ app.get("/admin/provinces", async (req, res) => {
     return {
       id: provinceId,
       name: provinceName,
+      areaKm2: province.areaKm2,
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
       colonizationDisabled: cfg.disabled,
@@ -1284,6 +1474,16 @@ app.get("/admin/provinces", async (req, res) => {
   });
 
   return res.json({ provinces });
+});
+
+app.get("/provinces/index", async (_req, res) => {
+  return res.json({
+    provinces: adm1ProvinceIndex.map((province) => ({
+      id: province.id,
+      name: province.name,
+      areaKm2: province.areaKm2,
+    })),
+  });
 });
 
 app.patch("/admin/provinces/:provinceId", async (req, res) => {
@@ -1355,6 +1555,7 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
     province: {
       id: provinceId,
       name: provinceIndexEntry.name,
+      areaKm2: provinceIndexEntry.areaKm2,
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
       colonizationDisabled: cfg.disabled,
@@ -2061,16 +2262,6 @@ wss.on("connection", (socket) => {
           return;
         }
 
-        if (countryResource.ducats < COLONIZATION_ORDER_COST_DUCATS) {
-          send({
-            type: "ERROR",
-            code: "NO_RESOURCES",
-            message: `Недостаточно дукатов для колонизации: нужно ${COLONIZATION_ORDER_COST_DUCATS}, доступно ${countryResource.ducats}`,
-          });
-          return;
-        }
-
-        countryResource.ducats -= COLONIZATION_ORDER_COST_DUCATS;
       }
 
       if (playerOrders.length >= 8) {

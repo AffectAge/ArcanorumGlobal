@@ -356,6 +356,14 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
 
                       {selectedProvince && (
                         <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-3">
+                          <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300">
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                              <span>ID: <span className="text-slate-100">{selectedProvince.id}</span></span>
+                              <span>
+                                Площадь: <span className="text-slate-100">{new Intl.NumberFormat("ru-RU").format(Math.round(selectedProvince.areaKm2 ?? 0))} км²</span>
+                              </span>
+                            </div>
+                          </div>
                           <div className="grid gap-3 md:grid-cols-2">
                             <div>
                               <label className="mb-1 block text-xs text-slate-300">Стоимость колонизации</label>

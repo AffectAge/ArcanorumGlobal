@@ -7,7 +7,7 @@ import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 import { ColonizationModal } from "./ColonizationModal";
 import { ProvinceHoverTooltip } from "./ProvinceHoverTooltip";
-import { cancelCountryColonization, startCountryColonization } from "../lib/api";
+import { cancelCountryColonization, fetchProvinceIndex, startCountryColonization } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 
 type Props = {
@@ -17,7 +17,9 @@ type Props = {
   onQueueColonizeOrder: (provinceId: string) => void;
   onOpenAdminProvinceEditor?: (provinceId: string) => void;
   colonizationIconUrl?: string | null;
+  ducatsIconUrl?: string | null;
   maxActiveColonizations?: number;
+  colonizationCostPer1000Km2?: { points: number; ducats: number };
 };
 
 type MapModeStyle = {
@@ -134,7 +136,9 @@ export function MapView({
   onQueueColonizeOrder,
   onOpenAdminProvinceEditor,
   colonizationIconUrl,
+  ducatsIconUrl,
   maxActiveColonizations,
+  colonizationCostPer1000Km2,
 }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -145,6 +149,7 @@ export function MapView({
   const prevQueuedColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
   const prevConfiguredColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
   const provinceNamesByIdRef = useRef<Map<string, string>>(new Map());
+  const provinceMetaByIdRef = useRef<Map<string, { name: string; areaKm2: number }>>(new Map());
 
   const [interactionLocked, setInteractionLocked] = useState(false);
   const [showProvinceBorders, setShowProvinceBorders] = useState(true);
@@ -155,6 +160,7 @@ export function MapView({
     x: number;
     y: number;
     provinceName: string;
+    areaKm2: number | null;
     ownerName: string;
     colonizers: Array<{ countryId: string; countryName: string; countryColor: string; percent: number; hasQueuedOrder: boolean }>;
   } | null>(null);
@@ -210,6 +216,31 @@ export function MapView({
     ordersCountRef.current = ordersCountByProvince;
   }, [ordersCountByProvince]);
 
+  const getDerivedProvinceCosts = (provinceId: string) => {
+    const areaKm2 = Math.max(1, provinceMetaByIdRef.current.get(provinceId)?.areaKm2 ?? 1000);
+    const factor = Math.max(0.001, areaKm2 / 1000);
+    return {
+      points: Math.max(1, Math.round((colonizationCostPer1000Km2?.points ?? 5) * factor)),
+      ducats: Math.max(0, Math.round((colonizationCostPer1000Km2?.ducats ?? 5) * factor)),
+    };
+  };
+  const getEffectiveProvinceColonizationConfig = (
+    provinceId: string,
+    base: { provinceColonizationByProvince?: Record<string, { cost: number; disabled: boolean }> } | null | undefined,
+  ) => {
+    const override = base?.provinceColonizationByProvince?.[provinceId];
+    const derived = getDerivedProvinceCosts(provinceId);
+    if (!override) {
+      return { cost: derived.points, disabled: false };
+    }
+    const normalizedCost = Math.max(1, Math.floor(Number(override.cost ?? derived.points)));
+    const isLegacyDefault = !override.disabled && normalizedCost === 100;
+    return {
+      cost: isLegacyDefault ? derived.points : normalizedCost,
+      disabled: Boolean(override.disabled),
+    };
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -241,6 +272,28 @@ export function MapView({
       cancelled = true;
     };
   }, [apiBase]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchProvinceIndex()
+      .then((items) => {
+        if (cancelled) return;
+        const next = new Map<string, { name: string; areaKm2: number }>();
+        for (const item of items) {
+          next.set(item.id, { name: item.name, areaKm2: item.areaKm2 });
+          provinceNamesByIdRef.current.set(item.id, item.name);
+        }
+        provinceMetaByIdRef.current = next;
+      })
+      .catch(() => {
+        if (!cancelled) {
+          provinceMetaByIdRef.current = new Map();
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selectedProvinceOrdersCount = selectedProvinceId ? (ordersCountByProvince.get(selectedProvinceId) ?? 0) : 0;
   const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? null) : null;
@@ -284,12 +337,14 @@ export function MapView({
   }, [ordersByTurn, turnId]);
   const selectedColonyProgress = selectedProvinceId ? (worldBase?.colonyProgressByProvince?.[selectedProvinceId] ?? {}) : {};
   const selectedColonyProgressList = Object.entries(selectedColonyProgress).sort((a, b) => b[1] - a[1]);
+  const selectedProvinceAreaKm2 = selectedProvinceId ? (provinceMetaByIdRef.current.get(selectedProvinceId)?.areaKm2 ?? null) : null;
   const selectedIsNeutral = selectedProvinceId ? !worldBase?.provinceOwner[selectedProvinceId] : false;
   const selectedColonizationCfg = selectedProvinceId
-    ? (worldBase?.provinceColonizationByProvince?.[selectedProvinceId] ?? { cost: 100, disabled: false })
+    ? getEffectiveProvinceColonizationConfig(selectedProvinceId, worldBase)
     : { cost: 100, disabled: false };
   const selectedIsColonizationDisabled = Boolean(selectedColonizationCfg.disabled);
   const selectedColonizationCost = Math.max(1, Math.floor(selectedColonizationCfg.cost ?? 100));
+  const selectedColonizationDucatsCost = selectedProvinceId ? getDerivedProvinceCosts(selectedProvinceId).ducats : 0;
   const selectedMyColonyProgress = auth?.countryId && selectedProvinceId ? (selectedColonyProgress[auth.countryId] ?? null) : null;
   const selectedCanCancelColonization = selectedProvinceId != null && selectedMyColonyProgress != null;
   const selectedCanStartColonization =
@@ -458,9 +513,10 @@ export function MapView({
       const ownerId = worldBaseRef.current?.provinceOwner[id] ?? null;
       const ownerName = ownerId ? (countryByIdRef.current.get(ownerId)?.name ?? ownerId) : "Нейтральная";
       const progressByCountry = worldBaseRef.current?.colonyProgressByProvince?.[id] ?? {};
+      const effectiveProvinceCfg = getEffectiveProvinceColonizationConfig(id, worldBaseRef.current);
       const provinceColonizationCost = Math.max(
         1,
-        Math.floor(worldBaseRef.current?.provinceColonizationByProvince?.[id]?.cost ?? 100),
+        Math.floor(effectiveProvinceCfg.cost),
       );
       const storeState = useGameStore.getState();
       const queuedByPlayer = storeState.ordersByTurn.get(storeState.turnId);
@@ -506,6 +562,7 @@ export function MapView({
         x: e.point.x,
         y: e.point.y,
         provinceName: name,
+        areaKm2: provinceMetaByIdRef.current.get(id)?.areaKm2 ?? null,
         ownerName,
         colonizers,
       });
@@ -911,6 +968,7 @@ export function MapView({
         x={hoverTooltip?.x ?? 0}
         y={hoverTooltip?.y ?? 0}
         provinceName={hoverTooltip?.provinceName ?? ""}
+        areaKm2={hoverTooltip?.areaKm2 ?? null}
         ownerName={hoverTooltip?.ownerName ?? ""}
         colonizers={hoverTooltip?.colonizers ?? []}
       />
@@ -1165,13 +1223,16 @@ export function MapView({
         open={colonizationModalOpen && Boolean(selectedProvinceId)}
         provinceId={selectedProvinceId}
         provinceName={selectedProvinceName}
+        provinceAreaKm2={selectedProvinceAreaKm2}
         ownerCountryId={selectedOwnerId}
         colonizationCost={selectedColonizationCost}
+        colonizationDucatsCost={selectedColonizationDucatsCost}
         colonizationDisabled={selectedIsColonizationDisabled}
         progressByCountry={selectedColonyProgress}
         currentCountryId={auth?.countryId ?? null}
         countries={countries}
         colonizationIconUrl={colonizationIconUrl}
+        ducatsIconUrl={ducatsIconUrl}
         colonizationLimit={
           auth?.countryId && typeof maxActiveColonizations === "number"
             ? { active: currentCountryActiveColonizationTargets.size, max: Math.max(1, maxActiveColonizations) }

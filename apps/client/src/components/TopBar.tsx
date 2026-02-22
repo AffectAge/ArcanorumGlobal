@@ -1,5 +1,6 @@
 import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
 import { Tooltip } from "./Tooltip";
 
 type Resources = {
@@ -28,6 +29,7 @@ type Props = {
   resourceIconUrls?: Partial<Record<(typeof cards)[number]["key"], string | null>>;
   resourceGrowthByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
   resourceExpenseByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
+  colonizationLimit?: { active: number; max: number } | null;
 };
 
 const cards = [
@@ -78,7 +80,39 @@ export function TopBar({
   resourceIconUrls,
   resourceGrowthByTurn,
   resourceExpenseByTurn,
+  colonizationLimit,
 }: Props) {
+  const hoverOpenTimerRef = useRef<number | null>(null);
+  const [hoveredResource, setHoveredResource] = useState<(typeof cards)[number]["key"] | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (hoverOpenTimerRef.current !== null) {
+        window.clearTimeout(hoverOpenTimerRef.current);
+      }
+    };
+  }, []);
+
+  const clearHoverTimer = () => {
+    if (hoverOpenTimerRef.current !== null) {
+      window.clearTimeout(hoverOpenTimerRef.current);
+      hoverOpenTimerRef.current = null;
+    }
+  };
+
+  const scheduleHoverOpen = (key: (typeof cards)[number]["key"]) => {
+    clearHoverTimer();
+    hoverOpenTimerRef.current = window.setTimeout(() => {
+      setHoveredResource(key);
+      hoverOpenTimerRef.current = null;
+    }, 120);
+  };
+
+  const closeHover = (key: (typeof cards)[number]["key"]) => {
+    clearHoverTimer();
+    setHoveredResource((prev) => (prev === key ? null : prev));
+  };
+
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
@@ -100,45 +134,113 @@ export function TopBar({
             const growth = Math.max(0, Math.floor(resourceGrowthByTurn?.[card.key] ?? 0));
             const expense = Math.max(0, Math.floor(resourceExpenseByTurn?.[card.key] ?? 0));
             const net = growth - expense;
+            const netColorClass =
+              net > 0 ? "text-emerald-300/90" : net < 0 ? "text-rose-300/90" : "text-white/85";
+            const netDetailColorClass = net > 0 ? "text-emerald-300" : net < 0 ? "text-rose-300" : "text-white";
             return (
-              <Tooltip key={card.key} content={card.tip} placement="top">
-                <div className="panel-border flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-xs">
-                  {customIconUrl ? (
-                    <img src={customIconUrl} alt="" className="h-[18px] w-[18px] rounded-sm object-contain" />
-                  ) : (
-                    <Icon size={17} className="text-arc-accent" />
-                  )}
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    <motion.strong
-                      key={`${card.key}-value-${resources[card.key]}`}
-                      initial={{ opacity: 0, y: 4, scale: 0.97 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -4, scale: 0.97 }}
-                      transition={{ duration: 0.16, ease: "easeOut" }}
-                    >
-                      {formatCompact(resources[card.key])}
-                    </motion.strong>
+              <div
+                key={card.key}
+                className="relative"
+                onMouseEnter={() => scheduleHoverOpen(card.key)}
+                onMouseLeave={() => closeHover(card.key)}
+              >
+                  <button
+                    type="button"
+                    className="panel-border flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-xs transition hover:bg-white/10"
+                    aria-expanded={hoveredResource === card.key}
+                    aria-label={`${card.label}: открыть детали`}
+                  >
+                    {customIconUrl ? (
+                      <img src={customIconUrl} alt="" className="h-[18px] w-[18px] rounded-sm object-contain" />
+                    ) : (
+                      <Icon size={17} className="text-arc-accent" />
+                    )}
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <motion.strong
+                        key={`${card.key}-value-${resources[card.key]}`}
+                        initial={{ opacity: 0, y: 4, scale: 0.97 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.97 }}
+                        transition={{ duration: 0.16, ease: "easeOut" }}
+                      >
+                        {formatCompact(resources[card.key])}
+                      </motion.strong>
+                    </AnimatePresence>
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <motion.span
+                        key={`${card.key}-deltas-${growth}-${expense}`}
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.16, ease: "easeOut" }}
+                        className="inline-flex items-center"
+                      >
+                        <span className={netColorClass}>
+                          {net >= 0 ? `+${formatCompact(net)}` : formatCompact(net)}
+                        </span>
+                      </motion.span>
+                    </AnimatePresence>
+                  </button>
+                  <AnimatePresence>
+                    {hoveredResource === card.key && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 6, scale: 1 }}
+                        exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                        transition={{ duration: 0.16, ease: "easeOut" }}
+                        className="absolute left-0 top-full z-20 mt-1 min-w-[220px] rounded-xl"
+                      >
+                        <div className="glass panel-border rounded-xl bg-[#0b111b]/90 p-3 text-xs shadow-2xl backdrop-blur-xl">
+                          <div className="mb-2 flex items-center gap-2 text-white/90">
+                            {customIconUrl ? (
+                              <img src={customIconUrl} alt="" className="h-4 w-4 rounded-sm object-contain" />
+                            ) : (
+                              <Icon size={14} className="text-arc-accent" />
+                            )}
+                            <span className="font-semibold">{card.label}</span>
+                          </div>
+                          <div className="mb-2 text-[11px] text-white/55">{card.tip}</div>
+                          <div className="space-y-1 text-white/75">
+                            <div className="flex items-center justify-between gap-3">
+                              <span>Текущее значение</span>
+                              <span className="text-white">{formatCompact(resources[card.key])}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span>Прирост за ход</span>
+                              <span className="text-emerald-300">+{formatCompact(growth)}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span>Расход за ход</span>
+                              <span className="text-rose-300">-{formatCompact(expense)}</span>
+                            </div>
+                            <div className="mt-1 flex items-center justify-between gap-3 border-t border-white/10 pt-1">
+                              <span>Итог за ход</span>
+                              <span className={netDetailColorClass}>
+                                {net >= 0 ? `+${formatCompact(net)}` : formatCompact(net)}
+                              </span>
+                            </div>
+                            {card.key === "colonization" && colonizationLimit && (
+                              <div className="mt-1 flex items-center justify-between gap-3 border-t border-white/10 pt-1">
+                                <span>Лимит колонизаций</span>
+                                <span
+                                  className={
+                                    colonizationLimit.active >= colonizationLimit.max
+                                      ? "text-rose-300"
+                                      : colonizationLimit.active > 0
+                                        ? "text-amber-300"
+                                        : "text-emerald-300"
+                                  }
+                                >
+                                  {colonizationLimit.active} / {colonizationLimit.max}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
                   </AnimatePresence>
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    <motion.span
-                      key={`${card.key}-deltas-${growth}-${expense}`}
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      transition={{ duration: 0.16, ease: "easeOut" }}
-                      className="inline-flex items-center gap-1"
-                    >
-                      <span className="text-emerald-300/90">+{formatCompact(growth)}</span>
-                      <span className="text-white/25">•</span>
-                      <span className="text-rose-300/90">-{formatCompact(expense)}</span>
-                      <span className="text-white/25">•</span>
-                      <span className={net >= 0 ? "text-cyan-300/90" : "text-rose-300/90"}>
-                        {net >= 0 ? `+${formatCompact(net)}` : formatCompact(net)}
-                      </span>
-                    </motion.span>
-                  </AnimatePresence>
-                </div>
-              </Tooltip>
+              </div>
             );
           })}
         </div>

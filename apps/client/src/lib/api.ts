@@ -222,6 +222,8 @@ export type GameSettings = {
   colonization: {
     maxActiveColonizations: number;
     pointsPerTurn: number;
+    pointsCostPer1000Km2: number;
+    ducatsCostPer1000Km2: number;
   };
   customization: {
     renameDucats: number;
@@ -253,6 +255,21 @@ export async function fetchPublicCustomizationPrices(): Promise<CustomizationPri
 
   const data = (await response.json()) as { customization: CustomizationPrices };
   return data.customization;
+}
+
+export type ProvinceIndexItem = {
+  id: string;
+  name: string;
+  areaKm2: number;
+};
+
+export async function fetchProvinceIndex(): Promise<ProvinceIndexItem[]> {
+  const response = await fetch(`${API}/provinces/index`);
+  if (!response.ok) {
+    throw new Error("PROVINCE_INDEX_FAILED");
+  }
+  const data = (await response.json()) as { provinces: ProvinceIndexItem[] };
+  return data.provinces;
 }
 
 export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "resourceIcons">> {
@@ -291,7 +308,7 @@ export async function updateGameSettings(
   token: string,
   payload: {
     economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
-    colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number };
+    colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number };
     eventLog?: { retentionTurns?: number };
   },
@@ -392,6 +409,7 @@ export async function updateOwnCountryCustomization(
 export type AdminProvinceItem = {
   id: string;
   name: string;
+  areaKm2: number;
   ownerCountryId: string | null;
   colonizationCost: number;
   colonizationDisabled: boolean;

@@ -13,11 +13,17 @@ type Props = {
   x: number;
   y: number;
   provinceName: string;
+  areaKm2: number | null;
   ownerName: string;
   colonizers: ColonizerRow[];
 };
 
-export function ProvinceHoverTooltip({ open, x, y, provinceName, ownerName, colonizers }: Props) {
+function formatKm2(areaKm2: number | null): string | null {
+  if (areaKm2 == null || !Number.isFinite(areaKm2) || areaKm2 <= 0) return null;
+  return `${new Intl.NumberFormat("ru-RU").format(Math.round(areaKm2))} км²`;
+}
+
+export function ProvinceHoverTooltip({ open, x, y, provinceName, areaKm2, ownerName, colonizers }: Props) {
   if (!open) {
     return null;
   }
@@ -29,6 +35,7 @@ export function ProvinceHoverTooltip({ open, x, y, provinceName, ownerName, colo
     >
       <div className="glass panel-border rounded-xl bg-[#0b111b]/90 px-3 py-2 shadow-2xl backdrop-blur-xl">
         <div className="text-sm font-semibold text-white">{provinceName}</div>
+        {formatKm2(areaKm2) && <div className="mt-1 text-xs text-white/55">Площадь: {formatKm2(areaKm2)}</div>}
         <div className="mt-1 flex items-center gap-1.5 text-xs text-white/75">
           <Crown size={13} className="text-amber-300" />
           <span>Владелец: {ownerName}</span>
