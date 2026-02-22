@@ -352,7 +352,7 @@ export function AuthPanel({ onSuccess }: Props) {
                       <Listbox.Button className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 pr-10 text-left text-sm text-slate-100 outline-none transition hover:border-white/20 focus:border-arc-accent/60">
                         {selectedCountry ? selectedCountry.name : "Выберите страну"}
                       </Listbox.Button>
-                      <Listbox.Options className="panel-border absolute z-30 mt-2 max-h-56 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-sm shadow-2xl outline-none">
+                      <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-56 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-sm shadow-2xl outline-none">
                         <Listbox.Option
                           value=""
                           className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-9 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}

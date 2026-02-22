@@ -110,3 +110,34 @@ body {
 .arc-toast-warning {
   border-color: rgba(251, 191, 36, 0.45) !important;
 }
+
+.arc-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(74, 222, 128, 0.4) rgba(255, 255, 255, 0.04);
+}
+
+.arc-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.arc-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 999px;
+  border: 1px solid rgba(67, 78, 92, 0.16);
+}
+
+.arc-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(74, 222, 128, 0.42), rgba(22, 163, 74, 0.2));
+  border-radius: 999px;
+  border: 1px solid rgba(134, 239, 172, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.arc-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(74, 222, 128, 0.58), rgba(22, 163, 74, 0.3));
+}
+
+.arc-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}

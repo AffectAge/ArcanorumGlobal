@@ -164,7 +164,7 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
           </div>
 
           <div className="grid h-[calc(100vh-92px)] gap-4 md:grid-cols-[260px_1fr]">
-            <aside className="panel-border overflow-auto rounded-xl bg-black/25 p-2">
+            <aside className="arc-scrollbar panel-border overflow-auto rounded-xl bg-black/25 p-2">
               {categories.map((cat) => (
                 <button
                   key={cat.id}
@@ -176,7 +176,7 @@ export function GameSettingsPanel({ open, token, onClose }: Props) {
               ))}
             </aside>
 
-            <section className="panel-border overflow-auto rounded-xl bg-black/25 p-4">
+            <section className="arc-scrollbar panel-border overflow-auto rounded-xl bg-black/25 p-4">
               {loading ? (
                 <div className="text-sm text-slate-400">Загрузка настроек...</div>
               ) : (

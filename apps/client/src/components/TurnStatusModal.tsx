@@ -121,7 +121,7 @@ export function TurnStatusModal({ open, onClose }: Props) {
               Загрузка статусов...
             </div>
           ) : (
-            <div className="max-h-[55vh] space-y-2 overflow-auto pr-1">
+            <div className="arc-scrollbar max-h-[55vh] space-y-2 overflow-auto pr-1">
               {sorted.map((item) => (
                 <div key={item.id} className="panel-border flex items-center justify-between rounded-lg bg-black/25 px-3 py-2">
                   <div>

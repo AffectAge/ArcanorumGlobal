@@ -239,7 +239,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
           </div>
 
           <div className="grid h-[calc(100vh-92px)] gap-4 md:grid-cols-[260px_1fr]">
-            <aside className="panel-border rounded-xl bg-black/25 p-2 overflow-auto">
+            <aside className="arc-scrollbar panel-border rounded-xl bg-black/25 p-2 overflow-auto">
               {categories.map((cat) => (
                 <button
                   key={cat.id}
@@ -251,7 +251,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
               ))}
             </aside>
 
-            <section className="panel-border rounded-xl bg-black/25 p-4 overflow-auto">
+            <section className="arc-scrollbar panel-border rounded-xl bg-black/25 p-4 overflow-auto">
               {loading ? (
                 <div className="text-sm text-slate-400">Загрузка стран...</div>
               ) : (
@@ -264,7 +264,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                           {selectedCountry?.name ?? "Выберите страну"}
                           <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
                         </Listbox.Button>
-                        <Listbox.Options className="panel-border absolute z-30 mt-2 max-h-56 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-sm shadow-2xl outline-none">
+                        <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-56 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-sm shadow-2xl outline-none">
                           {countries.map((country) => (
                             <Listbox.Option
                               key={country.id}
