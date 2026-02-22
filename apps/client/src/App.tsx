@@ -13,7 +13,7 @@ import { TurnStatusModal } from "./components/TurnStatusModal";
 import { GameSettingsPanel } from "./components/GameSettingsPanel";
 import { CountryCustomizationModal } from "./components/CountryCustomizationModal";
 import { EventLogPanel } from "./components/EventLogPanel";
-import { apiBase } from "./lib/api";
+import { apiBase, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
 
@@ -32,6 +32,14 @@ export default function App() {
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
   const [countryCustomizationOpen, setCountryCustomizationOpen] = useState(false);
+  const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
+    culture: null,
+    science: null,
+    religion: null,
+    colonization: null,
+    ducats: null,
+    gold: null,
+  });
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -142,6 +150,22 @@ export default function App() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchPublicGameUiSettings()
+      .then((ui) => {
+        if (!cancelled) {
+          setResourceIcons(ui.resourceIcons);
+        }
+      })
+      .catch(() => {
+        // keep defaults
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onAuthSuccess = (payload: AuthSuccess) => {
@@ -293,6 +317,7 @@ export default function App() {
             onOpenAdminPanel={() => setAdminOpen(true)}
             onOpenGameSettings={() => setGameSettingsOpen(true)}
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
+            resourceIconUrls={resourceIcons}
           />
           <SideNav />
           <EventLogPanel
@@ -318,7 +343,14 @@ export default function App() {
 
       {auth && <TurnStatusModal open={turnStatusOpen} onClose={() => setTurnStatusOpen(false)} />}
 
-      {auth?.isAdmin && auth?.token && <GameSettingsPanel open={gameSettingsOpen} token={auth.token} onClose={() => setGameSettingsOpen(false)} />}
+      {auth?.isAdmin && auth?.token && (
+        <GameSettingsPanel
+          open={gameSettingsOpen}
+          token={auth.token}
+          onClose={() => setGameSettingsOpen(false)}
+          onResourceIconsUpdated={setResourceIcons}
+        />
+      )}
 
       {auth?.token && country && (
         <CountryCustomizationModal

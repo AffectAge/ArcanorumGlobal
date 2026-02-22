@@ -232,9 +232,18 @@ export type GameSettings = {
   eventLog: {
     retentionTurns: number;
   };
+  resourceIcons: {
+    culture: string | null;
+    science: string | null;
+    religion: string | null;
+    colonization: string | null;
+    ducats: string | null;
+    gold: string | null;
+  };
 };
 
 export type CustomizationPrices = GameSettings["customization"];
+export type ResourceIconsMap = GameSettings["resourceIcons"];
 
 export async function fetchPublicCustomizationPrices(): Promise<CustomizationPrices> {
   const response = await fetch(`${API}/game-settings/public`);
@@ -244,6 +253,25 @@ export async function fetchPublicCustomizationPrices(): Promise<CustomizationPri
 
   const data = (await response.json()) as { customization: CustomizationPrices };
   return data.customization;
+}
+
+export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "customization" | "eventLog" | "resourceIcons">> {
+  const response = await fetch(`${API}/game-settings/public`);
+  if (!response.ok) {
+    throw new Error("PUBLIC_GAME_SETTINGS_FAILED");
+  }
+  const data = (await response.json()) as Pick<GameSettings, "customization" | "eventLog" | "resourceIcons">;
+  return {
+    ...data,
+    resourceIcons: {
+      culture: withAssetBase(data.resourceIcons?.culture) ?? null,
+      science: withAssetBase(data.resourceIcons?.science) ?? null,
+      religion: withAssetBase(data.resourceIcons?.religion) ?? null,
+      colonization: withAssetBase(data.resourceIcons?.colonization) ?? null,
+      ducats: withAssetBase(data.resourceIcons?.ducats) ?? null,
+      gold: withAssetBase(data.resourceIcons?.gold) ?? null,
+    },
+  };
 }
 
 export async function fetchGameSettings(token: string): Promise<GameSettings> {
@@ -283,6 +311,41 @@ export async function updateGameSettings(
   }
 
   return response.json();
+}
+
+export async function adminUploadResourceIcons(
+  token: string,
+  files: Partial<Record<keyof ResourceIconsMap, File | null>>,
+): Promise<{ resourceIcons: ResourceIconsMap }> {
+  const formData = new FormData();
+  (Object.entries(files) as Array<[keyof ResourceIconsMap, File | null | undefined]>).forEach(([key, file]) => {
+    if (file) {
+      formData.set(key, file);
+    }
+  });
+
+  const response = await fetch(`${API}/admin/resource-icons`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "RESOURCE_ICONS_UPDATE_FAILED");
+  }
+
+  const data = (await response.json()) as { resourceIcons: ResourceIconsMap };
+  return {
+    resourceIcons: {
+      culture: withAssetBase(data.resourceIcons.culture) ?? null,
+      science: withAssetBase(data.resourceIcons.science) ?? null,
+      religion: withAssetBase(data.resourceIcons.religion) ?? null,
+      colonization: withAssetBase(data.resourceIcons.colonization) ?? null,
+      ducats: withAssetBase(data.resourceIcons.ducats) ?? null,
+      gold: withAssetBase(data.resourceIcons.gold) ?? null,
+    },
+  };
 }
 
 export async function updateOwnCountryCustomization(

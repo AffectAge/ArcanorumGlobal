@@ -24,6 +24,7 @@ type Props = {
   onOpenAdminPanel?: () => void;
   onOpenGameSettings?: () => void;
   onOpenCountryCustomization?: () => void;
+  resourceIconUrls?: Partial<Record<(typeof cards)[number]["key"], string | null>>;
 };
 
 const cards = [
@@ -49,6 +50,7 @@ export function TopBar({
   onOpenAdminPanel,
   onOpenGameSettings,
   onOpenCountryCustomization,
+  resourceIconUrls,
 }: Props) {
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
@@ -67,11 +69,15 @@ export function TopBar({
         <div className="flex flex-wrap items-center justify-center gap-2">
           {cards.map((card) => {
             const Icon = card.icon;
+            const customIconUrl = resourceIconUrls?.[card.key] ?? null;
             return (
               <Tooltip key={card.key} content={card.tip} placement="top">
                 <div className="panel-border flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-xs">
-                  <Icon size={14} className="text-arc-accent" />
-                  <span className="text-slate-300">{card.label}:</span>
+                  {customIconUrl ? (
+                    <img src={customIconUrl} alt="" className="h-[18px] w-[18px] rounded-sm object-contain" />
+                  ) : (
+                    <Icon size={17} className="text-arc-accent" />
+                  )}
                   <strong>{resources[card.key]}</strong>
                 </div>
               </Tooltip>

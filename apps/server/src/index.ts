@@ -47,11 +47,19 @@ const env = {
 const uploadsRoot = resolve(__dirname, "../uploads");
 const flagsDir = resolve(uploadsRoot, "flags");
 const crestsDir = resolve(uploadsRoot, "crests");
+const resourceIconsDir = resolve(uploadsRoot, "resource-icons");
 mkdirSync(flagsDir, { recursive: true });
 mkdirSync(crestsDir, { recursive: true });
+mkdirSync(resourceIconsDir, { recursive: true });
+
+const resourceIconFields = new Set(["culture", "science", "religion", "colonization", "ducats", "gold"]);
 
 const storage = multer.diskStorage({
   destination: (_req, file, cb) => {
+    if (resourceIconFields.has(file.fieldname)) {
+      cb(null, resourceIconsDir);
+      return;
+    }
     if (file.fieldname === "flag") {
       cb(null, flagsDir);
       return;
@@ -129,6 +137,14 @@ type GameSettings = {
   eventLog: {
     retentionTurns: number;
   };
+  resourceIcons: {
+    culture: string | null;
+    science: string | null;
+    religion: string | null;
+    colonization: string | null;
+    ducats: string | null;
+    gold: string | null;
+  };
 };
 
 const defaultGameSettings = (): GameSettings => ({
@@ -148,6 +164,14 @@ const defaultGameSettings = (): GameSettings => ({
   },
   eventLog: {
     retentionTurns: 3,
+  },
+  resourceIcons: {
+    culture: null,
+    science: null,
+    religion: null,
+    colonization: null,
+    ducats: null,
+    gold: null,
   },
 });
 
@@ -251,6 +275,17 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.eventLog?.retentionTurns === "number"
             ? Math.max(1, Math.floor(next.eventLog.retentionTurns))
             : defaults.eventLog.retentionTurns,
+      },
+      resourceIcons: {
+        culture: typeof next.resourceIcons?.culture === "string" || next.resourceIcons?.culture === null ? (next.resourceIcons?.culture ?? null) : defaults.resourceIcons.culture,
+        science: typeof next.resourceIcons?.science === "string" || next.resourceIcons?.science === null ? (next.resourceIcons?.science ?? null) : defaults.resourceIcons.science,
+        religion: typeof next.resourceIcons?.religion === "string" || next.resourceIcons?.religion === null ? (next.resourceIcons?.religion ?? null) : defaults.resourceIcons.religion,
+        colonization:
+          typeof next.resourceIcons?.colonization === "string" || next.resourceIcons?.colonization === null
+            ? (next.resourceIcons?.colonization ?? null)
+            : defaults.resourceIcons.colonization,
+        ducats: typeof next.resourceIcons?.ducats === "string" || next.resourceIcons?.ducats === null ? (next.resourceIcons?.ducats ?? null) : defaults.resourceIcons.ducats,
+        gold: typeof next.resourceIcons?.gold === "string" || next.resourceIcons?.gold === null ? (next.resourceIcons?.gold ?? null) : defaults.resourceIcons.gold,
       },
     };
   }
@@ -512,11 +547,11 @@ async function cleanupExpiredPunishments(currentTurn: number, now: Date): Promis
     data: { blockedUntilAt: null },
   });
 }
-function validateImageDimensions(file: Express.Multer.File): boolean {
+function validateImageDimensions(file: Express.Multer.File, maxSize = 256): boolean {
   const dimensions = imageSize(readFileSync(file.path));
   const width = dimensions.width ?? 0;
   const height = dimensions.height ?? 0;
-  return width > 0 && height > 0 && width <= 256 && height <= 256;
+  return width > 0 && height > 0 && width <= maxSize && height <= maxSize;
 }
 
 function removeUploadedFile(file?: Express.Multer.File): void {
@@ -788,8 +823,77 @@ app.get("/game-settings/public", (_req, res) => {
   return res.json({
     customization: gameSettings.customization,
     eventLog: gameSettings.eventLog,
+    resourceIcons: gameSettings.resourceIcons,
   });
 });
+
+app.patch(
+  "/admin/resource-icons",
+  upload.fields([
+    { name: "culture", maxCount: 1 },
+    { name: "science", maxCount: 1 },
+    { name: "religion", maxCount: 1 },
+    { name: "colonization", maxCount: 1 },
+    { name: "ducats", maxCount: 1 },
+    { name: "gold", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    const auth = parseAuthHeader(req);
+    if (!auth || !(await isAdminCountry(auth.countryId))) {
+      return res.status(403).json({ error: "FORBIDDEN" });
+    }
+
+    const files = req.files as Record<string, Express.Multer.File[] | undefined> | undefined;
+    const nextFiles: Partial<Record<keyof GameSettings["resourceIcons"], Express.Multer.File>> = {
+      culture: files?.culture?.[0],
+      science: files?.science?.[0],
+      religion: files?.religion?.[0],
+      colonization: files?.colonization?.[0],
+      ducats: files?.ducats?.[0],
+      gold: files?.gold?.[0],
+    };
+
+    const uploaded = Object.values(nextFiles).filter(Boolean) as Express.Multer.File[];
+    if (uploaded.length === 0) {
+      return res.status(400).json({ error: "NO_FILES" });
+    }
+
+    for (const [key, file] of Object.entries(nextFiles)) {
+      if (!file) continue;
+      if (!validateImageDimensions(file, 64)) {
+        for (const uploadedFile of uploaded) {
+          removeUploadedFile(uploadedFile);
+        }
+        return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: key, max: "64x64" });
+      }
+    }
+
+    for (const [key, file] of Object.entries(nextFiles) as Array<[keyof GameSettings["resourceIcons"], Express.Multer.File | undefined]>) {
+      if (!file) continue;
+      const previousUrl = gameSettings.resourceIcons[key];
+      gameSettings.resourceIcons[key] = `/uploads/resource-icons/${file.filename}`;
+      if (previousUrl) {
+        removeUploadedByUrl(previousUrl);
+      }
+    }
+
+    savePersistentState();
+    broadcast(wss, {
+      type: "NEWS_EVENT",
+      event: makeOfficialNews({
+        turn: turnId,
+        category: "system",
+        title: "Иконки ресурсов обновлены",
+        message: "Администратор обновил иконки очков/ресурсов в интерфейсе",
+        countryId: auth.countryId,
+        priority: "low",
+        visibility: "public",
+      }),
+    });
+
+    return res.json({ resourceIcons: gameSettings.resourceIcons });
+  },
+);
 
 app.get("/admin/game-settings", async (req, res) => {
   const auth = parseAuthHeader(req);
