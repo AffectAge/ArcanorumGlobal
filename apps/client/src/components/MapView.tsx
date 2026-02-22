@@ -1069,7 +1069,7 @@ export function MapView({
             type="button"
             onClick={() => setShowProvinceBorders((v) => !v)}
             className={`group glass panel-border relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
-              showProvinceBorders ? "text-arc-accent shadow-neon" : ""
+              showProvinceBorders ? "shadow-neon" : ""
             }`}
             aria-label={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"}
           >
@@ -1078,10 +1078,10 @@ export function MapView({
                 showProvinceBorders ? "opacity-100" : "opacity-0 group-hover:opacity-100"
               }`}
             />
-            <MapPinned size={18} className="relative z-10" />
-            <span
-              className={`absolute bottom-2 right-2 h-2 w-2 rounded-full ${
-                showProvinceBorders ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.55)]" : "bg-white/35"
+            <MapPinned
+              size={18}
+              className={`relative z-10 transition-colors ${
+                showProvinceBorders ? "text-emerald-300" : ""
               }`}
             />
           </button>

@@ -4,11 +4,14 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { colord } from "colord";
-import { Check, LoaderCircle, LogIn, Palette, Server, ShieldCheck, Upload, UserPlus } from "lucide-react";
+import { Check, LoaderCircle, LogIn, Palette, Ruler, Server, ShieldCheck, Sparkles, Upload, UserPlus } from "lucide-react";
 import { fetchCountries, fetchServerStatus, login, register } from "../lib/api";
 import type { Country, ServerStatus } from "@arcanorum/shared";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import { Tooltip } from "./Tooltip";
+
+const REMEMBER_LOGIN_KEY = "arc.auth.rememberedLogin";
 
 const loginSchema = z.object({
   countryId: z.string().min(1, "Выберите страну"),
@@ -135,6 +138,25 @@ export function AuthPanel({ onSuccess }: Props) {
   });
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(REMEMBER_LOGIN_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<z.infer<typeof loginSchema>>;
+      if (typeof parsed.countryId === "string") {
+        loginForm.setValue("countryId", parsed.countryId);
+      }
+      if (typeof parsed.password === "string") {
+        loginForm.setValue("password", parsed.password);
+      }
+      if (typeof parsed.rememberMe === "boolean") {
+        loginForm.setValue("rememberMe", parsed.rememberMe);
+      }
+    } catch {
+      // ignore malformed localStorage
+    }
+  }, [loginForm]);
+
+  useEffect(() => {
     let mounted = true;
     const load = async () => {
       try {
@@ -218,6 +240,22 @@ export function AuthPanel({ onSuccess }: Props) {
       }
 
       toast.success("Успешный вход");
+      try {
+        if (values.rememberMe) {
+          localStorage.setItem(
+            REMEMBER_LOGIN_KEY,
+            JSON.stringify({
+              countryId: values.countryId,
+              password: values.password,
+              rememberMe: true,
+            }),
+          );
+        } else {
+          localStorage.removeItem(REMEMBER_LOGIN_KEY);
+        }
+      } catch {
+        // ignore storage errors
+      }
       onSuccess({
         ...result,
         countryName: country.name,
@@ -388,9 +426,43 @@ export function AuthPanel({ onSuccess }: Props) {
                   <label className="mb-1 block text-xs text-slate-300">Пароль</label>
                   <input type="password" className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm outline-none transition focus:border-arc-accent/60" {...loginForm.register("password")} />
                   <FieldError text={loginForm.formState.errors.password?.message} />
-                  <div className="mt-2 flex gap-3 text-xs">
-                    <span className={passwordChecks.length ? "text-emerald-400" : "text-slate-500"}>Длина {passwordChecks.length ? "OK" : "-"}</span>
-                    <span className={passwordChecks.complexity ? "text-emerald-400" : "text-slate-500"}>Сложность {passwordChecks.complexity ? "OK" : "-"}</span>
+                  <div className="mt-2 flex gap-2">
+                    <Tooltip
+                      content={
+                        passwordChecks.length
+                          ? "Длина пароля подходит (минимум 8 символов)"
+                          : "Нужно минимум 8 символов"
+                      }
+                    >
+                      <span
+                        className={`group inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
+                          passwordChecks.length
+                            ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                            : "border-white/10 text-slate-500"
+                        }`}
+                        aria-label="Проверка длины пароля"
+                      >
+                        <Ruler size={14} />
+                      </span>
+                    </Tooltip>
+                    <Tooltip
+                      content={
+                        passwordChecks.complexity
+                          ? "Сложность пароля подходит (буквы и цифры)"
+                          : "Добавьте буквы и цифры для сложности"
+                      }
+                    >
+                      <span
+                        className={`group inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
+                          passwordChecks.complexity
+                            ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                            : "border-white/10 text-slate-500"
+                        }`}
+                        aria-label="Проверка сложности пароля"
+                      >
+                        <Sparkles size={14} />
+                      </span>
+                    </Tooltip>
                   </div>
                 </div>
 
