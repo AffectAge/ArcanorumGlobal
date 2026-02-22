@@ -28,6 +28,8 @@ const MODE_STYLES: Record<string, MapModeStyle> = {
 
 const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1.2;
+const COLONIZE_EMPTY_PATTERN = "colonize-empty";
+const COLONIZE_STRIPES_PATTERN = "colonize-stripes";
 
 function setInteractions(map: MapLibreMap, enabled: boolean) {
   const action = enabled ? "enable" : "disable";
@@ -60,13 +62,39 @@ function resolveAssetUrl(apiBase: string, url?: string | null): string | null {
   return `${apiBase}${url.startsWith("/") ? "" : "/"}${url}`;
 }
 
+function createPatternData(striped: boolean): { width: number; height: number; data: Uint8Array } {
+  const width = 8;
+  const height = 8;
+  const data = new Uint8Array(width * height * 4);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      if (striped && ((x + y) % 6 <= 1)) {
+        data[i] = 0;
+        data[i + 1] = 0;
+        data[i + 2] = 0;
+        data[i + 3] = 120;
+      } else {
+        data[i] = 0;
+        data[i + 1] = 0;
+        data[i + 2] = 0;
+        data[i + 3] = 0;
+      }
+    }
+  }
+
+  return { width, height, data };
+}
+
 export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColonizeOrder }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
   const selectedFeatureIdRef = useRef<string | null>(null);
-  const prevStyledProvinceIdsRef = useRef<Set<string>>(new Set());
+  const prevOwnedProvinceIdsRef = useRef<Set<string>>(new Set());
+  const prevColonizingProvinceIdsRef = useRef<Set<string>>(new Set());
 
   const [interactionLocked, setInteractionLocked] = useState(false);
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
@@ -189,6 +217,16 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
             },
           },
           {
+            id: "province-colonize-stripes",
+            type: "fill",
+            source: "adm1",
+            "source-layer": "adm1",
+            paint: {
+              "fill-pattern": COLONIZE_EMPTY_PATTERN,
+              "fill-opacity": 0,
+            },
+          },
+          {
             id: "province-hover",
             type: "fill",
             source: "adm1",
@@ -235,6 +273,12 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     hoverPopupRef.current = hoverPopup;
 
     map.on("load", () => {
+      if (!map.hasImage(COLONIZE_EMPTY_PATTERN)) {
+        map.addImage(COLONIZE_EMPTY_PATTERN, createPatternData(false));
+      }
+      if (!map.hasImage(COLONIZE_STRIPES_PATTERN)) {
+        map.addImage(COLONIZE_STRIPES_PATTERN, createPatternData(true));
+      }
       map.resize();
       const c = map.getCenter();
       setView({ zoom: map.getZoom(), lng: c.lng, lat: c.lat });
@@ -370,40 +414,85 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.getLayer("province-fill") || !map.getLayer("province-line")) {
+    if (!map || !map.getLayer("province-fill") || !map.getLayer("province-line") || !map.getLayer("province-colonize-stripes")) {
       return;
     }
 
     const ownerByProvince = worldBase?.provinceOwner ?? {};
+    const progressByProvince = worldBase?.colonyProgressByProvince ?? {};
+
     const nextOwnedIds = new Set(Object.keys(ownerByProvince));
-    const allTouchedIds = new Set<string>([...prevStyledProvinceIdsRef.current, ...nextOwnedIds]);
+    const nextColonizingIds = new Set(Object.keys(progressByProvince));
+    const allTouchedIds = new Set<string>([
+      ...prevOwnedProvinceIdsRef.current,
+      ...prevColonizingProvinceIdsRef.current,
+      ...nextOwnedIds,
+      ...nextColonizingIds,
+    ]);
 
     for (const provinceId of allTouchedIds) {
       const ownerId = ownerByProvince[provinceId];
       const ownerColor = ownerId ? (countryById.get(ownerId)?.color ?? "#9ca3af") : "#C0C0C0";
+
+      let leadCountryId: string | null = null;
+      let leadPoints = -1;
+      if (!ownerId) {
+        const progress = progressByProvince[provinceId] ?? {};
+        for (const [countryId, points] of Object.entries(progress)) {
+          if (points > leadPoints) {
+            leadCountryId = countryId;
+            leadPoints = points;
+          }
+        }
+      }
+
+      const colonizeLeadColor = leadCountryId ? (countryById.get(leadCountryId)?.color ?? "#9ca3af") : "#9ca3af";
+      const isColonizing = !ownerId && Boolean(leadCountryId);
+
       map.setFeatureState(
         { source: "adm1", sourceLayer: "adm1", id: provinceId },
         {
           isOwned: Boolean(ownerId),
           ownerColor,
+          isColonizing,
+          colonizeLeadColor,
         },
       );
     }
 
-    prevStyledProvinceIdsRef.current = nextOwnedIds;
+    prevOwnedProvinceIdsRef.current = nextOwnedIds;
+    prevColonizingProvinceIdsRef.current = nextColonizingIds;
 
     if (activeMode === "Политическая карта") {
       map.setPaintProperty("province-fill", "fill-color", [
         "case",
         ["boolean", ["feature-state", "isOwned"], false],
         ["coalesce", ["feature-state", "ownerColor"], "#d1d5db"],
+        ["boolean", ["feature-state", "isColonizing"], false],
+        ["coalesce", ["feature-state", "colonizeLeadColor"], "#9ca3af"],
         "#ffffff",
       ]);
-      map.setPaintProperty("province-fill", "fill-opacity", ["case", ["boolean", ["feature-state", "isOwned"], false], 0.42, 0.84]);
+      map.setPaintProperty("province-fill", "fill-opacity", [
+        "case",
+        ["boolean", ["feature-state", "isOwned"], false],
+        0.42,
+        ["boolean", ["feature-state", "isColonizing"], false],
+        0.36,
+        0.84,
+      ]);
+      map.setPaintProperty("province-colonize-stripes", "fill-pattern", [
+        "case",
+        ["boolean", ["feature-state", "isColonizing"], false],
+        COLONIZE_STRIPES_PATTERN,
+        COLONIZE_EMPTY_PATTERN,
+      ]);
+      map.setPaintProperty("province-colonize-stripes", "fill-opacity", ["case", ["boolean", ["feature-state", "isColonizing"], false], 0.65, 0]);
       map.setPaintProperty("province-line", "line-color", [
         "case",
         ["boolean", ["feature-state", "isOwned"], false],
         ["coalesce", ["feature-state", "ownerColor"], "#9ca3af"],
+        ["boolean", ["feature-state", "isColonizing"], false],
+        ["coalesce", ["feature-state", "colonizeLeadColor"], "#9ca3af"],
         "#C0C0C0",
       ]);
       map.setPaintProperty("province-line", "line-width", 1.1);
@@ -414,6 +503,8 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     const style = MODE_STYLES[activeMode] ?? MODE_STYLES["Политическая карта"];
     map.setPaintProperty("province-fill", "fill-color", style.fillColor);
     map.setPaintProperty("province-fill", "fill-opacity", style.fillOpacity);
+    map.setPaintProperty("province-colonize-stripes", "fill-pattern", COLONIZE_EMPTY_PATTERN);
+    map.setPaintProperty("province-colonize-stripes", "fill-opacity", 0);
     map.setPaintProperty("province-line", "line-color", "#C0C0C0");
     map.setPaintProperty("province-line", "line-width", 0.9);
     map.setPaintProperty("province-line", "line-opacity", 0.75);
@@ -557,7 +648,3 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     </>
   );
 }
-
-
-
-
