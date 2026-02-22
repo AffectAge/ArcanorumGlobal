@@ -8,6 +8,7 @@ type Props = {
   apiBase: string;
   activeMode: string;
   onQueueBuildOrder: (provinceId: string) => void;
+  onQueueColonizeOrder: (provinceId: string) => void;
 };
 
 type MapModeStyle = {
@@ -48,7 +49,7 @@ function readProvinceName(properties: Record<string, unknown> | undefined) {
   return raw == null ? "Провинция" : String(raw);
 }
 
-export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
+export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColonizeOrder }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
@@ -58,10 +59,11 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
   const [interactionLocked, setInteractionLocked] = useState(false);
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
   const [view, setView] = useState({ zoom: DEFAULT_ZOOM, lng: DEFAULT_CENTER[0], lat: DEFAULT_CENTER[1] });
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; provinceId: string; provinceName: string } | null>(null);
 
+  const turnId = useGameStore((s) => s.turnId);
   const selectedProvinceId = useGameStore((s) => s.selectedProvinceId);
   const setSelectedProvince = useGameStore((s) => s.setSelectedProvince);
-  const turnId = useGameStore((s) => s.turnId);
   const worldBase = useGameStore((s) => s.worldBase);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
 
@@ -81,8 +83,19 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     return map;
   }, [ordersByTurn, turnId]);
 
+  const ordersCountRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    ordersCountRef.current = ordersCountByProvince;
+  }, [ordersCountByProvince]);
+
   const selectedProvinceOrdersCount = selectedProvinceId ? (ordersCountByProvince.get(selectedProvinceId) ?? 0) : 0;
-  const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? "?") : "?";
+  const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? "Нейтральная") : "Нейтральная";
+  const selectedProvinceColonizeOrdersCount = selectedProvinceId
+    ? [...(ordersByTurn.get(turnId)?.values() ?? [])].flat().filter((o) => o.provinceId === selectedProvinceId && o.type === "COLONIZE").length
+    : 0;
+  const selectedColonyProgress = selectedProvinceId ? (worldBase?.colonyProgressByProvince?.[selectedProvinceId] ?? {}) : {};
+  const selectedColonyProgressList = Object.entries(selectedColonyProgress).sort((a, b) => b[1] - a[1]);
+  const selectedIsNeutral = selectedProvinceId ? !worldBase?.provinceOwner[selectedProvinceId] : false;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -169,6 +182,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     map.on("move", () => {
       const c = map.getCenter();
       setView({ zoom: map.getZoom(), lng: c.lng, lat: c.lat });
+      setContextMenu(null);
     });
 
     map.on("mousemove", "province-fill", (e) => {
@@ -197,7 +211,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
 
       hoverPopup
         .setLngLat(e.lngLat)
-        .setHTML(`<div class="text-xs"><div class="font-semibold">${name}</div><div>ID: ${id}</div><div>В очереди: ${ordersCountByProvince.get(id) ?? 0}</div></div>`)
+        .setHTML(`<div class=\"text-xs\"><div class=\"font-semibold\">${name}</div><div>ID: ${id}</div><div>В очереди: ${ordersCountRef.current.get(id) ?? 0}</div></div>`)
         .addTo(map);
     });
 
@@ -208,6 +222,33 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       }
       hoveredFeatureIdRef.current = null;
       hoverPopup.remove();
+    });
+
+    map.on("contextmenu", "province-fill", (e) => {
+      const feature = e.features?.[0];
+      if (!feature) {
+        return;
+      }
+
+      const props = feature.properties as Record<string, unknown> | undefined;
+      const id = readProvinceId(props);
+      if (!id) {
+        return;
+      }
+
+      const owner = useGameStore.getState().worldBase?.provinceOwner[id];
+      if (owner) {
+        setContextMenu(null);
+        return;
+      }
+
+      e.preventDefault();
+      setContextMenu({
+        x: e.point.x + 12,
+        y: e.point.y - 8,
+        provinceId: id,
+        provinceName: readProvinceName(props),
+      });
     });
 
     map.on("click", "province-fill", (e) => {
@@ -231,6 +272,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
 
       setSelectedProvince(id);
       setSelectedProvinceName(readProvinceName(props));
+      setContextMenu(null);
     });
 
     map.on("click", (e) => {
@@ -245,6 +287,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       selectedFeatureIdRef.current = null;
       setSelectedProvince(null);
       setSelectedProvinceName(null);
+      setContextMenu(null);
     });
 
     map.on("dblclick", "province-fill", (e) => {
@@ -259,7 +302,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
       map.remove();
       mapRef.current = null;
     };
-  }, [apiBase, ordersCountByProvince, setSelectedProvince]);
+  }, [apiBase, setSelectedProvince]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -297,7 +340,13 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
 
   return (
     <>
-      <div ref={containerRef} className="map-surface" />
+      <div
+        ref={containerRef}
+        className="map-surface"
+        onContextMenu={(event) => {
+          event.preventDefault();
+        }}
+      />
       <div className="vignette absolute inset-0 pointer-events-none" />
 
       <div className="glass panel-border pointer-events-auto absolute bottom-24 right-4 z-30 flex items-center gap-1 rounded-xl p-1">
@@ -327,8 +376,29 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
         <Move size={14} className="text-arc-accent" />
         <span>Z {view.zoom.toFixed(2)}</span>
         <span>|</span>
-        <span>{view.lng.toFixed(2)}, {view.lat.toFixed(2)}</span>
+        <span>
+          {view.lng.toFixed(2)}, {view.lat.toFixed(2)}
+        </span>
       </div>
+
+      {contextMenu && (
+        <div
+          className="glass panel-border pointer-events-auto absolute z-40 min-w-[220px] rounded-lg p-2"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onMouseLeave={() => setContextMenu(null)}
+        >
+          <div className="px-2 pb-2 text-xs text-slate-300">{contextMenu.provinceName}</div>
+          <button
+            onClick={() => {
+              onQueueColonizeOrder(contextMenu.provinceId);
+              setContextMenu(null);
+            }}
+            className="w-full rounded-md bg-emerald-500/80 px-2 py-2 text-xs font-semibold text-black transition hover:brightness-110"
+          >
+            Колонизировать
+          </button>
+        </div>
+      )}
 
       {selectedProvinceId && (
         <div className="absolute right-4 top-24 z-30 w-80">
@@ -342,10 +412,33 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
                 <div>ID: {selectedProvinceId}</div>
                 <div>Владелец: {selectedOwnerId}</div>
                 <div>Приказы в очереди: {selectedProvinceOrdersCount}</div>
+                <div>Колонизация в очереди: {selectedProvinceColonizeOrdersCount}</div>
               </div>
+
+              {selectedColonyProgressList.length > 0 && (
+                <div className="mt-2 rounded-md bg-black/25 p-2 text-xs text-slate-300">
+                  <div className="mb-1 text-slate-400">Прогресс колонизации</div>
+                  {selectedColonyProgressList.map(([countryId, points]) => (
+                    <div key={countryId} className="flex items-center justify-between">
+                      <span>{countryId}</span>
+                      <span>{points.toFixed(1)}/100</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {selectedIsNeutral && (
+                <button
+                  onClick={() => onQueueColonizeOrder(selectedProvinceId)}
+                  className="mt-3 w-full rounded-lg bg-emerald-500/80 px-3 py-2 text-xs font-semibold text-black transition hover:brightness-110"
+                >
+                  Колонизировать (COLONIZE)
+                </button>
+              )}
+
               <button
                 onClick={() => onQueueBuildOrder(selectedProvinceId)}
-                className="mt-3 w-full rounded-lg bg-arc-accent/80 px-3 py-2 text-xs font-semibold text-black transition hover:brightness-110"
+                className="mt-2 w-full rounded-lg bg-arc-accent/80 px-3 py-2 text-xs font-semibold text-black transition hover:brightness-110"
               >
                 Построить фабрику (BUILD)
               </button>
@@ -356,5 +449,3 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder }: Props) {
     </>
   );
 }
-
-

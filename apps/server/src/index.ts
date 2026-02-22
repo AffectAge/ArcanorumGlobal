@@ -101,6 +101,10 @@ let turnId = 1;
 const onlinePlayers = new Set<string>();
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
 const resolveReadyByTurn = new Map<number, Set<string>>();
+const COLONIZATION_ORDER_COST_DUCATS = 4;
+const COLONIZATION_LIMIT_PER_TURN = 3;
+const COLONIZATION_POINTS_PER_TURN = 30;
+const COLONIZATION_GOAL = 100;
 
 let worldBase: WorldBase = {
   turnId,
@@ -113,6 +117,7 @@ let worldBase: WorldBase = {
     "p-south": "ARC",
     "p-east": "VAL",
   },
+  colonyProgressByProvince: {},
 };
 
 const redis = env.redisUrl ? new Redis(env.redisUrl, { lazyConnect: true }) : null;
@@ -133,6 +138,12 @@ const loginSchema = z.object({
   password: z.string().min(1),
   rememberMe: z.boolean(),
 });
+
+function ensureCountryInWorldBase(countryId: string): void {
+  if (!worldBase.resourcesByCountry[countryId]) {
+    worldBase.resourcesByCountry[countryId] = { culture: 5, science: 5, religion: 5, ducats: 20, gold: 80 };
+  }
+}
 
 function createToken(player: { id: string; countryId: string; isAdmin: boolean }, rememberMe: boolean): string {
   const expiresIn = rememberMe ? "30d" : "8h";
@@ -228,6 +239,19 @@ function resolveTurn(): WorldPatch {
   const rejectedOrders: WorldPatch["rejectedOrders"] = [];
   const claimed = new Set<string>();
 
+  const colonizeTargetsByCountry = new Map<string, Set<string>>();
+
+  for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
+    if (worldBase.provinceOwner[provinceId]) {
+      continue;
+    }
+    for (const countryId of Object.keys(progressByCountry)) {
+      const byCountry = colonizeTargetsByCountry.get(countryId) ?? new Set<string>();
+      byCountry.add(provinceId);
+      colonizeTargetsByCountry.set(countryId, byCountry);
+    }
+  }
+
   currentOrders.forEach((orders, playerId) => {
     for (const order of orders) {
       if (order.type === "BUILD") {
@@ -243,8 +267,53 @@ function resolveTurn(): WorldPatch {
           resource.gold = Math.max(0, resource.gold - 5);
         }
       }
+
+      if (order.type === "COLONIZE") {
+        if (worldBase.provinceOwner[order.provinceId]) {
+          rejectedOrders.push({ playerId, reason: "PROVINCE_NOT_NEUTRAL", tempOrderId: order.id });
+          continue;
+        }
+
+        const byCountry = colonizeTargetsByCountry.get(order.countryId) ?? new Set<string>();
+        byCountry.add(order.provinceId);
+        colonizeTargetsByCountry.set(order.countryId, byCountry);
+      }
     }
   });
+
+  for (const [countryId, targets] of colonizeTargetsByCountry.entries()) {
+    const provinces = [...targets];
+    if (provinces.length === 0) {
+      continue;
+    }
+
+    const gain = COLONIZATION_POINTS_PER_TURN / provinces.length;
+    for (const provinceId of provinces) {
+      if (worldBase.provinceOwner[provinceId]) {
+        continue;
+      }
+      const byCountry = worldBase.colonyProgressByProvince[provinceId] ?? {};
+      byCountry[countryId] = (byCountry[countryId] ?? 0) + gain;
+      worldBase.colonyProgressByProvince[provinceId] = byCountry;
+    }
+  }
+
+  for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
+    if (worldBase.provinceOwner[provinceId]) {
+      delete worldBase.colonyProgressByProvince[provinceId];
+      continue;
+    }
+
+    const candidates = Object.entries(progressByCountry).filter(([, value]) => value >= COLONIZATION_GOAL);
+    if (candidates.length === 0) {
+      continue;
+    }
+
+    candidates.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const winnerCountryId = candidates[0][0];
+    worldBase.provinceOwner[provinceId] = winnerCountryId;
+    delete worldBase.colonyProgressByProvince[provinceId];
+  }
 
   turnId += 1;
   worldBase = {
@@ -467,6 +536,9 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
       delete worldBase.provinceOwner[provinceId];
     }
   }
+  for (const progress of Object.values(worldBase.colonyProgressByProvince)) {
+    delete progress[countryIdParam];
+  }
 
   return res.json({ ok: true });
 });
@@ -623,6 +695,7 @@ app.post("/auth/login", async (req, res) => {
     return res.status(401).json({ error: "INVALID_PASSWORD" });
   }
 
+  ensureCountryInWorldBase(country.id);
   const token = createToken({ id: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin }, rememberMe);
   return res.json({ token, playerId: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin, worldBase, turnId });
 });
@@ -697,6 +770,7 @@ wss.on("connection", (socket) => {
         playerCountryId = payload.countryId;
         isAdmin = Boolean(payload.isAdmin);
         onlinePlayers.add(payload.id);
+        ensureCountryInWorldBase(payload.countryId);
         send({ type: "AUTH_OK", playerId: payload.id, countryId: payload.countryId, isAdmin, worldBase, turnId });
         broadcast(wss, { type: "PRESENCE", onlinePlayerIds: [...onlinePlayers] });
       } catch {
@@ -718,9 +792,15 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      ensureCountryInWorldBase(delta.order.countryId);
       const countryResource = worldBase.resourcesByCountry[delta.order.countryId];
-      if (!countryResource || countryResource.ducats <= 0) {
-        send({ type: "ERROR", code: "NO_RESOURCES", message: "Not enough planning resources" });
+      if (!countryResource) {
+        send({ type: "ERROR", code: "NO_RESOURCES", message: "Ресурсы страны не инициализированы" });
+        return;
+      }
+
+      if (delta.order.type !== "COLONIZE" && countryResource.ducats <= 0) {
+        send({ type: "ERROR", code: "NO_RESOURCES", message: "Недостаточно дукатов для приказа" });
         return;
       }
 
@@ -732,6 +812,40 @@ wss.on("connection", (socket) => {
 
       const turnOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
       const playerOrders = turnOrders.get(playerId) ?? [];
+
+      if (delta.order.type === "COLONIZE") {
+        if (worldBase.provinceOwner[delta.order.provinceId]) {
+          send({ type: "ERROR", code: "PROVINCE_NOT_NEUTRAL", message: "Province is not neutral" });
+          return;
+        }
+
+        if ((worldBase.colonyProgressByProvince[delta.order.provinceId] ?? {})[delta.order.countryId] != null) {
+          send({ type: "ERROR", code: "ALREADY_COLONIZING", message: "This province is already in your colonization process" });
+          return;
+        }
+
+        const currentColonizeOrders = playerOrders.filter((o) => o.type === "COLONIZE");
+        if (currentColonizeOrders.length >= COLONIZATION_LIMIT_PER_TURN) {
+          send({ type: "ERROR", code: "COLONIZE_LIMIT", message: "Colonization limit reached for this turn" });
+          return;
+        }
+
+        if (currentColonizeOrders.some((o) => o.provinceId === delta.order.provinceId)) {
+          send({ type: "ERROR", code: "DUPLICATE_COLONIZE", message: "Province is already in your colonization queue" });
+          return;
+        }
+
+        if (countryResource.ducats < COLONIZATION_ORDER_COST_DUCATS) {
+          send({
+            type: "ERROR",
+            code: "NO_RESOURCES",
+            message: `Недостаточно дукатов для колонизации: нужно ${COLONIZATION_ORDER_COST_DUCATS}, доступно ${countryResource.ducats}`,
+          });
+          return;
+        }
+
+        countryResource.ducats -= COLONIZATION_ORDER_COST_DUCATS;
+      }
 
       if (playerOrders.length >= 8) {
         send({ type: "ERROR", code: "RATE_LIMIT", message: "Too many orders this turn" });
@@ -816,3 +930,11 @@ wss.on("connection", (socket) => {
 server.listen(env.port, () => {
   console.log(`Arcanorum server running on http://localhost:${env.port}`);
 });
+
+
+
+
+
+
+
+

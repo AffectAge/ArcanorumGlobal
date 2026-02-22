@@ -21,7 +21,7 @@ export type ResourceTotals = {
   gold: number;
 };
 
-export type OrderType = "BUILD" | "BUDGET" | "ARMY_MOVE";
+export type OrderType = "BUILD" | "BUDGET" | "ARMY_MOVE" | "COLONIZE";
 
 export type Order = {
   id: string;
@@ -43,6 +43,7 @@ export type WorldBase = {
   turnId: number;
   resourcesByCountry: Record<string, ResourceTotals>;
   provinceOwner: Record<string, string>;
+  colonyProgressByProvince: Record<string, Record<string, number>>;
 };
 
 export type WorldPatch = {

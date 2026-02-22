@@ -127,6 +127,28 @@ export default function App() {
     }
   };
 
+
+  const queueColonizeOrder = (provinceId?: string) => {
+    if (!auth) {
+      return;
+    }
+
+    const delta: OrderDelta = {
+      type: "ORDER_DELTA",
+      order: {
+        turnId,
+        playerId: auth.playerId,
+        countryId: auth.countryId,
+        provinceId: provinceId ?? selectedProvinceId ?? "ARG-1309",
+        type: "COLONIZE",
+        payload: {},
+      },
+    };
+
+    send(delta);
+    toast("Приказ отправлен", { description: `COLONIZE -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}` });
+  };
+
   const queueBuildOrder = (provinceId?: string) => {
     if (!auth) {
       return;
@@ -150,7 +172,7 @@ export default function App() {
 
   return (
     <div className="relative h-screen overflow-hidden bg-arc-bg text-white">
-      <MapView apiBase={apiBase} activeMode={mapMode} onQueueBuildOrder={queueBuildOrder} />
+      <MapView apiBase={apiBase} activeMode={mapMode} onQueueBuildOrder={queueBuildOrder} onQueueColonizeOrder={queueColonizeOrder} />
 
       <AnimatePresence>
         {!auth && (
@@ -206,6 +228,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 
