@@ -71,6 +71,7 @@ export default function App() {
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationCostPer1000Km2, setColonizationCostPer1000Km2] = useState({ points: 5, ducats: 5 });
   const [provinceAreaKm2ById, setProvinceAreaKm2ById] = useState<Record<string, number>>({});
+  const [showAntarctica, setShowAntarctica] = useState(true);
   const [showMapControls, setShowMapControls] = useState(false);
 
   const auth = useGameStore((s) => s.auth);
@@ -263,6 +264,7 @@ export default function App() {
             points: ui.colonization.pointsCostPer1000Km2,
             ducats: ui.colonization.ducatsCostPer1000Km2,
           });
+          setShowAntarctica(ui.map?.showAntarctica ?? true);
         }
       })
       .catch(() => {
@@ -546,6 +548,7 @@ export default function App() {
         maxActiveColonizations={maxActiveColonizations}
         colonizationCostPer1000Km2={colonizationCostPer1000Km2}
         showMapControls={showMapControls}
+        showAntarctica={showAntarctica}
         onOpenAdminProvinceEditor={(provinceId) => {
           setAdminInitialProvinceId(provinceId);
           setAdminOpen(true);
@@ -639,6 +642,7 @@ export default function App() {
               gold: updated.economy.baseGoldPerTurn,
             }));
             setEventLogRetentionTurns(updated.eventLog.retentionTurns);
+            setShowAntarctica(updated.map?.showAntarctica ?? true);
           }}
         />
       )}

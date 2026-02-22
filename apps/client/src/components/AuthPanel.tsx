@@ -221,6 +221,7 @@ export function AuthPanel({ onSuccess }: Props) {
   const selectedCountryId = loginForm.watch("countryId");
   const selectedCountry = countries.find((c) => c.id === selectedCountryId);
   const loginPassword = loginForm.watch("password");
+  const registerPassword = registerForm.watch("password");
   const registerColor = registerForm.watch("countryColor");
 
   const passwordChecks = useMemo(() => {
@@ -229,6 +230,13 @@ export function AuthPanel({ onSuccess }: Props) {
       complexity: /[A-Z]/.test(loginPassword) && /\d/.test(loginPassword) && /[^A-Za-z0-9]/.test(loginPassword),
     };
   }, [loginPassword]);
+
+  const registerPasswordChecks = useMemo(() => {
+    return {
+      length: registerPassword.length >= 8,
+      complexity: /[A-Z]/.test(registerPassword) && /\d/.test(registerPassword) && /[^A-Za-z0-9]/.test(registerPassword),
+    };
+  }, [registerPassword]);
 
   const submitLogin = loginForm.handleSubmit(async (values) => {
     setSubmitting(true);
@@ -557,6 +565,44 @@ export function AuthPanel({ onSuccess }: Props) {
                     <label className="mb-1 block text-xs text-slate-300">Пароль</label>
                     <input type="password" className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm outline-none transition focus:border-arc-accent/60" {...registerForm.register("password")} />
                     <FieldError text={registerForm.formState.errors.password?.message} />
+                    <div className="mt-2 flex gap-2">
+                      <Tooltip
+                        content={
+                          registerPasswordChecks.length
+                            ? "Длина пароля подходит (минимум 8 символов)"
+                            : "Нужно минимум 8 символов"
+                        }
+                      >
+                        <span
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
+                            registerPasswordChecks.length
+                              ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                              : "border-white/10 text-slate-500"
+                          }`}
+                          aria-label="Проверка длины пароля"
+                        >
+                          <Ruler size={14} />
+                        </span>
+                      </Tooltip>
+                      <Tooltip
+                        content={
+                          registerPasswordChecks.complexity
+                            ? "Сложность пароля подходит (буквы, цифры и спецсимвол)"
+                            : "Добавьте заглавную букву, цифру и спецсимвол"
+                        }
+                      >
+                        <span
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
+                            registerPasswordChecks.complexity
+                              ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                              : "border-white/10 text-slate-500"
+                          }`}
+                          aria-label="Проверка сложности пароля"
+                        >
+                          <Sparkles size={14} />
+                        </span>
+                      </Tooltip>
+                    </div>
                   </div>
                   <div>
                     <label className="mb-1 block text-xs text-slate-300">Повтор пароля</label>

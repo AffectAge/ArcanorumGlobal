@@ -52,6 +52,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [flagDucats, setFlagDucats] = useState(15);
   const [crestDucats, setCrestDucats] = useState(15);
   const [eventLogRetentionTurns, setEventLogRetentionTurns] = useState(3);
+  const [showAntarctica, setShowAntarctica] = useState(true);
   const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
     culture: null,
     science: null,
@@ -84,6 +85,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setFlagDucats(settings.customization.flagDucats);
         setCrestDucats(settings.customization.crestDucats);
         setEventLogRetentionTurns(settings.eventLog.retentionTurns);
+        setShowAntarctica(settings.map?.showAntarctica ?? true);
         setResourceIcons(settings.resourceIcons);
         setResourceIconFiles({});
       })
@@ -129,11 +131,15 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
           pointsCostPer1000Km2: Math.max(1, Math.floor(colonizationPointsCostPer1000Km2)),
           ducatsCostPer1000Km2: Math.max(0, Math.floor(colonizationDucatsCostPer1000Km2)),
         },
+        map: {
+          showAntarctica,
+        },
       });
       setMaxActiveColonizations(updated.colonization.maxActiveColonizations);
       setColonizationPointsPerTurn(updated.colonization.pointsPerTurn);
       setColonizationPointsCostPer1000Km2(updated.colonization.pointsCostPer1000Km2);
       setColonizationDucatsCostPer1000Km2(updated.colonization.ducatsCostPer1000Km2);
+      setShowAntarctica(updated.map?.showAntarctica ?? true);
       onSettingsUpdated?.(updated);
       toast.success("Настройки колонизации сохранены");
     } catch {
@@ -314,6 +320,29 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           <label className="mb-1 block text-xs text-slate-300">Цена (дукаты) за 1000 км²</label>
                           <input type="number" min={0} value={colonizationDucatsCostPer1000Km2} onChange={(e) => setColonizationDucatsCostPer1000Km2(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
                         </div>
+                        <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                          <div>
+                            <div className="text-sm text-slate-100">Показывать Антарктиду</div>
+                            <div className="text-xs text-slate-500">Скрывает провинции Антарктиды на карте для всех игроков</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowAntarctica((v) => !v)}
+                            className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
+                              showAntarctica ? "border-emerald-400/50 bg-emerald-500/20" : "border-white/10 bg-white/5"
+                            }`}
+                            aria-pressed={showAntarctica}
+                            aria-label={showAntarctica ? "Скрыть Антарктиду" : "Показать Антарктиду"}
+                          >
+                            <span
+                              className={`h-5 w-5 rounded-full transition ${
+                                showAntarctica
+                                  ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                  : "translate-x-1 bg-white/60"
+                              }`}
+                            />
+                          </button>
+                        </label>
                       </div>
                       <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-400">
                         Базовая стоимость провинции рассчитывается от площади: `ставка за 1000 км² × площадь / 1000`. Ручная стоимость провинции в админ-редакторе остаётся как override.

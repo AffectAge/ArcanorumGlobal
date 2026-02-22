@@ -22,6 +22,7 @@ type Props = {
   maxActiveColonizations?: number;
   colonizationCostPer1000Km2?: { points: number; ducats: number };
   showMapControls?: boolean;
+  showAntarctica?: boolean;
 };
 
 type MapModeStyle = {
@@ -142,6 +143,7 @@ export function MapView({
   maxActiveColonizations,
   colonizationCostPer1000Km2,
   showMapControls = false,
+  showAntarctica = true,
 }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -802,6 +804,26 @@ export function MapView({
 
   useEffect(() => {
     const map = mapRef.current;
+    if (!map) return;
+
+    const filter = showAntarctica
+      ? null
+      : ([
+          "all",
+          ["!=", ["coalesce", ["get", "admin"], ""], "Antarctica"],
+          ["!=", ["coalesce", ["get", "adm0_a3"], ""], "ATA"],
+        ] as unknown as maplibregl.FilterSpecification);
+
+    const layerIds = ["province-fill", "province-colonize-stripes", "province-hover", "province-selected", "province-colonize-ring", "province-line"] as const;
+    for (const layerId of layerIds) {
+      if (map.getLayer(layerId)) {
+        map.setFilter(layerId, filter);
+      }
+    }
+  }, [showAntarctica]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     if (
       !map ||
       !map.getLayer("province-fill") ||
@@ -1341,11 +1363,11 @@ export function MapView({
           <AnimatePresence initial={false}>
             {isColonizationLegendExpanded && (
               <motion.div
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.16, ease: "easeOut" }}
-                className="mt-2 space-y-1.5"
+                initial={{ opacity: 0, height: 0, y: -4, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                animate={{ opacity: 1, height: "auto", y: 0, clipPath: "inset(0 0 0% 0 round 10px)" }}
+                exit={{ opacity: 0, height: 0, y: -2, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                className="mt-2 space-y-1.5 overflow-hidden"
               >
                 <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#b91c1c]" /> Запрещено</div>
                 <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22d3ee]" /> Наш приказ в очереди</div>
@@ -1393,11 +1415,11 @@ export function MapView({
           <AnimatePresence initial={false}>
             {isPoliticalLegendExpanded && (
               <motion.div
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.16, ease: "easeOut" }}
-                className="mt-2"
+                initial={{ opacity: 0, height: 0, y: -4, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                animate={{ opacity: 1, height: "auto", y: 0, clipPath: "inset(0 0 0% 0 round 10px)" }}
+                exit={{ opacity: 0, height: 0, y: -2, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                className="mt-2 overflow-hidden"
               >
                 <div className="mb-2 rounded-lg border border-white/10 bg-black/25 p-2">
                   <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Показать страну</div>

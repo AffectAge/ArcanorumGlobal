@@ -124,7 +124,15 @@ export function TurnStatusModal({ open, onClose }: Props) {
             <div className="arc-scrollbar max-h-[55vh] space-y-2 overflow-auto pr-1">
               {sorted.map((item) => (
                 <div key={item.id} className="panel-border flex items-center justify-between rounded-lg bg-black/25 px-3 py-2">
-                  <div>
+                  <div className="flex items-center gap-2">
+                    {item.flagUrl ? (
+                      <img src={item.flagUrl} alt="" className="h-4 w-6 rounded-sm object-cover" />
+                    ) : (
+                      <span
+                        className="h-3.5 w-3.5 rounded-full border border-white/10"
+                        style={{ backgroundColor: item.color ?? "#94a3b8" }}
+                      />
+                    )}
                     <div className="text-sm text-slate-100">{item.name}</div>
                   </div>
                   <div className={`rounded-md border px-2 py-1 text-xs ${statusClass(item)}`}>{statusText(item)}</div>

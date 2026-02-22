@@ -199,6 +199,8 @@ export async function adminSetCountryPunishment(
 export type TurnStatusItem = {
   id: string;
   name: string;
+  color?: string;
+  flagUrl?: string | null;
   status: "ready" | "waiting" | "blocked" | "ignored";
   blockedReason: "PERMANENT" | "TURN" | "TIME" | null;
   blockedUntilTurn: number | null;
@@ -211,7 +213,11 @@ export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: n
   if (!response.ok) {
     throw new Error("TURN_STATUS_FAILED");
   }
-  return response.json();
+  const data = (await response.json()) as { turnId: number; readyCount: number; requiredCount: number; countries: TurnStatusItem[] };
+  return {
+    ...data,
+    countries: data.countries.map((c) => ({ ...c, flagUrl: withAssetBase(c.flagUrl) ?? null })),
+  };
 }
 
 export type GameSettings = {
@@ -234,6 +240,9 @@ export type GameSettings = {
   eventLog: {
     retentionTurns: number;
   };
+  map: {
+    showAntarctica: boolean;
+  };
   resourceIcons: {
     culture: string | null;
     science: string | null;
@@ -246,6 +255,17 @@ export type GameSettings = {
 
 export type CustomizationPrices = GameSettings["customization"];
 export type ResourceIconsMap = GameSettings["resourceIcons"];
+
+function normalizeResourceIcons(icons?: Partial<ResourceIconsMap> | null): ResourceIconsMap {
+  return {
+    culture: withAssetBase(icons?.culture) ?? null,
+    science: withAssetBase(icons?.science) ?? null,
+    religion: withAssetBase(icons?.religion) ?? null,
+    colonization: withAssetBase(icons?.colonization) ?? null,
+    ducats: withAssetBase(icons?.ducats) ?? null,
+    gold: withAssetBase(icons?.gold) ?? null,
+  };
+}
 
 export async function fetchPublicCustomizationPrices(): Promise<CustomizationPrices> {
   const response = await fetch(`${API}/game-settings/public`);
@@ -272,22 +292,15 @@ export async function fetchProvinceIndex(): Promise<ProvinceIndexItem[]> {
   return data.provinces;
 }
 
-export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "resourceIcons">> {
+export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "map" | "resourceIcons">> {
   const response = await fetch(`${API}/game-settings/public`);
   if (!response.ok) {
     throw new Error("PUBLIC_GAME_SETTINGS_FAILED");
   }
-  const data = (await response.json()) as Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "resourceIcons">;
+  const data = (await response.json()) as Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "map" | "resourceIcons">;
   return {
     ...data,
-    resourceIcons: {
-      culture: withAssetBase(data.resourceIcons?.culture) ?? null,
-      science: withAssetBase(data.resourceIcons?.science) ?? null,
-      religion: withAssetBase(data.resourceIcons?.religion) ?? null,
-      colonization: withAssetBase(data.resourceIcons?.colonization) ?? null,
-      ducats: withAssetBase(data.resourceIcons?.ducats) ?? null,
-      gold: withAssetBase(data.resourceIcons?.gold) ?? null,
-    },
+    resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
 }
 
@@ -301,7 +314,11 @@ export async function fetchGameSettings(token: string): Promise<GameSettings> {
     throw new Error(err.error ?? "GAME_SETTINGS_FAILED");
   }
 
-  return response.json();
+  const data = (await response.json()) as GameSettings;
+  return {
+    ...data,
+    resourceIcons: normalizeResourceIcons(data.resourceIcons),
+  };
 }
 
 export async function updateGameSettings(
@@ -311,6 +328,7 @@ export async function updateGameSettings(
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number };
     eventLog?: { retentionTurns?: number };
+    map?: { showAntarctica?: boolean };
   },
 ): Promise<GameSettings> {
   const response = await fetch(`${API}/admin/game-settings`, {
@@ -327,7 +345,11 @@ export async function updateGameSettings(
     throw new Error(err.error ?? "GAME_SETTINGS_UPDATE_FAILED");
   }
 
-  return response.json();
+  const data = (await response.json()) as GameSettings;
+  return {
+    ...data,
+    resourceIcons: normalizeResourceIcons(data.resourceIcons),
+  };
 }
 
 export async function adminUploadResourceIcons(
@@ -354,14 +376,7 @@ export async function adminUploadResourceIcons(
 
   const data = (await response.json()) as { resourceIcons: ResourceIconsMap };
   return {
-    resourceIcons: {
-      culture: withAssetBase(data.resourceIcons.culture) ?? null,
-      science: withAssetBase(data.resourceIcons.science) ?? null,
-      religion: withAssetBase(data.resourceIcons.religion) ?? null,
-      colonization: withAssetBase(data.resourceIcons.colonization) ?? null,
-      ducats: withAssetBase(data.resourceIcons.ducats) ?? null,
-      gold: withAssetBase(data.resourceIcons.gold) ?? null,
-    },
+    resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
 }
 

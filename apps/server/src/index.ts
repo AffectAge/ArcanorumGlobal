@@ -203,6 +203,9 @@ type GameSettings = {
   eventLog: {
     retentionTurns: number;
   };
+  map: {
+    showAntarctica: boolean;
+  };
   resourceIcons: {
     culture: string | null;
     science: string | null;
@@ -232,6 +235,9 @@ const defaultGameSettings = (): GameSettings => ({
   },
   eventLog: {
     retentionTurns: 3,
+  },
+  map: {
+    showAntarctica: false,
   },
   resourceIcons: {
     culture: null,
@@ -352,6 +358,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.eventLog?.retentionTurns === "number"
             ? Math.max(1, Math.floor(next.eventLog.retentionTurns))
             : defaults.eventLog.retentionTurns,
+      },
+      map: {
+        showAntarctica:
+          typeof next.map?.showAntarctica === "boolean" ? next.map.showAntarctica : defaults.map.showAntarctica,
       },
       resourceIcons: {
         culture: typeof next.resourceIcons?.culture === "string" || next.resourceIcons?.culture === null ? (next.resourceIcons?.culture ?? null) : defaults.resourceIcons.culture,
@@ -1062,6 +1072,8 @@ app.get("/turn/status", async (_req, res) => {
     select: {
       id: true,
       name: true,
+      color: true,
+      flagUrl: true,
       isLocked: true,
       blockedUntilTurn: true,
       blockedUntilAt: true,
@@ -1081,6 +1093,8 @@ app.get("/turn/status", async (_req, res) => {
     return {
       id: country.id,
       name: country.name,
+      color: country.color,
+      flagUrl: country.flagUrl,
       status,
       blockedReason: block.reason,
       blockedUntilTurn: block.blockedUntilTurn,
@@ -1144,6 +1158,11 @@ const gameSettingsSchema = z.object({
       retentionTurns: z.coerce.number().int().min(1).max(100).optional(),
     })
     .optional(),
+  map: z
+    .object({
+      showAntarctica: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 app.get("/game-settings/public", (_req, res) => {
@@ -1152,6 +1171,7 @@ app.get("/game-settings/public", (_req, res) => {
     colonization: gameSettings.colonization,
     customization: gameSettings.customization,
     eventLog: gameSettings.eventLog,
+    map: gameSettings.map,
     resourceIcons: gameSettings.resourceIcons,
   });
 });
@@ -1305,11 +1325,19 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
   }
 
+  const nextMap = parsed.data.map;
+  if (nextMap) {
+    if (typeof nextMap.showAntarctica === "boolean") {
+      gameSettings.map.showAntarctica = nextMap.showAntarctica;
+    }
+  }
+
   const changedSections = [
     parsed.data.economy ? "экономика" : null,
     parsed.data.colonization ? "колонизация" : null,
     parsed.data.customization ? "кастомизация" : null,
     parsed.data.eventLog ? "журнал событий" : null,
+    parsed.data.map ? "карта" : null,
   ].filter((v): v is string => Boolean(v));
 
   savePersistentState();
