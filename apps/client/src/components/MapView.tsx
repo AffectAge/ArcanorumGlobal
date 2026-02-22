@@ -797,13 +797,13 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         </span>
       </div>
 
-      <div className="pointer-events-auto absolute bottom-20 left-4 z-30 md:bottom-4 md:left-1/2 md:-translate-x-1/2 md:-ml-[18.5rem]">
+      <div className="pointer-events-auto absolute bottom-20 left-4 z-30 md:bottom-5 md:left-1/2 md:-translate-x-full md:-ml-[12.3rem]">
         <Tooltip content={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"} placement="top">
           <button
             type="button"
             onClick={() => setShowProvinceBorders((v) => !v)}
-            className={`group glass panel-border relative inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl transition ${
-              showProvinceBorders ? "text-arc-accent shadow-neon" : "text-slate-200"
+            className={`group glass panel-border relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
+              showProvinceBorders ? "text-arc-accent shadow-neon" : ""
             }`}
             aria-label={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"}
           >
@@ -898,7 +898,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       )}
 
       {activeMode === "Колонизация" && (
-        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-4 md:ml-[13.6rem] md:w-72 md:translate-x-0">
+        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-5 md:ml-[12.3rem] md:w-72 md:translate-x-0">
           <div className="mb-2 font-semibold text-white">Легенда колонизации</div>
           <div className="space-y-1.5">
             <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#b91c1c]" /> Запрещено</div>
@@ -913,7 +913,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       )}
 
       {activeMode === "Политическая карта" && (
-        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-4 md:ml-[13.6rem] md:w-72 md:translate-x-0">
+        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-5 md:ml-[12.3rem] md:w-72 md:translate-x-0">
           <div className="mb-2 font-semibold text-white">Легенда политической карты</div>
           <div className="pointer-events-auto mb-2">
             <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Показать страну</div>
