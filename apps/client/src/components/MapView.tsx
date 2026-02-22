@@ -610,8 +610,6 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
                   {selectedOwnerFlagUrl && <img src={selectedOwnerFlagUrl} alt={selectedOwnerLabel} className="h-4 w-6 rounded-sm object-cover" />}
                   <span>{selectedOwnerLabel}</span>
                 </div>
-                <div>Приказы в очереди: {selectedProvinceOrdersCount}</div>
-                <div>Колонизация в очереди: {selectedProvinceColonizeOrdersCount}</div>
               </div>
 
               {selectedColonyProgressList.length > 0 && (

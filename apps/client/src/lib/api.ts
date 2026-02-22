@@ -213,3 +213,50 @@ export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: n
   }
   return response.json();
 }
+
+export type GameSettings = {
+  economy: {
+    baseDucatsPerTurn: number;
+    baseGoldPerTurn: number;
+  };
+  colonization: {
+    maxActiveColonizations: number;
+    pointsPerTurn: number;
+  };
+};
+
+export async function fetchGameSettings(token: string): Promise<GameSettings> {
+  const response = await fetch(`${API}/admin/game-settings`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "GAME_SETTINGS_FAILED");
+  }
+
+  return response.json();
+}
+
+export async function updateGameSettings(
+  token: string,
+  payload: { economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number }; colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number } },
+): Promise<GameSettings> {
+  const response = await fetch(`${API}/admin/game-settings`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "GAME_SETTINGS_UPDATE_FAILED");
+  }
+
+  return response.json();
+}
+
+

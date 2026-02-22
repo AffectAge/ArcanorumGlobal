@@ -1,10 +1,11 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 
 type Resources = {
   culture: number;
   science: number;
   religion: number;
+  colonization: number;
   ducats: number;
   gold: number;
 };
@@ -21,17 +22,32 @@ type Props = {
   isAdmin?: boolean;
   onAdminForceResolve?: () => void;
   onOpenAdminPanel?: () => void;
+  onOpenGameSettings?: () => void;
 };
 
 const cards = [
   { key: "culture", label: "Культура", icon: BookOpen, tip: "Очки культуры для развития традиций" },
   { key: "science", label: "Наука", icon: FlaskConical, tip: "Очки науки ускоряют исследования" },
   { key: "religion", label: "Религия", icon: Landmark, tip: "Религия влияет на стабильность и миссии" },
+  { key: "colonization", label: "Колонизация", icon: Flag, tip: "Очки колонизации за ход" },
   { key: "ducats", label: "Дукаты", icon: Coins, tip: "Планировочный бюджет текущего хода" },
   { key: "gold", label: "Золото", icon: CircleDollarSign, tip: "Госказна для больших проектов" },
 ] as const;
 
-export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onOpenTurnStatus, onNextTurn, onLogout, isAdmin = false, onAdminForceResolve, onOpenAdminPanel }: Props) {
+export function TopBar({
+  countryName,
+  flagUrl,
+  crestUrl,
+  turnId,
+  resources,
+  onOpenTurnStatus,
+  onNextTurn,
+  onLogout,
+  isAdmin = false,
+  onAdminForceResolve,
+  onOpenAdminPanel,
+  onOpenGameSettings,
+}: Props) {
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
@@ -65,6 +81,18 @@ export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onOp
                 aria-label="Панель администратора"
               >
                 <SlidersHorizontal size={16} />
+              </button>
+            </Tooltip>
+          )}
+
+          {isAdmin && (
+            <Tooltip content="Настройки игры" placement="top">
+              <button
+                onClick={onOpenGameSettings}
+                className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300 transition hover:bg-rose-500/30"
+                aria-label="Настройки игры"
+              >
+                <Cog size={16} />
               </button>
             </Tooltip>
           )}

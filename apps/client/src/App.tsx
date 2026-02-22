@@ -10,6 +10,7 @@ import { MapModePanel } from "./components/MapModePanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { AdminPanel } from "./components/AdminPanel";
 import { TurnStatusModal } from "./components/TurnStatusModal";
+import { GameSettingsPanel } from "./components/GameSettingsPanel";
 import { apiBase } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
@@ -27,6 +28,7 @@ export default function App() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
+  const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -93,9 +95,9 @@ export default function App() {
 
   const currentResources = useMemo(() => {
     if (!worldBase || !auth) {
-      return { culture: 0, science: 0, religion: 0, ducats: 0, gold: 0 };
+      return { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
     }
-    return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, ducats: 0, gold: 0 };
+    return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
   }, [auth, worldBase]);
 
   const logoutToAuth = () => {
@@ -205,6 +207,7 @@ export default function App() {
             isAdmin={auth.isAdmin}
             onAdminForceResolve={forceResolveAsAdmin}
             onOpenAdminPanel={() => setAdminOpen(true)}
+            onOpenGameSettings={() => setGameSettingsOpen(true)}
           />
           <SideNav />
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
@@ -224,10 +227,15 @@ export default function App() {
 
       {auth && <TurnStatusModal open={turnStatusOpen} onClose={() => setTurnStatusOpen(false)} />}
 
+      {auth?.isAdmin && auth?.token && <GameSettingsPanel open={gameSettingsOpen} token={auth.token} onClose={() => setGameSettingsOpen(false)} />}
+
       <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
     </div>
   );
 }
+
+
+
 
 
 

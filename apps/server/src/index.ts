@@ -102,15 +102,37 @@ const onlinePlayers = new Set<string>();
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
 const resolveReadyByTurn = new Map<number, Set<string>>();
 const COLONIZATION_ORDER_COST_DUCATS = 4;
-const COLONIZATION_LIMIT_PER_TURN = 3;
-const COLONIZATION_POINTS_PER_TURN = 30;
+const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
+const DEFAULT_COLONIZATION_POINTS_PER_TURN = 30;
 const COLONIZATION_GOAL = 100;
+
+type GameSettings = {
+  economy: {
+    baseDucatsPerTurn: number;
+    baseGoldPerTurn: number;
+  };
+  colonization: {
+    maxActiveColonizations: number;
+    pointsPerTurn: number;
+  };
+};
+
+let gameSettings: GameSettings = {
+  economy: {
+    baseDucatsPerTurn: 5,
+    baseGoldPerTurn: 10,
+  },
+  colonization: {
+    maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
+    pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
+  },
+};
 
 let worldBase: WorldBase = {
   turnId,
   resourcesByCountry: {
-    ARC: { culture: 12, science: 9, religion: 6, ducats: 35, gold: 120 },
-    VAL: { culture: 8, science: 12, religion: 7, ducats: 28, gold: 110 },
+    ARC: { culture: 12, science: 9, religion: 6, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 35, gold: 120 },
+    VAL: { culture: 8, science: 12, religion: 7, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 28, gold: 110 },
   },
   provinceOwner: {
     "p-north": "ARC",
@@ -141,7 +163,14 @@ const loginSchema = z.object({
 
 function ensureCountryInWorldBase(countryId: string): void {
   if (!worldBase.resourcesByCountry[countryId]) {
-    worldBase.resourcesByCountry[countryId] = { culture: 5, science: 5, religion: 5, ducats: 20, gold: 80 };
+    worldBase.resourcesByCountry[countryId] = {
+      culture: 5,
+      science: 5,
+      religion: 5,
+      colonization: gameSettings.colonization.pointsPerTurn,
+      ducats: 20,
+      gold: 80,
+    };
   }
 }
 
@@ -287,7 +316,12 @@ function resolveTurn(): WorldPatch {
       continue;
     }
 
-    const gain = COLONIZATION_POINTS_PER_TURN / provinces.length;
+    const countryResource = worldBase.resourcesByCountry[countryId];
+    const countryColonizationPoints = countryResource?.colonization ?? gameSettings.colonization.pointsPerTurn;
+    if (countryColonizationPoints <= 0) {
+      continue;
+    }
+    const gain = countryColonizationPoints / provinces.length;
     for (const provinceId of provinces) {
       if (worldBase.provinceOwner[provinceId]) {
         continue;
@@ -296,8 +330,11 @@ function resolveTurn(): WorldPatch {
       byCountry[countryId] = (byCountry[countryId] ?? 0) + gain;
       worldBase.colonyProgressByProvince[provinceId] = byCountry;
     }
-  }
+    if (countryResource) {
+      countryResource.colonization = 0;
+    }
 
+  }
   for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
     if (worldBase.provinceOwner[provinceId]) {
       delete worldBase.colonyProgressByProvince[provinceId];
@@ -313,6 +350,12 @@ function resolveTurn(): WorldPatch {
     const winnerCountryId = candidates[0][0];
     worldBase.provinceOwner[provinceId] = winnerCountryId;
     delete worldBase.colonyProgressByProvince[provinceId];
+  }
+
+  for (const resource of Object.values(worldBase.resourcesByCountry)) {
+    resource.colonization += gameSettings.colonization.pointsPerTurn;
+    resource.ducats += gameSettings.economy.baseDucatsPerTurn;
+    resource.gold += gameSettings.economy.baseGoldPerTurn;
   }
 
   turnId += 1;
@@ -392,6 +435,64 @@ function parseAuthHeader(req: express.Request): { id: string; countryId: string;
     return null;
   }
 }
+
+const gameSettingsSchema = z.object({
+  economy: z
+    .object({
+      baseDucatsPerTurn: z.coerce.number().int().min(0).max(100000).optional(),
+      baseGoldPerTurn: z.coerce.number().int().min(0).max(100000).optional(),
+    })
+    .optional(),
+  colonization: z
+    .object({
+      maxActiveColonizations: z.coerce.number().int().min(1).max(1000).optional(),
+      pointsPerTurn: z.coerce.number().int().min(0).max(100000).optional(),
+    })
+    .optional(),
+});
+
+app.get("/admin/game-settings", (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !auth.isAdmin) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  return res.json(gameSettings);
+});
+
+app.patch("/admin/game-settings", (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !auth.isAdmin) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const parsed = gameSettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const nextEconomy = parsed.data.economy;
+  if (nextEconomy) {
+    if (typeof nextEconomy.baseDucatsPerTurn === "number") {
+      gameSettings.economy.baseDucatsPerTurn = nextEconomy.baseDucatsPerTurn;
+    }
+    if (typeof nextEconomy.baseGoldPerTurn === "number") {
+      gameSettings.economy.baseGoldPerTurn = nextEconomy.baseGoldPerTurn;
+    }
+  }
+
+  const nextColonization = parsed.data.colonization;
+  if (nextColonization) {
+    if (typeof nextColonization.maxActiveColonizations === "number") {
+      gameSettings.colonization.maxActiveColonizations = nextColonization.maxActiveColonizations;
+    }
+    if (typeof nextColonization.pointsPerTurn === "number") {
+      gameSettings.colonization.pointsPerTurn = nextColonization.pointsPerTurn;
+    }
+  }
+
+  return res.json(gameSettings);
+});
 
 app.patch("/admin/countries/:countryId/admin", async (req, res) => {
   const auth = parseAuthHeader(req);
@@ -642,7 +743,14 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
     });
 
     if (!worldBase.resourcesByCountry[country.id]) {
-      worldBase.resourcesByCountry[country.id] = { culture: 5, science: 5, religion: 5, ducats: 20, gold: 80 };
+      worldBase.resourcesByCountry[country.id] = {
+        culture: 5,
+        science: 5,
+        religion: 5,
+        colonization: gameSettings.colonization.pointsPerTurn,
+        ducats: 20,
+        gold: 80,
+      };
     }
 
     return res.status(201).json(countryFromDb(country));
@@ -824,14 +932,33 @@ wss.on("connection", (socket) => {
           return;
         }
 
-        const currentColonizeOrders = playerOrders.filter((o) => o.type === "COLONIZE");
-        if (currentColonizeOrders.length >= COLONIZATION_LIMIT_PER_TURN) {
-          send({ type: "ERROR", code: "COLONIZE_LIMIT", message: "Colonization limit reached for this turn" });
+        const activeColonizeTargets = new Set<string>();
+
+        for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
+          if (!worldBase.provinceOwner[provinceId] && progressByCountry[delta.order.countryId] != null) {
+            activeColonizeTargets.add(provinceId);
+          }
+        }
+
+        for (const list of turnOrders.values()) {
+          for (const queued of list) {
+            if (queued.type === "COLONIZE" && queued.countryId === delta.order.countryId) {
+              activeColonizeTargets.add(queued.provinceId);
+            }
+          }
+        }
+
+        if (activeColonizeTargets.has(delta.order.provinceId)) {
+          send({ type: "ERROR", code: "DUPLICATE_COLONIZE", message: "Province is already in your colonization queue" });
           return;
         }
 
-        if (currentColonizeOrders.some((o) => o.provinceId === delta.order.provinceId)) {
-          send({ type: "ERROR", code: "DUPLICATE_COLONIZE", message: "Province is already in your colonization queue" });
+        if (activeColonizeTargets.size >= gameSettings.colonization.maxActiveColonizations) {
+          send({
+            type: "ERROR",
+            code: "COLONIZE_LIMIT",
+            message: `Достигнут лимит одновременной колонизации: ${activeColonizeTargets.size}/${gameSettings.colonization.maxActiveColonizations}`,
+          });
           return;
         }
 
@@ -930,6 +1057,21 @@ wss.on("connection", (socket) => {
 server.listen(env.port, () => {
   console.log(`Arcanorum server running on http://localhost:${env.port}`);
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
