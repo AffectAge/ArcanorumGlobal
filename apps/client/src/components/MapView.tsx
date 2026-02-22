@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { Crosshair, Lock, LockOpen, LocateFixed, Minus, Move, Plus } from "lucide-react";
+import { Crosshair, Lock, LockOpen, LocateFixed, MapPinned, Minus, Move, Plus } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
@@ -92,6 +92,19 @@ function createPatternData(striped: boolean): { width: number; height: number; d
   return { width, height, data };
 }
 
+function darkenHexColor(hex: string, factor = 0.45): string {
+  const match = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!match) {
+    return "#475569";
+  }
+  const raw = match[1];
+  const to = (start: number) => Math.max(0, Math.min(255, Math.round(parseInt(raw.slice(start, start + 2), 16) * factor)));
+  const r = to(0).toString(16).padStart(2, "0");
+  const g = to(2).toString(16).padStart(2, "0");
+  const b = to(4).toString(16).padStart(2, "0");
+  return `#${r}${g}${b}`;
+}
+
 export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColonizeOrder, onOpenAdminProvinceEditor }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -104,6 +117,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
   const prevConfiguredColonizeProvinceIdsRef = useRef<Set<string>>(new Set());
 
   const [interactionLocked, setInteractionLocked] = useState(false);
+  const [showProvinceBorders, setShowProvinceBorders] = useState(true);
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
   const [view, setView] = useState({ zoom: DEFAULT_ZOOM, lng: DEFAULT_CENTER[0], lat: DEFAULT_CENTER[1] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; provinceId: string; provinceName: string } | null>(null);
@@ -476,6 +490,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     for (const provinceId of allTouchedIds) {
       const ownerId = ownerByProvince[provinceId];
       const ownerColor = ownerId ? (countryById.get(ownerId)?.color ?? "#9ca3af") : "#C0C0C0";
+      const ownerBorderColor = ownerId ? darkenHexColor(ownerColor, 0.42) : "#94a3b8";
       const cfg = worldBase?.provinceColonizationByProvince?.[provinceId] ?? { cost: 100, disabled: false };
       const hasQueuedOwnColonizeOrder = myQueuedColonizeProvinceIds.has(provinceId);
 
@@ -499,6 +514,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       }
 
       const colonizeLeadColor = leadCountryId ? (countryById.get(leadCountryId)?.color ?? "#9ca3af") : "#9ca3af";
+      const colonizeLeadBorderColor = leadCountryId ? darkenHexColor(colonizeLeadColor, 0.5) : "#64748b";
       const isColonizing = !ownerId && Boolean(leadCountryId);
 
       map.setFeatureState(
@@ -508,6 +524,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
           isOwnedByCurrent: Boolean(ownerId && auth?.countryId && ownerId === auth.countryId),
           isNeutral: !ownerId,
           ownerColor,
+          ownerBorderColor,
           isColonizing,
           hasOwnColony,
           hasForeignColony,
@@ -515,6 +532,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
           colonizeDisabled: Boolean(cfg.disabled),
           colonizeCost: Math.max(1, Math.floor(cfg.cost ?? 100)),
           colonizeLeadColor,
+          colonizeLeadBorderColor,
         },
       );
     }
@@ -536,10 +554,10 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       map.setPaintProperty("province-fill", "fill-opacity", [
         "case",
         ["boolean", ["feature-state", "isOwned"], false],
-        0.42,
+        1,
         ["boolean", ["feature-state", "isColonizing"], false],
-        0.36,
-        0.84,
+        1,
+        1,
       ]);
       map.setPaintProperty("province-colonize-stripes", "fill-pattern", [
         "case",
@@ -548,16 +566,9 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         COLONIZE_EMPTY_PATTERN,
       ]);
       map.setPaintProperty("province-colonize-stripes", "fill-opacity", ["case", ["boolean", ["feature-state", "isColonizing"], false], 0.65, 0]);
-      map.setPaintProperty("province-line", "line-color", [
-        "case",
-        ["boolean", ["feature-state", "isOwned"], false],
-        ["coalesce", ["feature-state", "ownerColor"], "#9ca3af"],
-        ["boolean", ["feature-state", "isColonizing"], false],
-        ["coalesce", ["feature-state", "colonizeLeadColor"], "#9ca3af"],
-        "#C0C0C0",
-      ]);
+      map.setPaintProperty("province-line", "line-color", "#9ca3af");
       map.setPaintProperty("province-line", "line-width", 1.1);
-      map.setPaintProperty("province-line", "line-opacity", 0.95);
+      map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.95 : 0);
       return;
     }
 
@@ -613,7 +624,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         "#d1d5db",
       ]);
       map.setPaintProperty("province-line", "line-width", 1.2);
-      map.setPaintProperty("province-line", "line-opacity", 0.95);
+      map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.95 : 0);
       map.setPaintProperty("province-colonize-stripes", "fill-opacity", [
         "case",
         ["boolean", ["feature-state", "hasQueuedOwnColonizeOrder"], false],
@@ -634,8 +645,8 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     map.setPaintProperty("province-colonize-stripes", "fill-opacity", 0);
     map.setPaintProperty("province-line", "line-color", "#C0C0C0");
     map.setPaintProperty("province-line", "line-width", 0.9);
-    map.setPaintProperty("province-line", "line-opacity", 0.75);
-  }, [activeMode, auth?.countryId, countryById, myQueuedColonizeProvinceIds, worldBase]);
+    map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.75 : 0);
+  }, [activeMode, auth?.countryId, countryById, myQueuedColonizeProvinceIds, showProvinceBorders, worldBase]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
@@ -762,6 +773,31 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         </span>
       </div>
 
+      <div className="pointer-events-auto absolute bottom-20 left-4 z-30 md:bottom-4 md:left-1/2 md:-translate-x-1/2 md:-ml-[18.5rem]">
+        <Tooltip content={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"} placement="top">
+          <button
+            type="button"
+            onClick={() => setShowProvinceBorders((v) => !v)}
+            className={`group glass panel-border relative inline-flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl transition ${
+              showProvinceBorders ? "text-arc-accent shadow-neon" : "text-slate-200"
+            }`}
+            aria-label={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"}
+          >
+            <span
+              className={`pointer-events-none absolute left-1/2 top-1/2 h-3 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-transparent via-arc-accent/70 to-transparent blur-[2px] transition-opacity ${
+                showProvinceBorders ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              }`}
+            />
+            <MapPinned size={18} className="relative z-10" />
+            <span
+              className={`absolute bottom-2 right-2 h-2 w-2 rounded-full ${
+                showProvinceBorders ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.55)]" : "bg-white/35"
+              }`}
+            />
+          </button>
+        </Tooltip>
+      </div>
+
       {contextMenu && (
         <div
           className="glass panel-border pointer-events-auto absolute z-40 min-w-[220px] rounded-lg p-2"
@@ -848,6 +884,40 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
             <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22c55e]" /> Наша активная колония</div>
             <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#f59e0b]" /> Чужая активная колония</div>
             <div className="pt-1 text-white/60">Свободные провинции по стоимости: светлее = дешевле, темнее = дороже</div>
+          </div>
+        </div>
+      )}
+
+      {activeMode === "Политическая карта" && (
+        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-4 md:ml-[13.6rem] md:w-72 md:translate-x-0">
+          <div className="mb-2 font-semibold text-white">Легенда политической карты</div>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-white" /> Нейтральная провинция</div>
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-400" /> Провинция страны (цвет страны)</div>
+            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-300" /> Границы провинций</div>
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded bg-slate-500/80" />
+              Затемнение при наведении / выборе
+            </div>
+            <div className="pt-1 text-white/60">Заливка контролируемых провинций отображается цветом соответствующей страны.</div>
+            {countries.length > 0 && (
+              <div className="mt-2 border-t border-white/10 pt-2">
+                <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Страны</div>
+                <div className="space-y-1">
+                  {countries.map((country) => (
+                    <div key={country.id} className="flex items-center gap-2">
+                      {country.flagUrl ? (
+                        <img src={country.flagUrl} alt="" className="h-3 w-4 rounded-[2px] object-cover" />
+                      ) : (
+                        <span className="h-3 w-3 rounded-full border border-white/10" style={{ backgroundColor: country.color }} />
+                      )}
+                      <span className="h-3 w-3 rounded-sm border border-white/10" style={{ backgroundColor: country.color }} />
+                      <span className="truncate">{country.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
