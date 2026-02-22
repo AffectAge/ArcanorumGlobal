@@ -50,7 +50,7 @@ export function ColonizationModal({
     <Dialog open={open} onClose={onClose} className="relative z-[130]">
       <div className="fixed inset-0 bg-black/55" aria-hidden="true" />
       <div className="fixed inset-0 flex items-center justify-center p-4">
-        <Dialog.Panel className="panel-border w-full max-w-xl rounded-2xl bg-[#0b111b]/95 p-4 shadow-2xl backdrop-blur-xl">
+        <Dialog.Panel className="glass panel-border w-full max-w-xl rounded-2xl p-4 shadow-2xl">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <Dialog.Title className="flex items-center gap-2 text-base font-semibold text-white">
@@ -138,7 +138,7 @@ export function ColonizationModal({
             {canOpenAdminProvinceEditor && onOpenAdminProvinceEditor && (
               <button
                 onClick={onOpenAdminProvinceEditor}
-                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-sm font-semibold text-cyan-200"
+                className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-200"
               >
                 Изменить провинцию (админ)
               </button>

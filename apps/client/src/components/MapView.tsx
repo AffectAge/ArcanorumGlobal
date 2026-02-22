@@ -403,12 +403,6 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         return;
       }
 
-      const owner = useGameStore.getState().worldBase?.provinceOwner[id];
-      if (owner) {
-        setContextMenu(null);
-        return;
-      }
-
       e.preventDefault();
       setContextMenu({
         x: e.point.x + 12,
@@ -840,6 +834,19 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
           >
             Открыть колонизацию
           </button>
+          {auth?.isAdmin && onOpenAdminProvinceEditor && (
+            <button
+              onClick={() => {
+                setSelectedProvince(contextMenu.provinceId);
+                setSelectedProvinceName(contextMenu.provinceName);
+                onOpenAdminProvinceEditor(contextMenu.provinceId);
+                setContextMenu(null);
+              }}
+              className="mt-2 w-full rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-2 text-xs font-semibold text-rose-200 transition hover:border-rose-300/50 hover:bg-rose-400/15"
+            >
+              Управление провинцией
+            </button>
+          )}
         </div>
       )}
 
