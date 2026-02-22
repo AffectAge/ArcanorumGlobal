@@ -516,13 +516,8 @@ export function MapView({
             source: "adm1",
             "source-layer": "adm1",
             paint: {
-              "fill-color": "#05080f",
-              "fill-opacity": [
-                "case",
-                ["boolean", ["feature-state", "hover"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 0.14, 1, 0.2],
-                0,
-              ],
+              "fill-color": "#000000",
+              "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.4, 0],
             },
           },
           {
@@ -532,18 +527,8 @@ export function MapView({
             "source-layer": "adm1",
             paint: {
               "line-color": "#7dd3fc",
-              "line-width": [
-                "case",
-                ["boolean", ["feature-state", "hover"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 2.2, 1, 3.4],
-                0,
-              ],
-              "line-opacity": [
-                "case",
-                ["boolean", ["feature-state", "hover"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 0.2, 1, 0.34],
-                0,
-              ],
+              "line-width": 0,
+              "line-opacity": 0,
               "line-blur": 1,
             },
           },
@@ -554,18 +539,8 @@ export function MapView({
             "source-layer": "adm1",
             paint: {
               "line-color": "#dbeafe",
-              "line-width": [
-                "case",
-                ["boolean", ["feature-state", "hover"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 1.1, 1, 1.8],
-                0,
-              ],
-              "line-opacity": [
-                "case",
-                ["boolean", ["feature-state", "hover"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 0.65, 1, 0.95],
-                0,
-              ],
+              "line-width": 0,
+              "line-opacity": 0,
             },
           },
           {
@@ -574,20 +549,8 @@ export function MapView({
             source: "adm1",
             "source-layer": "adm1",
             paint: {
-              "line-color": "#38bdf8",
-              "line-width": [
-                "case",
-                ["boolean", ["feature-state", "selected"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "selectedPulse"], 0.5], 0, 4, 1, 5.6],
-                0,
-              ],
-              "line-opacity": [
-                "case",
-                ["boolean", ["feature-state", "selected"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "selectedPulse"], 0.5], 0, 0.26, 1, 0.4],
-                0,
-              ],
-              "line-blur": 1.2,
+              "line-color": "#000000",
+              "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.5, 0],
             },
           },
           {
@@ -597,13 +560,8 @@ export function MapView({
             "source-layer": "adm1",
             paint: {
               "line-color": "#ffffff",
-              "line-width": [
-                "case",
-                ["boolean", ["feature-state", "selected"], false],
-                ["interpolate", ["linear"], ["coalesce", ["feature-state", "selectedPulse"], 0.5], 0, 1.7, 1, 2.3],
-                0,
-              ],
-              "line-opacity": ["case", ["boolean", ["feature-state", "selected"], false], 0.95, 0],
+              "line-width": 0,
+              "line-opacity": 0,
             },
           },
           {
@@ -837,32 +795,6 @@ export function MapView({
       mapRef.current = null;
     };
   }, [apiBase, setSelectedProvince]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    let t = 0;
-    const timer = window.setInterval(() => {
-      t += 0.22;
-      const hoverId = hoveredFeatureIdRef.current;
-      const selectedId = selectedFeatureIdRef.current;
-      if (hoverId) {
-        map.setFeatureState(
-          { source: "adm1", sourceLayer: "adm1", id: hoverId },
-          { hoverPulse: 0.5 + Math.sin(t) * 0.5 },
-        );
-      }
-      if (selectedId) {
-        map.setFeatureState(
-          { source: "adm1", sourceLayer: "adm1", id: selectedId },
-          { selectedPulse: 0.5 + Math.sin(t * 0.8 + 0.7) * 0.5 },
-        );
-      }
-    }, 90);
-
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
