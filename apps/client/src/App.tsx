@@ -73,6 +73,11 @@ export default function App() {
   const [provinceAreaKm2ById, setProvinceAreaKm2ById] = useState<Record<string, number>>({});
   const [showAntarctica, setShowAntarctica] = useState(true);
   const [showMapControls, setShowMapControls] = useState(false);
+  const [turnTimerUi, setTurnTimerUi] = useState<{ enabled: boolean; secondsPerTurn: number; startedAtMs: number | null }>({
+    enabled: false,
+    secondsPerTurn: 300,
+    startedAtMs: null,
+  });
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -122,6 +127,7 @@ export default function App() {
 
       if (msg.type === "WORLD_PATCH") {
         setWorldBase(msg.worldBase, msg.turnId);
+        setTurnTimerUi((prev) => ({ ...prev, startedAtMs: Date.now() }));
         resetOverlay(msg.turnId);
         pruneLogEntries(msg.turnId);
         if (msg.rejectedOrders.length > 0) {
@@ -265,6 +271,14 @@ export default function App() {
             ducats: ui.colonization.ducatsCostPer1000Km2,
           });
           setShowAntarctica(ui.map?.showAntarctica ?? true);
+          setTurnTimerUi({
+            enabled: ui.turnTimer?.enabled ?? false,
+            secondsPerTurn: ui.turnTimer?.secondsPerTurn ?? 300,
+            startedAtMs:
+              typeof ui.turnTimer?.currentTurnStartedAtMs === "number" && Number.isFinite(ui.turnTimer.currentTurnStartedAtMs)
+                ? ui.turnTimer.currentTurnStartedAtMs
+                : Date.now(),
+          });
         }
       })
       .catch(() => {
@@ -594,6 +608,7 @@ export default function App() {
             resourceExpenseByTurn={currentTurnExpenses}
             colonizationLimit={{ active: activeColonizationCount, max: maxActiveColonizations }}
             countryDetails={currentCountryDetails}
+            turnTimer={turnTimerUi}
           />
           <SideNav />
           <EventLogPanel
@@ -643,6 +658,11 @@ export default function App() {
             }));
             setEventLogRetentionTurns(updated.eventLog.retentionTurns);
             setShowAntarctica(updated.map?.showAntarctica ?? true);
+            setTurnTimerUi((prev) => ({
+              enabled: updated.turnTimer?.enabled ?? prev.enabled,
+              secondsPerTurn: updated.turnTimer?.secondsPerTurn ?? prev.secondsPerTurn,
+              startedAtMs: Date.now(),
+            }));
           }}
         />
       )}

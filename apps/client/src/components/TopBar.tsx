@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Tooltip } from "./Tooltip";
@@ -32,6 +32,7 @@ type Props = {
   resourceExpenseByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
   colonizationLimit?: { active: number; max: number } | null;
   countryDetails?: { provinceCount: number; totalAreaKm2: number } | null;
+  turnTimer?: { enabled: boolean; secondsPerTurn: number; startedAtMs: number | null } | null;
 };
 
 const cards = [
@@ -69,6 +70,13 @@ function formatAreaKm2(value: number): string {
   return `${new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.round(value)))} км²`;
 }
 
+function formatCountdown(secondsLeft: number): string {
+  const sec = Math.max(0, Math.floor(secondsLeft));
+  const mm = Math.floor(sec / 60);
+  const ss = sec % 60;
+  return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
 export function TopBar({
   countryName,
   flagUrl,
@@ -89,11 +97,19 @@ export function TopBar({
   resourceExpenseByTurn,
   colonizationLimit,
   countryDetails,
+  turnTimer,
 }: Props) {
   const hoverOpenTimerRef = useRef<number | null>(null);
   const countryHoverTimerRef = useRef<number | null>(null);
   const [hoveredResource, setHoveredResource] = useState<(typeof cards)[number]["key"] | null>(null);
   const [countryHovered, setCountryHovered] = useState(false);
+  const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!turnTimer?.enabled || !turnTimer.startedAtMs) return;
+    const id = window.setInterval(() => setTimerNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [turnTimer?.enabled, turnTimer?.startedAtMs]);
 
   useEffect(() => {
     return () => {
@@ -143,6 +159,19 @@ export function TopBar({
     }
     setCountryHovered(false);
   };
+
+  const turnTimerRemainingSec =
+    turnTimer?.enabled && turnTimer.startedAtMs
+      ? Math.max(0, turnTimer.secondsPerTurn - Math.floor((timerNowMs - turnTimer.startedAtMs) / 1000))
+      : null;
+  const turnTimerColorClass =
+    turnTimerRemainingSec === null
+      ? "text-white/80"
+      : turnTimerRemainingSec <= 15
+        ? "text-rose-300"
+        : turnTimerRemainingSec <= 60
+          ? "text-amber-300"
+          : "text-emerald-300";
 
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-[95] rounded-xl px-4 py-3">
@@ -379,13 +408,28 @@ export function TopBar({
             </button>
           </Tooltip>
 
-          <Tooltip content={`Следующий ход #${turnId}`} placement="top">
+          <Tooltip
+            content={
+              turnTimer?.enabled && turnTimerRemainingSec !== null
+                ? `Следующий ход #${turnId} • авто через ${formatCountdown(turnTimerRemainingSec)}`
+                : `Следующий ход #${turnId}`
+            }
+            placement="top"
+          >
             <button
               onClick={onNextTurn}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-arc-accent text-black transition hover:brightness-110"
+              className={`inline-flex h-10 items-center justify-center rounded-lg bg-arc-accent text-black transition hover:brightness-110 ${
+                turnTimer?.enabled && turnTimerRemainingSec !== null ? "gap-2 px-3" : "w-10"
+              }`}
               aria-label={`Следующий ход #${turnId}`}
             >
               <SkipForward size={16} />
+              {turnTimer?.enabled && turnTimerRemainingSec !== null && (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold tabular-nums">
+                  <Clock3 size={13} className="text-black/80" />
+                  <span>{formatCountdown(turnTimerRemainingSec)}</span>
+                </span>
+              )}
             </button>
           </Tooltip>
         </div>

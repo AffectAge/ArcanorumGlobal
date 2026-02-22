@@ -243,6 +243,7 @@ export type GameSettings = {
   turnTimer: {
     enabled: boolean;
     secondsPerTurn: number;
+    currentTurnStartedAtMs?: number;
   };
   map: {
     showAntarctica: boolean;
@@ -296,12 +297,12 @@ export async function fetchProvinceIndex(): Promise<ProvinceIndexItem[]> {
   return data.provinces;
 }
 
-export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "map" | "resourceIcons">> {
+export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "turnTimer" | "map" | "resourceIcons">> {
   const response = await fetch(`${API}/game-settings/public`);
   if (!response.ok) {
     throw new Error("PUBLIC_GAME_SETTINGS_FAILED");
   }
-  const data = (await response.json()) as Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "map" | "resourceIcons">;
+  const data = (await response.json()) as Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "turnTimer" | "map" | "resourceIcons">;
   return {
     ...data,
     resourceIcons: normalizeResourceIcons(data.resourceIcons),

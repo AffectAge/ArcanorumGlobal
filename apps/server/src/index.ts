@@ -241,8 +241,8 @@ const defaultGameSettings = (): GameSettings => ({
     retentionTurns: 3,
   },
   turnTimer: {
-    enabled: false,
-    secondsPerTurn: 300,
+    enabled: true,
+    secondsPerTurn: 86_400,
   },
   map: {
     showAntarctica: false,
@@ -1220,7 +1220,10 @@ app.get("/game-settings/public", (_req, res) => {
     colonization: gameSettings.colonization,
     customization: gameSettings.customization,
     eventLog: gameSettings.eventLog,
-    turnTimer: gameSettings.turnTimer,
+    turnTimer: {
+      ...gameSettings.turnTimer,
+      currentTurnStartedAtMs,
+    },
     map: gameSettings.map,
     resourceIcons: gameSettings.resourceIcons,
   });
