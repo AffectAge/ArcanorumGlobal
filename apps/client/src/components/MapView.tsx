@@ -1,6 +1,7 @@
+import { Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { Crosshair, Lock, LockOpen, LocateFixed, MapPinned, Minus, Move, Plus } from "lucide-react";
+import { Check, ChevronDown, Crosshair, Lock, LockOpen, LocateFixed, MapPinned, Minus, Move, Plus } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
@@ -124,6 +125,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
   const [countries, setCountries] = useState<Country[]>([]);
   const [colonizationModalOpen, setColonizationModalOpen] = useState(false);
   const [colonizationActionPending, setColonizationActionPending] = useState(false);
+  const [politicalCountryFilter, setPoliticalCountryFilter] = useState<string>("all");
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -236,6 +238,12 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     selectedIsNeutral &&
     !selectedIsColonizationDisabled &&
     selectedMyColonyProgress == null;
+  const effectivePoliticalFilterCountryId =
+    politicalCountryFilter === "all"
+      ? null
+      : politicalCountryFilter === "own"
+        ? (auth?.countryId ?? null)
+        : politicalCountryFilter;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -522,6 +530,8 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
         {
           isOwned: Boolean(ownerId),
           isOwnedByCurrent: Boolean(ownerId && auth?.countryId && ownerId === auth.countryId),
+          isOwnedByPoliticalFilter: Boolean(ownerId && effectivePoliticalFilterCountryId && ownerId === effectivePoliticalFilterCountryId),
+          hasPoliticalCountryFilter: Boolean(effectivePoliticalFilterCountryId),
           isNeutral: !ownerId,
           ownerColor,
           ownerBorderColor,
@@ -545,6 +555,13 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     if (activeMode === "Политическая карта") {
       map.setPaintProperty("province-fill", "fill-color", [
         "case",
+        [
+          "all",
+          ["boolean", ["feature-state", "hasPoliticalCountryFilter"], false],
+          ["boolean", ["feature-state", "isOwned"], false],
+          ["!", ["boolean", ["feature-state", "isOwnedByPoliticalFilter"], false]],
+        ],
+        "#ffffff",
         ["boolean", ["feature-state", "isOwned"], false],
         ["coalesce", ["feature-state", "ownerColor"], "#d1d5db"],
         ["boolean", ["feature-state", "isColonizing"], false],
@@ -553,6 +570,13 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       ]);
       map.setPaintProperty("province-fill", "fill-opacity", [
         "case",
+        [
+          "all",
+          ["boolean", ["feature-state", "hasPoliticalCountryFilter"], false],
+          ["boolean", ["feature-state", "isOwned"], false],
+          ["!", ["boolean", ["feature-state", "isOwnedByPoliticalFilter"], false]],
+        ],
+        1,
         ["boolean", ["feature-state", "isOwned"], false],
         1,
         ["boolean", ["feature-state", "isColonizing"], false],
@@ -646,7 +670,7 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
     map.setPaintProperty("province-line", "line-color", "#C0C0C0");
     map.setPaintProperty("province-line", "line-width", 0.9);
     map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.75 : 0);
-  }, [activeMode, auth?.countryId, countryById, myQueuedColonizeProvinceIds, showProvinceBorders, worldBase]);
+  }, [activeMode, auth?.countryId, countryById, effectivePoliticalFilterCountryId, myQueuedColonizeProvinceIds, showProvinceBorders, worldBase]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
@@ -891,6 +915,57 @@ export function MapView({ apiBase, activeMode, onQueueBuildOrder, onQueueColoniz
       {activeMode === "Политическая карта" && (
         <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-4 md:ml-[13.6rem] md:w-72 md:translate-x-0">
           <div className="mb-2 font-semibold text-white">Легенда политической карты</div>
+          <div className="pointer-events-auto mb-2">
+            <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Показать страну</div>
+            <Listbox value={politicalCountryFilter} onChange={setPoliticalCountryFilter}>
+              <div className="relative">
+                <Listbox.Button className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 pr-10 text-left text-xs text-slate-100">
+                  {politicalCountryFilter === "all"
+                    ? "Все страны"
+                    : politicalCountryFilter === "own"
+                      ? "Наша страна"
+                      : (countries.find((c) => c.id === politicalCountryFilter)?.name ?? politicalCountryFilter)}
+                  <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                </Listbox.Button>
+                <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-64 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-xs shadow-2xl outline-none">
+                  {[
+                    { id: "all", label: "Все страны" },
+                    { id: "own", label: "Наша страна" },
+                  ].map((option) => (
+                    <Listbox.Option
+                      key={option.id}
+                      value={option.id}
+                      className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-8 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                    >
+                      {({ selected }) => (
+                        <>
+                          <span className={selected ? "text-arc-accent" : ""}>{option.label}</span>
+                          {selected && <Check size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                        </>
+                      )}
+                    </Listbox.Option>
+                  ))}
+                  {countries.map((country) => (
+                    <Listbox.Option
+                      key={country.id}
+                      value={country.id}
+                      className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-8 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                    >
+                      {({ selected }) => (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: country.color }} />
+                            <span className={selected ? "text-arc-accent" : ""}>{country.name}</span>
+                          </div>
+                          {selected && <Check size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                        </>
+                      )}
+                    </Listbox.Option>
+                  ))}
+                </Listbox.Options>
+              </div>
+            </Listbox>
+          </div>
           <div className="space-y-1.5">
             <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-white" /> Нейтральная провинция</div>
             <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-400" /> Провинция страны (цвет страны)</div>
