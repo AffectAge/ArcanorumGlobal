@@ -14,7 +14,7 @@ import { GameSettingsPanel } from "./components/GameSettingsPanel";
 import { CountryCustomizationModal } from "./components/CountryCustomizationModal";
 import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
-import { apiBase, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
+import { apiBase, fetchCountries, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
 
@@ -272,6 +272,32 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!auth?.countryId) return;
+    if (country?.name && country.name.trim().length > 0) return;
+
+    let cancelled = false;
+    fetchCountries()
+      .then((list) => {
+        if (cancelled) return;
+        const found = list.find((c) => c.id === auth.countryId);
+        if (!found) return;
+        setCountry({
+          name: found.name,
+          color: found.color,
+          flagUrl: found.flagUrl ?? null,
+          crestUrl: found.crestUrl ?? null,
+        });
+      })
+      .catch(() => {
+        // keep fallback label
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [auth?.countryId, country?.name]);
 
   const onAuthSuccess = (payload: AuthSuccess) => {
     setAuth({ token: payload.token, playerId: payload.playerId, countryId: payload.countryId, isAdmin: payload.isAdmin });
