@@ -13,6 +13,7 @@ import { TurnStatusModal } from "./components/TurnStatusModal";
 import { GameSettingsPanel } from "./components/GameSettingsPanel";
 import { CountryCustomizationModal } from "./components/CountryCustomizationModal";
 import { EventLogPanel } from "./components/EventLogPanel";
+import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { apiBase, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
@@ -39,6 +40,7 @@ export default function App() {
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
   const [countryCustomizationOpen, setCountryCustomizationOpen] = useState(false);
+  const [clientSettingsOpen, setClientSettingsOpen] = useState(false);
   const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
     culture: null,
     science: null,
@@ -69,6 +71,7 @@ export default function App() {
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationCostPer1000Km2, setColonizationCostPer1000Km2] = useState({ points: 5, ducats: 5 });
   const [provinceAreaKm2ById, setProvinceAreaKm2ById] = useState<Record<string, number>>({});
+  const [showMapControls, setShowMapControls] = useState(false);
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -205,6 +208,24 @@ export default function App() {
       // ignore storage failures
     }
   }, [auth?.countryId, mapMode]);
+
+  useEffect(() => {
+    try {
+      const key = `arc.ui.${auth?.countryId ?? "guest"}.map.showControls`;
+      const raw = localStorage.getItem(key);
+      setShowMapControls(raw === "1");
+    } catch {
+      setShowMapControls(false);
+    }
+  }, [auth?.countryId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`arc.ui.${auth?.countryId ?? "guest"}.map.showControls`, showMapControls ? "1" : "0");
+    } catch {
+      // ignore storage failures
+    }
+  }, [auth?.countryId, showMapControls]);
 
   useEffect(() => {
     let cancelled = false;
@@ -498,6 +519,7 @@ export default function App() {
         ducatsIconUrl={resourceIcons.ducats}
         maxActiveColonizations={maxActiveColonizations}
         colonizationCostPer1000Km2={colonizationCostPer1000Km2}
+        showMapControls={showMapControls}
         onOpenAdminProvinceEditor={(provinceId) => {
           setAdminInitialProvinceId(provinceId);
           setAdminOpen(true);
@@ -537,6 +559,7 @@ export default function App() {
             onOpenAdminPanel={() => setAdminOpen(true)}
             onOpenGameSettings={() => setGameSettingsOpen(true)}
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
+            onOpenClientSettings={() => setClientSettingsOpen(true)}
             resourceIconUrls={resourceIcons}
             resourceGrowthByTurn={resourceGrowthByTurn}
             resourceExpenseByTurn={currentTurnExpenses}
@@ -628,6 +651,17 @@ export default function App() {
                 turn: turnId,
               });
             }
+          }}
+        />
+      )}
+
+      {auth && (
+        <ClientSettingsModal
+          open={clientSettingsOpen}
+          showMapControls={showMapControls}
+          onClose={() => setClientSettingsOpen(false)}
+          onSave={({ showMapControls: nextShowMapControls }) => {
+            setShowMapControls(nextShowMapControls);
           }}
         />
       )}

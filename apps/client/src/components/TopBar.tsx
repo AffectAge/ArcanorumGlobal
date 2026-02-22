@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Tooltip } from "./Tooltip";
@@ -26,6 +26,7 @@ type Props = {
   onOpenAdminPanel?: () => void;
   onOpenGameSettings?: () => void;
   onOpenCountryCustomization?: () => void;
+  onOpenClientSettings?: () => void;
   resourceIconUrls?: Partial<Record<(typeof cards)[number]["key"], string | null>>;
   resourceGrowthByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
   resourceExpenseByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
@@ -82,6 +83,7 @@ export function TopBar({
   onOpenAdminPanel,
   onOpenGameSettings,
   onOpenCountryCustomization,
+  onOpenClientSettings,
   resourceIconUrls,
   resourceGrowthByTurn,
   resourceExpenseByTurn,
@@ -311,6 +313,16 @@ export function TopBar({
         </div>
 
         <div className="flex justify-end gap-2">
+          <Tooltip content="Настройки клиента" placement="top">
+            <button
+              onClick={onOpenClientSettings}
+              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
+              aria-label="Настройки клиента"
+            >
+              <Sliders size={16} />
+            </button>
+          </Tooltip>
+
           {isAdmin && (
             <Tooltip content="Панель администратора" placement="top">
               <button

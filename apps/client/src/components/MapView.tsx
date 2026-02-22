@@ -20,6 +20,7 @@ type Props = {
   ducatsIconUrl?: string | null;
   maxActiveColonizations?: number;
   colonizationCostPer1000Km2?: { points: number; ducats: number };
+  showMapControls?: boolean;
 };
 
 type MapModeStyle = {
@@ -139,6 +140,7 @@ export function MapView({
   ducatsIconUrl,
   maxActiveColonizations,
   colonizationCostPer1000Km2,
+  showMapControls = false,
 }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1031,38 +1033,40 @@ export function MapView({
       />
       <div className="vignette absolute inset-0 pointer-events-none" />
 
-      <div className="glass panel-border pointer-events-auto absolute bottom-4 right-4 z-30 flex flex-col gap-1 rounded-xl p-1.5">
-        <div className="flex items-center justify-center gap-1">
-          <Tooltip content="Приблизить карту">
-            <button onClick={zoomIn} className="map-btn" aria-label="Zoom in">
-              <Plus size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip content="Отдалить карту">
-            <button onClick={zoomOut} className="map-btn" aria-label="Zoom out">
-              <Minus size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip content="Сбросить центр и масштаб">
-            <button onClick={resetView} className="map-btn" aria-label="Reset view">
-              <LocateFixed size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip content={interactionLocked ? "Разблокировать pan/zoom" : "Заблокировать pan/zoom"}>
-            <button onClick={toggleInteraction} className="map-btn" aria-label="Toggle interactions">
-              {interactionLocked ? <Lock size={16} /> : <LockOpen size={16} />}
-            </button>
-          </Tooltip>
+      {showMapControls && (
+        <div className="glass panel-border pointer-events-auto absolute bottom-4 right-4 z-30 flex flex-col gap-1 rounded-xl p-1.5">
+          <div className="flex items-center justify-center gap-1">
+            <Tooltip content="Приблизить карту">
+              <button onClick={zoomIn} className="map-btn" aria-label="Zoom in">
+                <Plus size={16} />
+              </button>
+            </Tooltip>
+            <Tooltip content="Отдалить карту">
+              <button onClick={zoomOut} className="map-btn" aria-label="Zoom out">
+                <Minus size={16} />
+              </button>
+            </Tooltip>
+            <Tooltip content="Сбросить центр и масштаб">
+              <button onClick={resetView} className="map-btn" aria-label="Reset view">
+                <LocateFixed size={16} />
+              </button>
+            </Tooltip>
+            <Tooltip content={interactionLocked ? "Разблокировать pan/zoom" : "Заблокировать pan/zoom"}>
+              <button onClick={toggleInteraction} className="map-btn" aria-label="Toggle interactions">
+                {interactionLocked ? <Lock size={16} /> : <LockOpen size={16} />}
+              </button>
+            </Tooltip>
+          </div>
+          <div className="pointer-events-none flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-2.5 py-1.5 text-xs text-slate-300">
+            <Move size={14} className="text-arc-accent" />
+            <span>Z {view.zoom.toFixed(2)}</span>
+            <span>|</span>
+            <span>
+              {view.lng.toFixed(2)}, {view.lat.toFixed(2)}
+            </span>
+          </div>
         </div>
-        <div className="pointer-events-none flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-2.5 py-1.5 text-xs text-slate-300">
-          <Move size={14} className="text-arc-accent" />
-          <span>Z {view.zoom.toFixed(2)}</span>
-          <span>|</span>
-          <span>
-            {view.lng.toFixed(2)}, {view.lat.toFixed(2)}
-          </span>
-        </div>
-      </div>
+      )}
 
       <div className="pointer-events-auto absolute bottom-20 left-4 z-30 md:bottom-5 md:left-1/2 md:-translate-x-full md:-ml-[12.3rem]">
         <Tooltip content={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"} placement="top">
