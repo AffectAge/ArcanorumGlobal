@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, LogOut, ShieldAlert, SkipForward, SlidersHorizontal } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 
 type Resources = {
@@ -15,6 +15,7 @@ type Props = {
   crestUrl?: string | null;
   turnId: number;
   resources: Resources;
+  onOpenTurnStatus: () => void;
   onNextTurn: () => void;
   onLogout: () => void;
   isAdmin?: boolean;
@@ -30,7 +31,7 @@ const cards = [
   { key: "gold", label: "Золото", icon: CircleDollarSign, tip: "Госказна для больших проектов" },
 ] as const;
 
-export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNextTurn, onLogout, isAdmin = false, onAdminForceResolve, onOpenAdminPanel }: Props) {
+export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onOpenTurnStatus, onNextTurn, onLogout, isAdmin = false, onAdminForceResolve, onOpenAdminPanel }: Props) {
   return (
     <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-40 rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
@@ -87,6 +88,16 @@ export function TopBar({ countryName, flagUrl, crestUrl, turnId, resources, onNe
               aria-label="Выход"
             >
               <LogOut size={16} />
+            </button>
+          </Tooltip>
+
+          <Tooltip content="Статусы стран" placement="top">
+            <button
+              onClick={onOpenTurnStatus}
+              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
+              aria-label="Статусы стран"
+            >
+              <ListChecks size={16} />
             </button>
           </Tooltip>
 

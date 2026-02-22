@@ -99,6 +99,7 @@ const countrySelect = {
 let turnId = 1;
 const onlinePlayers = new Set<string>();
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
+const resolveReadyByTurn = new Map<number, Set<string>>();
 
 let worldBase: WorldBase = {
   turnId,
@@ -153,6 +154,26 @@ function countryFromDb(row: { id: string; name: string; color: string; flagUrl: 
   };
 }
 
+function getCountryBlockInfo(
+  country: { isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null },
+  currentTurn: number,
+  now: Date,
+): { blocked: boolean; reason: "PERMANENT" | "TURN" | "TIME" | null; blockedUntilTurn: number | null; blockedUntilAt: Date | null } {
+  if (country.isLocked) {
+    return { blocked: true, reason: "PERMANENT", blockedUntilTurn: null, blockedUntilAt: null };
+  }
+
+  if (country.blockedUntilTurn != null && currentTurn <= country.blockedUntilTurn) {
+    return { blocked: true, reason: "TURN", blockedUntilTurn: country.blockedUntilTurn, blockedUntilAt: null };
+  }
+
+  if (country.blockedUntilAt != null && country.blockedUntilAt > now) {
+    return { blocked: true, reason: "TIME", blockedUntilTurn: null, blockedUntilAt: country.blockedUntilAt };
+  }
+
+  return { blocked: false, reason: null, blockedUntilTurn: null, blockedUntilAt: null };
+}
+
 function validateImageDimensions(file: Express.Multer.File): boolean {
   const dimensions = imageSize(readFileSync(file.path));
   const width = dimensions.width ?? 0;
@@ -186,6 +207,14 @@ function removeUploadedByUrl(url?: string | null): void {
   }
 }
 
+function getReadySetForTurn(turn: number): Set<string> {
+  let readySet = resolveReadyByTurn.get(turn);
+  if (!readySet) {
+    readySet = new Set<string>();
+    resolveReadyByTurn.set(turn, readySet);
+  }
+  return readySet;
+}
 function resolveTurn(): WorldPatch {
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldPatch["rejectedOrders"] = [];
@@ -216,6 +245,7 @@ function resolveTurn(): WorldPatch {
   };
 
   ordersByTurn.delete(turnId - 1);
+  resolveReadyByTurn.delete(turnId - 1);
 
   return {
     type: "WORLD_PATCH",
@@ -232,6 +262,42 @@ app.get("/health", async (_req, res) => {
 app.get("/countries", async (_req, res) => {
   const countries = await prisma.country.findMany({ select: countrySelect, orderBy: { createdAt: "asc" } });
   res.json(countries.map(countryFromDb));
+});
+
+app.get("/turn/status", async (_req, res) => {
+  const now = new Date();
+  const countries = await prisma.country.findMany({
+    select: {
+      id: true,
+      name: true,
+      isLocked: true,
+      blockedUntilTurn: true,
+      blockedUntilAt: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const readySet = getReadySetForTurn(turnId);
+
+  const items = countries.map((country) => {
+    const block = getCountryBlockInfo(country, turnId, now);
+    const ready = !block.blocked && readySet.has(country.id);
+    const status = block.blocked ? "blocked" : ready ? "ready" : "waiting";
+
+    return {
+      id: country.id,
+      name: country.name,
+      status,
+      blockedReason: block.reason,
+      blockedUntilTurn: block.blockedUntilTurn,
+      blockedUntilAt: block.blockedUntilAt ? block.blockedUntilAt.toISOString() : null,
+    };
+  });
+
+  const requiredCount = items.filter((item) => item.status !== "blocked").length;
+  const readyCount = items.filter((item) => item.status === "ready").length;
+
+  res.json({ turnId, readyCount, requiredCount, countries: items });
 });
 
 function parseAuthHeader(req: express.Request): { id: string; countryId: string; isAdmin: boolean } | null {
@@ -505,19 +571,18 @@ app.post("/auth/login", async (req, res) => {
   }
 
   const now = new Date();
-  const blockedByTurn = country.blockedUntilTurn != null && turnId <= country.blockedUntilTurn;
-  const blockedByTime = country.blockedUntilAt != null && country.blockedUntilAt > now;
+  const block = getCountryBlockInfo(country, turnId, now);
 
-  if (country.isLocked || blockedByTurn || blockedByTime) {
-    if (country.isLocked) {
+  if (block.blocked) {
+    if (block.reason === "PERMANENT") {
       return res.status(403).json({ error: "ACCOUNT_LOCKED", reason: "PERMANENT" });
     }
 
-    if (blockedByTurn) {
+    if (block.reason === "TURN") {
       return res.status(403).json({
         error: "ACCOUNT_LOCKED",
         reason: "TURN",
-        blockedUntilTurn: country.blockedUntilTurn,
+        blockedUntilTurn: block.blockedUntilTurn,
         currentTurn: turnId,
       });
     }
@@ -525,7 +590,7 @@ app.post("/auth/login", async (req, res) => {
     return res.status(403).json({
       error: "ACCOUNT_LOCKED",
       reason: "TIME",
-      blockedUntilAt: country.blockedUntilAt?.toISOString() ?? null,
+      blockedUntilAt: block.blockedUntilAt?.toISOString() ?? null,
     });
   }
 
@@ -578,6 +643,7 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (socket) => {
   let playerId: string | null = null;
+  let playerCountryId: string | null = null;
   let isAdmin = false;
 
   const send = (message: WsOutMessage) => {
@@ -604,6 +670,7 @@ wss.on("connection", (socket) => {
       try {
         const payload = jwt.verify(msg.token, env.jwtSecret) as { id: string; countryId: string; isAdmin?: boolean };
         playerId = payload.id;
+        playerCountryId = payload.countryId;
         isAdmin = Boolean(payload.isAdmin);
         onlinePlayers.add(payload.id);
         send({ type: "AUTH_OK", playerId: payload.id, countryId: payload.countryId, isAdmin, worldBase, turnId });
@@ -666,6 +733,43 @@ wss.on("connection", (socket) => {
     }
 
     if (msg.type === "REQUEST_RESOLVE") {
+      if (!playerCountryId) {
+        send({ type: "ERROR", code: "UNAUTHORIZED", message: "Country is not resolved from token" });
+        return;
+      }
+
+      const countries = await prisma.country.findMany({
+        select: {
+          id: true,
+          isLocked: true,
+          blockedUntilTurn: true,
+          blockedUntilAt: true,
+        },
+      });
+      const now = new Date();
+      const activeCountryIds = new Set(
+        countries
+          .filter((country) => !getCountryBlockInfo(country, turnId, now).blocked)
+          .map((country) => country.id),
+      );
+
+      const readySet = getReadySetForTurn(turnId);
+      if (activeCountryIds.has(playerCountryId)) {
+        readySet.add(playerCountryId);
+      }
+
+      const readyCount = [...readySet].filter((countryId) => activeCountryIds.has(countryId)).length;
+      const totalCount = activeCountryIds.size;
+
+      if (readyCount < totalCount) {
+        send({
+          type: "ERROR",
+          code: "WAITING_FOR_PLAYERS",
+          message: `Ожидание подтверждения хода: ${readyCount}/${totalCount}`,
+        });
+        return;
+      }
+
       const patch = resolveTurn();
       broadcast(wss, patch);
     }

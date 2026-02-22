@@ -191,3 +191,20 @@ export async function adminSetCountryPunishment(
 
   return normalizeCountry((await response.json()) as Country);
 }
+
+export type TurnStatusItem = {
+  id: string;
+  name: string;
+  status: "ready" | "waiting" | "blocked";
+  blockedReason: "PERMANENT" | "TURN" | "TIME" | null;
+  blockedUntilTurn: number | null;
+  blockedUntilAt: string | null;
+};
+
+export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: number; requiredCount: number; countries: TurnStatusItem[] }> {
+  const response = await fetch(`${API}/turn/status`);
+  if (!response.ok) {
+    throw new Error("TURN_STATUS_FAILED");
+  }
+  return response.json();
+}
