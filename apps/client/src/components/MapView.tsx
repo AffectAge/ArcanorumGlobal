@@ -1,7 +1,8 @@
 import { Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { Check, ChevronDown, Crosshair, Grid3X3, Lock, LockOpen, LocateFixed, Minus, Move, Plus } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Check, ChevronDown, Crosshair, Grid3X3, Lock, LockOpen, LocateFixed, Minus, Move, Plus, Search, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
@@ -189,6 +190,12 @@ export function MapView({
       return "all";
     }
   });
+  const [politicalLegendPinnedOpen, setPoliticalLegendPinnedOpen] = useState(false);
+  const [politicalLegendHovered, setPoliticalLegendHovered] = useState(false);
+  const [colonizationLegendPinnedOpen, setColonizationLegendPinnedOpen] = useState(false);
+  const [colonizationLegendHovered, setColonizationLegendHovered] = useState(false);
+  const [politicalLegendCountrySearch, setPoliticalLegendCountrySearch] = useState("");
+  const [mapModeFadePulse, setMapModeFadePulse] = useState(0);
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -253,6 +260,18 @@ export function MapView({
       // ignore
     }
   }, [auth?.countryId, politicalCountryFilter]);
+
+  useEffect(() => {
+    setMapModeFadePulse((v) => v + 1);
+  }, [activeMode]);
+
+  const isPoliticalLegendExpanded = activeMode === "Политическая карта" && (politicalLegendPinnedOpen || politicalLegendHovered);
+  const isColonizationLegendExpanded = activeMode === "Колонизация" && (colonizationLegendPinnedOpen || colonizationLegendHovered);
+  const filteredLegendCountries = useMemo(() => {
+    const q = politicalLegendCountrySearch.trim().toLowerCase();
+    if (!q) return countries;
+    return countries.filter((c) => c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q));
+  }, [countries, politicalLegendCountrySearch]);
 
   const ordersCountByProvince = useMemo(() => {
     const map = new Map<string, number>();
@@ -497,8 +516,56 @@ export function MapView({
             source: "adm1",
             "source-layer": "adm1",
             paint: {
-              "fill-color": "#000000",
-              "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.4, 0],
+              "fill-color": "#05080f",
+              "fill-opacity": [
+                "case",
+                ["boolean", ["feature-state", "hover"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 0.14, 1, 0.2],
+                0,
+              ],
+            },
+          },
+          {
+            id: "province-hover-glow",
+            type: "line",
+            source: "adm1",
+            "source-layer": "adm1",
+            paint: {
+              "line-color": "#7dd3fc",
+              "line-width": [
+                "case",
+                ["boolean", ["feature-state", "hover"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 2.2, 1, 3.4],
+                0,
+              ],
+              "line-opacity": [
+                "case",
+                ["boolean", ["feature-state", "hover"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 0.2, 1, 0.34],
+                0,
+              ],
+              "line-blur": 1,
+            },
+          },
+          {
+            id: "province-hover-outline",
+            type: "line",
+            source: "adm1",
+            "source-layer": "adm1",
+            paint: {
+              "line-color": "#dbeafe",
+              "line-width": [
+                "case",
+                ["boolean", ["feature-state", "hover"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 1.1, 1, 1.8],
+                0,
+              ],
+              "line-opacity": [
+                "case",
+                ["boolean", ["feature-state", "hover"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "hoverPulse"], 0.5], 0, 0.65, 1, 0.95],
+                0,
+              ],
             },
           },
           {
@@ -507,8 +574,48 @@ export function MapView({
             source: "adm1",
             "source-layer": "adm1",
             paint: {
-              "line-color": "#000000",
-              "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 2.5, 0],
+              "line-color": "#38bdf8",
+              "line-width": [
+                "case",
+                ["boolean", ["feature-state", "selected"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "selectedPulse"], 0.5], 0, 4, 1, 5.6],
+                0,
+              ],
+              "line-opacity": [
+                "case",
+                ["boolean", ["feature-state", "selected"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "selectedPulse"], 0.5], 0, 0.26, 1, 0.4],
+                0,
+              ],
+              "line-blur": 1.2,
+            },
+          },
+          {
+            id: "province-selected-inner",
+            type: "line",
+            source: "adm1",
+            "source-layer": "adm1",
+            paint: {
+              "line-color": "#ffffff",
+              "line-width": [
+                "case",
+                ["boolean", ["feature-state", "selected"], false],
+                ["interpolate", ["linear"], ["coalesce", ["feature-state", "selectedPulse"], 0.5], 0, 1.7, 1, 2.3],
+                0,
+              ],
+              "line-opacity": ["case", ["boolean", ["feature-state", "selected"], false], 0.95, 0],
+            },
+          },
+          {
+            id: "province-colonize-ring",
+            type: "line",
+            source: "adm1",
+            "source-layer": "adm1",
+            paint: {
+              "line-color": ["coalesce", ["feature-state", "colonizeLeadColor"], "#93c5fd"],
+              "line-width": 0,
+              "line-opacity": 0,
+              "line-blur": 0.5,
             },
           },
           {
@@ -540,6 +647,26 @@ export function MapView({
       }
       if (!map.hasImage(COLONIZE_STRIPES_PATTERN)) {
         map.addImage(COLONIZE_STRIPES_PATTERN, createPatternData(true));
+      }
+      for (const [layerId, prop] of [
+        ["province-fill", "fill-color"],
+        ["province-fill", "fill-opacity"],
+        ["province-colonize-stripes", "fill-opacity"],
+        ["province-colonize-ring", "line-opacity"],
+        ["province-colonize-ring", "line-width"],
+        ["province-line", "line-color"],
+        ["province-line", "line-opacity"],
+        ["province-hover", "fill-opacity"],
+        ["province-hover-glow", "line-opacity"],
+        ["province-hover-glow", "line-width"],
+        ["province-hover-outline", "line-opacity"],
+        ["province-hover-outline", "line-width"],
+        ["province-selected", "line-opacity"],
+        ["province-selected", "line-width"],
+        ["province-selected-inner", "line-opacity"],
+        ["province-selected-inner", "line-width"],
+      ] as const) {
+        map.setPaintProperty(layerId, `${prop}-transition`, { duration: 160, delay: 0 });
       }
       map.resize();
       const c = map.getCenter();
@@ -713,7 +840,39 @@ export function MapView({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.getLayer("province-fill") || !map.getLayer("province-line") || !map.getLayer("province-colonize-stripes")) {
+    if (!map) return;
+
+    let t = 0;
+    const timer = window.setInterval(() => {
+      t += 0.22;
+      const hoverId = hoveredFeatureIdRef.current;
+      const selectedId = selectedFeatureIdRef.current;
+      if (hoverId) {
+        map.setFeatureState(
+          { source: "adm1", sourceLayer: "adm1", id: hoverId },
+          { hoverPulse: 0.5 + Math.sin(t) * 0.5 },
+        );
+      }
+      if (selectedId) {
+        map.setFeatureState(
+          { source: "adm1", sourceLayer: "adm1", id: selectedId },
+          { selectedPulse: 0.5 + Math.sin(t * 0.8 + 0.7) * 0.5 },
+        );
+      }
+    }, 90);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (
+      !map ||
+      !map.getLayer("province-fill") ||
+      !map.getLayer("province-line") ||
+      !map.getLayer("province-colonize-stripes") ||
+      !map.getLayer("province-colonize-ring")
+    ) {
       return;
     }
 
@@ -849,6 +1008,19 @@ export function MapView({
         COLONIZE_EMPTY_PATTERN,
       ]);
       map.setPaintProperty("province-colonize-stripes", "fill-opacity", 0);
+      map.setPaintProperty("province-colonize-ring", "line-color", ["coalesce", ["feature-state", "colonizeLeadColor"], "#93c5fd"]);
+      map.setPaintProperty("province-colonize-ring", "line-width", [
+        "case",
+        ["boolean", ["feature-state", "isColonizing"], false],
+        2.1,
+        0,
+      ]);
+      map.setPaintProperty("province-colonize-ring", "line-opacity", [
+        "case",
+        ["boolean", ["feature-state", "isColonizing"], false],
+        0.32,
+        0,
+      ]);
       map.setPaintProperty("province-line", "line-color", "#9ca3af");
       map.setPaintProperty("province-line", "line-width", 1.1);
       map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.95 : 0);
@@ -908,6 +1080,8 @@ export function MapView({
       ]);
       map.setPaintProperty("province-line", "line-width", 1.2);
       map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.95 : 0);
+      map.setPaintProperty("province-colonize-ring", "line-width", 0);
+      map.setPaintProperty("province-colonize-ring", "line-opacity", 0);
       map.setPaintProperty("province-colonize-stripes", "fill-opacity", [
         "case",
         ["boolean", ["feature-state", "hasQueuedOwnColonizeOrder"], false],
@@ -926,6 +1100,8 @@ export function MapView({
     map.setPaintProperty("province-fill", "fill-opacity", style.fillOpacity);
     map.setPaintProperty("province-colonize-stripes", "fill-pattern", COLONIZE_EMPTY_PATTERN);
     map.setPaintProperty("province-colonize-stripes", "fill-opacity", 0);
+    map.setPaintProperty("province-colonize-ring", "line-width", 0);
+    map.setPaintProperty("province-colonize-ring", "line-opacity", 0);
     map.setPaintProperty("province-line", "line-color", "#C0C0C0");
     map.setPaintProperty("province-line", "line-width", 0.9);
     map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.75 : 0);
@@ -1013,6 +1189,12 @@ export function MapView({
     }
   };
 
+  const legendPanelBaseClass =
+    "pointer-events-auto absolute z-30 rounded-xl border border-white/10 bg-[#0b111b] text-xs text-white/80 shadow-2xl backdrop-blur-xl";
+  const legendCompactClass = "w-auto px-2 py-2";
+  const legendExpandedClass = "w-72 p-3";
+  const mapControlsRhythmClass = "h-11 rounded-xl";
+
   return (
     <>
       <div
@@ -1032,6 +1214,16 @@ export function MapView({
         colonizers={hoverTooltip?.colonizers ?? []}
       />
       <div className="vignette absolute inset-0 pointer-events-none" />
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={`mode-fade-${activeMode}-${mapModeFadePulse}`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: [0, 0.15, 0] }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+          className="pointer-events-none absolute inset-0 z-[8] bg-[#03101a]"
+        />
+      </AnimatePresence>
 
       {showMapControls && (
         <div className="glass panel-border pointer-events-auto absolute bottom-4 right-4 z-30 flex flex-col gap-1 rounded-xl p-1.5">
@@ -1073,7 +1265,7 @@ export function MapView({
           <button
             type="button"
             onClick={() => setShowProvinceBorders((v) => !v)}
-            className={`group glass panel-border relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
+            className={`group glass panel-border relative flex ${mapControlsRhythmClass} w-11 items-center justify-center overflow-hidden bg-[#0b111b]/86 text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
               showProvinceBorders ? "shadow-neon" : ""
             }`}
             aria-label={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"}
@@ -1182,103 +1374,203 @@ export function MapView({
       )}
 
       {activeMode === "Колонизация" && (
-        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-5 md:ml-[12.3rem] md:w-72 md:translate-x-0">
-          <div className="mb-2 font-semibold text-white">Легенда колонизации</div>
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#b91c1c]" /> Запрещено</div>
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22d3ee]" /> Наш приказ в очереди</div>
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#16a34a]" /> Наши провинции</div>
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#64748b]" /> Чужие провинции</div>
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22c55e]" /> Наша активная колония</div>
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#f59e0b]" /> Чужая активная колония</div>
-            <div className="pt-1 text-white/60">Свободные провинции по стоимости: светлее = дешевле, темнее = дороже</div>
-          </div>
-        </div>
+        <motion.div
+          layout
+          onMouseEnter={() => setColonizationLegendHovered(true)}
+          onMouseLeave={() => setColonizationLegendHovered(false)}
+          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
+            isColonizationLegendExpanded ? legendExpandedClass : legendCompactClass
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setColonizationLegendPinnedOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles size={14} className="text-emerald-300" />
+              <span className="font-semibold text-white">Колонизация</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {!isColonizationLegendExpanded && (
+                <>
+                  <span className="h-2.5 w-2.5 rounded bg-[#b91c1c]" />
+                  <span className="h-2.5 w-2.5 rounded bg-[#22c55e]" />
+                  <span className="h-2.5 w-2.5 rounded bg-[#f59e0b]" />
+                </>
+              )}
+              <ChevronDown size={14} className={`transition ${isColonizationLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
+            </div>
+          </button>
+          <AnimatePresence initial={false}>
+            {isColonizationLegendExpanded && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                className="mt-2 space-y-1.5"
+              >
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#b91c1c]" /> Запрещено</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22d3ee]" /> Наш приказ в очереди</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#16a34a]" /> Наши провинции</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#64748b]" /> Чужие провинции</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22c55e]" /> Наша активная колония</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#f59e0b]" /> Чужая активная колония</div>
+                <div className="pt-1 text-white/60">Свободные провинции по стоимости: светлее = дешевле, темнее = дороже</div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
       )}
 
       {activeMode === "Политическая карта" && (
-        <div className="pointer-events-none absolute bottom-20 left-4 right-4 z-30 rounded-xl border border-white/10 bg-[#0b111b]/90 p-3 text-xs text-white/80 shadow-2xl backdrop-blur-xl md:left-1/2 md:right-auto md:bottom-5 md:ml-[12.3rem] md:w-72 md:translate-x-0">
-          <div className="mb-2 font-semibold text-white">Легенда политической карты</div>
-          <div className="pointer-events-auto mb-2">
-            <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Показать страну</div>
-            <Listbox value={politicalCountryFilter} onChange={setPoliticalCountryFilter}>
-              <div className="relative">
-                <Listbox.Button className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 pr-10 text-left text-xs text-slate-100">
-                  {politicalCountryFilter === "all"
-                    ? "Все страны"
-                    : politicalCountryFilter === "own"
-                      ? "Наша страна"
-                      : (countries.find((c) => c.id === politicalCountryFilter)?.name ?? politicalCountryFilter)}
-                  <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                </Listbox.Button>
-                <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-64 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-xs shadow-2xl outline-none">
-                  {[
-                    { id: "all", label: "Все страны" },
-                    { id: "own", label: "Наша страна" },
-                  ].map((option) => (
-                    <Listbox.Option
-                      key={option.id}
-                      value={option.id}
-                      className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-8 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
-                    >
-                      {({ selected }) => (
-                        <>
-                          <span className={selected ? "text-arc-accent" : ""}>{option.label}</span>
-                          {selected && <Check size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-arc-accent" />}
-                        </>
-                      )}
-                    </Listbox.Option>
-                  ))}
-                  {countries.map((country) => (
-                    <Listbox.Option
-                      key={country.id}
-                      value={country.id}
-                      className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-8 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
-                    >
-                      {({ selected }) => (
-                        <>
-                          <div className="flex items-center gap-2">
-                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: country.color }} />
-                            <span className={selected ? "text-arc-accent" : ""}>{country.name}</span>
-                          </div>
-                          {selected && <Check size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-arc-accent" />}
-                        </>
-                      )}
-                    </Listbox.Option>
-                  ))}
-                </Listbox.Options>
-              </div>
-            </Listbox>
-          </div>
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-white" /> Нейтральная провинция</div>
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-400" /> Провинция страны (цвет страны)</div>
-            <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-300" /> Границы провинций</div>
+        <motion.div
+          layout
+          onMouseEnter={() => setPoliticalLegendHovered(true)}
+          onMouseLeave={() => setPoliticalLegendHovered(false)}
+          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
+            isPoliticalLegendExpanded ? legendExpandedClass : legendCompactClass
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setPoliticalLegendPinnedOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
+          >
             <div className="flex items-center gap-2">
-              <span className="h-3 w-3 rounded bg-slate-500/80" />
-              Затемнение при наведении / выборе
+              <span className="h-2.5 w-2.5 rounded bg-white shadow-[0_0_8px_rgba(255,255,255,0.15)]" />
+              <span className="font-semibold text-white">Политическая карта</span>
             </div>
-            <div className="pt-1 text-white/60">Заливка контролируемых провинций отображается цветом соответствующей страны.</div>
-            {countries.length > 0 && (
-              <div className="mt-2 border-t border-white/10 pt-2">
-                <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Страны</div>
-                <div className="space-y-1">
-                  {countries.map((country) => (
-                    <div key={country.id} className="flex items-center gap-2">
-                      {country.flagUrl ? (
-                        <img src={country.flagUrl} alt="" className="h-3 w-4 rounded-[2px] object-cover" />
-                      ) : (
-                        <span className="h-3 w-3 rounded-full border border-white/10" style={{ backgroundColor: country.color }} />
-                      )}
-                      <span className="h-3 w-3 rounded-sm border border-white/10" style={{ backgroundColor: country.color }} />
-                      <span className="truncate">{country.name}</span>
+            <div className="flex items-center gap-1">
+              {!isPoliticalLegendExpanded && (
+                <>
+                  <span className="h-2.5 w-2.5 rounded bg-white" />
+                  <span className="h-2.5 w-2.5 rounded bg-slate-400" />
+                  <span className="h-2.5 w-2.5 rounded bg-slate-300" />
+                </>
+              )}
+              <ChevronDown size={14} className={`transition ${isPoliticalLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
+            </div>
+          </button>
+
+          <AnimatePresence initial={false}>
+            {isPoliticalLegendExpanded && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                className="mt-2"
+              >
+                <div className="mb-2 rounded-lg border border-white/10 bg-black/25 p-2">
+                  <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Показать страну</div>
+                  <Listbox value={politicalCountryFilter} onChange={setPoliticalCountryFilter}>
+                    <div className="relative">
+                      <Listbox.Button className="h-11 w-full rounded-lg border border-white/10 bg-black/35 px-3 pr-10 text-left text-xs text-slate-100">
+                        {politicalCountryFilter === "all"
+                          ? "Все страны"
+                          : politicalCountryFilter === "own"
+                            ? "Наша страна"
+                            : (countries.find((c) => c.id === politicalCountryFilter)?.name ?? politicalCountryFilter)}
+                        <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      </Listbox.Button>
+                      <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-64 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-xs shadow-2xl outline-none">
+                        {[
+                          { id: "all", label: "Все страны" },
+                          { id: "own", label: "Наша страна" },
+                        ].map((option) => (
+                          <Listbox.Option
+                            key={option.id}
+                            value={option.id}
+                            className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-8 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                          >
+                            {({ selected }) => (
+                              <>
+                                <span className={selected ? "text-arc-accent" : ""}>{option.label}</span>
+                                {selected && <Check size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                              </>
+                            )}
+                          </Listbox.Option>
+                        ))}
+                        {(politicalLegendCountrySearch.trim() ? filteredLegendCountries : countries).map((country) => (
+                          <Listbox.Option
+                            key={country.id}
+                            value={country.id}
+                            className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-8 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                          >
+                            {({ selected }) => (
+                              <>
+                                <div className="flex items-center gap-2">
+                                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: country.color }} />
+                                  <span className={selected ? "text-arc-accent" : ""}>{country.name}</span>
+                                </div>
+                                {selected && <Check size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                              </>
+                            )}
+                          </Listbox.Option>
+                        ))}
+                      </Listbox.Options>
                     </div>
-                  ))}
+                  </Listbox>
                 </div>
-              </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-white" /> Нейтральная провинция</div>
+                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-400" /> Провинция страны (цвет страны)</div>
+                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-300" /> Границы провинций</div>
+                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-sky-300/70" /> Контур/подсветка наведения</div>
+                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-sky-400/50" /> Внешнее кольцо колонизации</div>
+                  <div className="pt-1 text-white/60">Заливка контролируемых провинций отображается цветом соответствующей страны.</div>
+                </div>
+
+                {countries.length > 0 && (
+                  <div className="mt-2 rounded-lg border border-white/10 bg-black/25 p-2">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wide text-white/45">
+                      <Search size={12} />
+                      Страны
+                    </div>
+                    <div className="relative mb-2">
+                      <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-white/35" />
+                      <input
+                        value={politicalLegendCountrySearch}
+                        onChange={(e) => setPoliticalLegendCountrySearch(e.target.value)}
+                        placeholder="Поиск страны..."
+                        className="h-9 w-full rounded-lg border border-white/10 bg-black/35 px-7 pr-8 text-xs text-slate-100 outline-none transition focus:border-arc-accent/40"
+                      />
+                      {politicalLegendCountrySearch && (
+                        <button
+                          type="button"
+                          onClick={() => setPoliticalLegendCountrySearch("")}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80"
+                          aria-label="Очистить поиск"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                    <div className="arc-scrollbar max-h-40 space-y-1 overflow-auto pr-1">
+                      {filteredLegendCountries.map((country) => (
+                        <div key={country.id} className="flex items-center gap-2 rounded-md border border-white/5 bg-white/0 px-2 py-1">
+                          {country.flagUrl ? (
+                            <img src={country.flagUrl} alt="" className="h-3 w-4 rounded-[2px] object-cover" />
+                          ) : (
+                            <span className="h-3 w-3 rounded-full border border-white/10" style={{ backgroundColor: country.color }} />
+                          )}
+                          <span className="h-3 w-3 rounded-sm border border-white/10" style={{ backgroundColor: country.color }} />
+                          <span className="truncate">{country.name}</span>
+                        </div>
+                      ))}
+                      {filteredLegendCountries.length === 0 && (
+                        <div className="px-1 py-1 text-[11px] text-white/45">Ничего не найдено</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
             )}
-          </div>
-        </div>
+          </AnimatePresence>
+        </motion.div>
       )}
 
       <ColonizationModal
