@@ -96,10 +96,41 @@ function ScopeIcon({ scope }: { scope: EventCountryScope }) {
 }
 
 export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [sortMode, setSortMode] = useState<"time" | "priority">("time");
-  const [countryScope, setCountryScope] = useState<EventCountryScope>("all");
-  const [enabledCategories, setEnabledCategories] = useState<Set<EventCategory>>(() => new Set(allCategoryIds));
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("arc.ui.eventLog.collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [sortMode, setSortMode] = useState<"time" | "priority">(() => {
+    try {
+      const raw = localStorage.getItem("arc.ui.eventLog.sortMode");
+      return raw === "priority" ? "priority" : "time";
+    } catch {
+      return "time";
+    }
+  });
+  const [countryScope, setCountryScope] = useState<EventCountryScope>(() => {
+    try {
+      const raw = localStorage.getItem("arc.ui.eventLog.countryScope");
+      return raw === "own" || raw === "foreign" ? raw : "all";
+    } catch {
+      return "all";
+    }
+  });
+  const [enabledCategories, setEnabledCategories] = useState<Set<EventCategory>>(() => {
+    try {
+      const raw = localStorage.getItem("arc.ui.eventLog.enabledCategories");
+      if (!raw) return new Set(allCategoryIds);
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return new Set(allCategoryIds);
+      const next = parsed.filter((v): v is EventCategory => allCategoryIds.includes(v as EventCategory));
+      return new Set(next.length > 0 ? (["system", ...next.filter((v) => v !== "system")] as EventCategory[]) : allCategoryIds);
+    } catch {
+      return new Set(allCategoryIds);
+    }
+  });
   const [newEventsPulse, setNewEventsPulse] = useState(false);
   const [countriesById, setCountriesById] = useState<Record<string, { name: string; flagUrl?: string | null; color?: string }>>({});
   const prevEntriesCountRef = useRef(entries.length);
@@ -158,6 +189,38 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
     prevEntriesCountRef.current = entries.length;
     return;
   }, [entries.length]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.eventLog.collapsed", collapsed ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [collapsed]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.eventLog.sortMode", sortMode);
+    } catch {
+      // ignore
+    }
+  }, [sortMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.eventLog.countryScope", countryScope);
+    } catch {
+      // ignore
+    }
+  }, [countryScope]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.eventLog.enabledCategories", JSON.stringify([...enabledCategories]));
+    } catch {
+      // ignore
+    }
+  }, [enabledCategories]);
 
   useEffect(() => {
     let cancelled = false;

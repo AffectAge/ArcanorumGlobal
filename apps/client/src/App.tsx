@@ -26,7 +26,13 @@ type SessionCountry = {
 
 export default function App() {
   const [country, setCountry] = useState<SessionCountry | null>(null);
-  const [mapMode, setMapMode] = useState("Политическая карта");
+  const [mapMode, setMapMode] = useState(() => {
+    try {
+      return localStorage.getItem("arc.ui.mapMode") || "Политическая карта";
+    } catch {
+      return "Политическая карта";
+    }
+  });
   const [cmdOpen, setCmdOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
@@ -179,6 +185,14 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.mapMode", mapMode);
+    } catch {
+      // ignore storage failures
+    }
+  }, [mapMode]);
 
   useEffect(() => {
     let cancelled = false;

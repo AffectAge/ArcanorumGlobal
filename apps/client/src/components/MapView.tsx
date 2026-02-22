@@ -151,8 +151,21 @@ export function MapView({
   const provinceNamesByIdRef = useRef<Map<string, string>>(new Map());
   const provinceMetaByIdRef = useRef<Map<string, { name: string; areaKm2: number }>>(new Map());
 
-  const [interactionLocked, setInteractionLocked] = useState(false);
-  const [showProvinceBorders, setShowProvinceBorders] = useState(true);
+  const [interactionLocked, setInteractionLocked] = useState(() => {
+    try {
+      return localStorage.getItem("arc.ui.map.interactionLocked") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [showProvinceBorders, setShowProvinceBorders] = useState(() => {
+    try {
+      const raw = localStorage.getItem("arc.ui.map.showProvinceBorders");
+      return raw == null ? true : raw === "1";
+    } catch {
+      return true;
+    }
+  });
   const [selectedProvinceName, setSelectedProvinceName] = useState<string | null>(null);
   const [view, setView] = useState({ zoom: DEFAULT_ZOOM, lng: DEFAULT_CENTER[0], lat: DEFAULT_CENTER[1] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; provinceId: string; provinceName: string } | null>(null);
@@ -167,7 +180,13 @@ export function MapView({
   const [countries, setCountries] = useState<Country[]>([]);
   const [colonizationModalOpen, setColonizationModalOpen] = useState(false);
   const [colonizationActionPending, setColonizationActionPending] = useState(false);
-  const [politicalCountryFilter, setPoliticalCountryFilter] = useState<string>("all");
+  const [politicalCountryFilter, setPoliticalCountryFilter] = useState<string>(() => {
+    try {
+      return localStorage.getItem("arc.ui.map.politicalCountryFilter") || "all";
+    } catch {
+      return "all";
+    }
+  });
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -194,6 +213,30 @@ export function MapView({
   useEffect(() => {
     worldBaseRef.current = worldBase;
   }, [worldBase]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.map.interactionLocked", interactionLocked ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [interactionLocked]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.map.showProvinceBorders", showProvinceBorders ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [showProvinceBorders]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("arc.ui.map.politicalCountryFilter", politicalCountryFilter);
+    } catch {
+      // ignore
+    }
+  }, [politicalCountryFilter]);
 
   const ordersCountByProvince = useMemo(() => {
     const map = new Map<string, number>();
