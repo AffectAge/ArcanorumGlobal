@@ -1,14 +1,14 @@
-import { Listbox } from "@headlessui/react";
+import { Dialog, Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, Crosshair, Grid3X3, Lock, LockOpen, LocateFixed, Minus, Move, Plus, Search, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, Coins, Crosshair, Edit3, Grid3X3, Lock, LockOpen, LocateFixed, Minus, Move, Plus, Search, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 import { ColonizationModal } from "./ColonizationModal";
 import { ProvinceHoverTooltip } from "./ProvinceHoverTooltip";
-import { cancelCountryColonization, fetchProvinceIndex, startCountryColonization } from "../lib/api";
+import { cancelCountryColonization, fetchProvinceIndex, renameOwnedProvince, startCountryColonization } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 
 type Props = {
@@ -19,10 +19,12 @@ type Props = {
   onOpenAdminProvinceEditor?: (provinceId: string) => void;
   onOpenProvinceKnowledge?: (provinceId: string, provinceName: string) => void;
   onCreateProvinceKnowledge?: (provinceId: string, provinceName: string) => void;
+  onProvinceRenameCharged?: (chargedDucats: number) => void;
   colonizationIconUrl?: string | null;
   ducatsIconUrl?: string | null;
   maxActiveColonizations?: number;
   colonizationCostPer1000Km2?: { points: number; ducats: number };
+  provinceRenameDucatsCost?: number;
   showMapControls?: boolean;
   showAntarctica?: boolean;
 };
@@ -134,6 +136,28 @@ function lightenHexColor(hex: string, amount = 0.28): string {
   return `#${r}${g}${b}`;
 }
 
+function formatCompact(value: number): string {
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  const units = [
+    { n: 1_000_000_000_000, s: "T" },
+    { n: 1_000_000_000, s: "B" },
+    { n: 1_000_000, s: "M" },
+    { n: 1_000, s: "K" },
+  ] as const;
+
+  for (const unit of units) {
+    if (abs >= unit.n) {
+      const scaled = abs / unit.n;
+      const text =
+        scaled >= 100 ? Math.floor(scaled).toString() : scaled >= 10 ? scaled.toFixed(1).replace(/\.0$/, "") : scaled.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+      return `${sign}${text}${unit.s}`;
+    }
+  }
+
+  return `${sign}${Math.floor(abs)}`;
+}
+
 export function MapView({
   apiBase,
   activeMode,
@@ -142,10 +166,12 @@ export function MapView({
   onOpenAdminProvinceEditor,
   onOpenProvinceKnowledge,
   onCreateProvinceKnowledge,
+  onProvinceRenameCharged,
   colonizationIconUrl,
   ducatsIconUrl,
   maxActiveColonizations,
   colonizationCostPer1000Km2,
+  provinceRenameDucatsCost = 25,
   showMapControls = false,
   showAntarctica = true,
 }: Props) {
@@ -193,6 +219,9 @@ export function MapView({
   } | null>(null);
   const [countries, setCountries] = useState<Country[]>([]);
   const [colonizationModalOpen, setColonizationModalOpen] = useState(false);
+  const [provinceRenameModalOpen, setProvinceRenameModalOpen] = useState(false);
+  const [provinceRenameInput, setProvinceRenameInput] = useState("");
+  const [provinceRenamePending, setProvinceRenamePending] = useState(false);
   const [colonizationActionPending, setColonizationActionPending] = useState(false);
   const [politicalCountryFilter, setPoliticalCountryFilter] = useState<string>(() => {
     try {
@@ -215,6 +244,7 @@ export function MapView({
   const worldBase = useGameStore((s) => s.worldBase);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
   const addEvent = useGameStore((s) => s.addEvent);
+  const updateCountryResources = useGameStore((s) => s.updateCountryResources);
 
   useEffect(() => {
     showMapControlsRef.current = showMapControls;
@@ -333,6 +363,20 @@ export function MapView({
       disabled: Boolean(override.disabled),
     };
   };
+  const getProvinceDisplayName = (
+    provinceId: string,
+    fallbackName?: string | null,
+    fallbackProps?: Record<string, unknown> | undefined,
+  ) => {
+    const override = worldBaseRef.current?.provinceNameById?.[provinceId] ?? worldBase?.provinceNameById?.[provinceId];
+    if (override && override.trim()) {
+      return override;
+    }
+    if (fallbackName && fallbackName.trim()) {
+      return fallbackName;
+    }
+    return provinceNamesByIdRef.current.get(provinceId) ?? readProvinceName(fallbackProps);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -390,6 +434,9 @@ export function MapView({
 
   const selectedProvinceOrdersCount = selectedProvinceId ? (ordersCountByProvince.get(selectedProvinceId) ?? 0) : 0;
   const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? null) : null;
+  const selectedProvinceDisplayName = selectedProvinceId
+    ? getProvinceDisplayName(selectedProvinceId, selectedProvinceName)
+    : null;
   const selectedOwner = selectedOwnerId ? countryById.get(selectedOwnerId) : null;
   const selectedOwnerLabel = selectedOwnerId ? (selectedOwner?.name ?? selectedOwnerId) : "Нейтральная";
   const selectedOwnerFlagUrl = resolveAssetUrl(apiBase, selectedOwner?.flagUrl);
@@ -449,6 +496,14 @@ export function MapView({
     selectedIsNeutral &&
     !selectedIsColonizationDisabled &&
     selectedMyColonyProgress == null;
+  const selectedCanRenameProvince = Boolean(
+    auth?.token &&
+      auth?.countryId &&
+      selectedProvinceId &&
+      selectedOwnerId &&
+      selectedOwnerId === auth.countryId,
+  );
+  const selectedProvinceRenameCost = Math.max(0, Math.floor(provinceRenameDucatsCost || 0));
   const effectivePoliticalFilterCountryId =
     politicalCountryFilter === "all"
       ? null
@@ -484,9 +539,17 @@ export function MapView({
       .sort((a, b) => a.localeCompare(b))
       .map((id) => ({
         id,
-        name: provinceNamesByIdRef.current.get(id) ?? id,
+        name: getProvinceDisplayName(id),
       }));
-  }, [currentCountryActiveColonizationTargets]);
+  }, [currentCountryActiveColonizationTargets, worldBase?.provinceNameById]);
+
+  useEffect(() => {
+    if (!selectedProvinceId) return;
+    const nextName = getProvinceDisplayName(selectedProvinceId, selectedProvinceName);
+    if (nextName !== selectedProvinceName) {
+      setSelectedProvinceName(nextName);
+    }
+  }, [selectedProvinceId, selectedProvinceName, worldBase?.provinceNameById]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -632,13 +695,14 @@ export function MapView({
 
       const props = feature.properties as Record<string, unknown> | undefined;
       const id = readProvinceId(props);
-      const name = readProvinceName(props);
-      if (id && name) {
-        provinceNamesByIdRef.current.set(id, name);
+      const rawName = readProvinceName(props);
+      if (id && rawName) {
+        provinceNamesByIdRef.current.set(id, rawName);
       }
       if (!id) {
         return;
       }
+      const name = getProvinceDisplayName(id, rawName, props);
 
       const ownerId = worldBaseRef.current?.provinceOwner[id] ?? null;
       const ownerName = ownerId ? (countryByIdRef.current.get(ownerId)?.name ?? ownerId) : "Нейтральная";
@@ -735,13 +799,14 @@ export function MapView({
         return;
       }
       provinceNamesByIdRef.current.set(id, readProvinceName(props));
+      const provinceName = getProvinceDisplayName(id, undefined, props);
 
       e.preventDefault();
       setContextMenu({
         x: e.point.x + 12,
         y: e.point.y - 8,
         provinceId: id,
-        provinceName: readProvinceName(props),
+        provinceName,
       });
     });
 
@@ -756,7 +821,8 @@ export function MapView({
       if (!id) {
         return;
       }
-      provinceNamesByIdRef.current.set(id, readProvinceName(props));
+      const rawName = readProvinceName(props);
+      provinceNamesByIdRef.current.set(id, rawName);
 
       if (selectedFeatureIdRef.current && selectedFeatureIdRef.current !== id) {
         map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id: selectedFeatureIdRef.current }, { selected: false });
@@ -766,7 +832,7 @@ export function MapView({
       map.setFeatureState({ source: "adm1", sourceLayer: "adm1", id }, { selected: true });
 
       setSelectedProvince(id);
-      setSelectedProvinceName(readProvinceName(props));
+      setSelectedProvinceName(getProvinceDisplayName(id, rawName, props));
       setContextMenu(null);
     });
 
@@ -1151,6 +1217,58 @@ export function MapView({
     }
   };
 
+  const handleRenameOwnedProvince = async () => {
+    if (!auth?.token || !auth.countryId || !selectedProvinceId || !selectedCanRenameProvince) {
+      return;
+    }
+    const nextName = provinceRenameInput.trim();
+    const currentName = getProvinceDisplayName(selectedProvinceId, selectedProvinceName);
+    if (!nextName) {
+      toast.error("Название не может быть пустым");
+      return;
+    }
+    if (nextName.length > 64) {
+      toast.error("Максимум 64 символа");
+      return;
+    }
+    if (nextName === currentName) {
+      return;
+    }
+
+    setProvinceRenamePending(true);
+    try {
+      const result = await renameOwnedProvince(auth.token, { provinceId: selectedProvinceId, provinceName: nextName });
+      provinceNamesByIdRef.current.set(result.provinceId, result.provinceName);
+      setSelectedProvinceName(result.provinceName);
+      setProvinceRenameModalOpen(false);
+      updateCountryResources(auth.countryId, { ducats: result.resources.ducats });
+      onProvinceRenameCharged?.(result.chargedDucats);
+      toast.success(`Провинция переименована (-${result.chargedDucats} дукатов)`);
+      addEvent({
+        category: "politics",
+        title: "Переименование провинции",
+        message: `Вы переименовали провинцию в "${result.provinceName}"`,
+        visibility: "private",
+        countryId: auth.countryId,
+      });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "PROVINCE_RENAME_FAILED";
+      if (code === "NOT_PROVINCE_OWNER") {
+        toast.error("Можно переименовывать только свои провинции");
+      } else if (code === "INSUFFICIENT_DUCATS") {
+        toast.error("Недостаточно дукатов");
+      } else if (code === "PROVINCE_NOT_FOUND") {
+        toast.error("Провинция не найдена");
+      } else if (code === "INVALID_PAYLOAD") {
+        toast.error("Некорректное название провинции");
+      } else {
+        toast.error("Не удалось переименовать провинцию");
+      }
+    } finally {
+      setProvinceRenamePending(false);
+    }
+  };
+
   const legendPanelBaseClass =
     "pointer-events-auto absolute z-30 rounded-xl border border-white/10 bg-[#0b111b] text-xs text-white/80 shadow-2xl backdrop-blur-xl";
   const legendCompactClass = "w-auto px-2 py-2";
@@ -1309,7 +1427,7 @@ export function MapView({
             <div className="glass panel-border rounded-xl p-3 text-sm">
               <div className="mb-2 flex items-center gap-2 text-arc-accent">
                 <Crosshair size={15} />
-                <span className="font-semibold">{selectedProvinceName ?? selectedProvinceId}</span>
+                <span className="font-semibold">{selectedProvinceDisplayName ?? selectedProvinceId}</span>
               </div>
               <div className="space-y-1 text-xs text-slate-300">
                 <div>ID: {selectedProvinceId}</div>
@@ -1322,6 +1440,19 @@ export function MapView({
                 <div>
                   Статус колонизации: {selectedIsColonizationDisabled ? "Запрещена" : "Доступна"}
                 </div>
+                {selectedCanRenameProvince && (
+                  <div className="pt-1">
+                    <button
+                      onClick={() => {
+                        setProvinceRenameInput((getProvinceDisplayName(selectedProvinceId, selectedProvinceDisplayName) ?? "").slice(0, 64));
+                        setProvinceRenameModalOpen(true);
+                      }}
+                      className="w-full rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-300/55 hover:bg-emerald-400/15"
+                    >
+                      Переименовать провинцию
+                    </button>
+                  </div>
+                )}
               </div>
 
               {selectedColonyProgressList.length > 0 && (
@@ -1550,10 +1681,116 @@ export function MapView({
         </motion.div>
       )}
 
+      <AnimatePresence>
+        {provinceRenameModalOpen && selectedProvinceId && (
+          <Dialog
+            open={provinceRenameModalOpen}
+            onClose={() => !provinceRenamePending && setProvinceRenameModalOpen(false)}
+            className="relative z-[122]"
+          >
+            <motion.div
+              aria-hidden="true"
+              className="fixed inset-0 bg-black/55 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+            />
+            <div className="fixed inset-0 flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6, scale: 0.985 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="w-full max-w-lg"
+              >
+                <Dialog.Panel className="glass panel-border rounded-2xl bg-[#0b111b] p-4">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-arc-accent">
+                      <Edit3 size={16} />
+                      <Dialog.Title className="font-semibold">Переименование провинции</Dialog.Title>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setProvinceRenameModalOpen(false)}
+                      className="panel-border inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-slate-300 hover:text-arc-accent"
+                      aria-label="Закрыть"
+                      disabled={provinceRenamePending}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-300">
+                      <div className="mb-1 text-white/90">
+                        Текущее название: <span className="font-semibold">{selectedProvinceDisplayName ?? selectedProvinceId}</span>
+                      </div>
+                      <div className="inline-flex items-center gap-1 text-white/60">
+                        <span>Стоимость переименования:</span>
+                        {ducatsIconUrl ? (
+                          <img src={ducatsIconUrl} alt="" className="h-[14px] w-[14px] rounded-sm object-contain" />
+                        ) : (
+                          <Coins size={13} className="text-amber-300" />
+                        )}
+                        <span>{formatCompact(selectedProvinceRenameCost)}</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-300">Новое название (до 64 символов)</label>
+                      <input
+                        autoFocus
+                        value={provinceRenameInput}
+                        maxLength={64}
+                        onChange={(e) => setProvinceRenameInput(e.target.value.slice(0, 64))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !provinceRenamePending) {
+                            e.preventDefault();
+                            void handleRenameOwnedProvince();
+                          }
+                        }}
+                        className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/40"
+                        placeholder="Введите название провинции"
+                      />
+                      <div className="mt-1 flex items-center justify-between text-[11px]">
+                        <span className="text-white/45">Только владельцы провинции могут менять название</span>
+                        <span className={provinceRenameInput.trim().length >= 64 ? "text-amber-300" : "text-white/45"}>
+                          {provinceRenameInput.length}/64
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setProvinceRenameModalOpen(false)}
+                        disabled={provinceRenamePending}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 transition hover:border-white/20 hover:bg-white/10 disabled:opacity-60"
+                      >
+                        Отмена
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRenameOwnedProvince()}
+                        disabled={provinceRenamePending || !provinceRenameInput.trim()}
+                        className="rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-300/55 hover:bg-emerald-400/20 disabled:opacity-60"
+                      >
+                        {provinceRenamePending ? "Сохранение..." : "Сохранить"}
+                      </button>
+                    </div>
+                  </div>
+                </Dialog.Panel>
+              </motion.div>
+            </div>
+          </Dialog>
+        )}
+      </AnimatePresence>
+
       <ColonizationModal
         open={colonizationModalOpen && Boolean(selectedProvinceId)}
         provinceId={selectedProvinceId}
-        provinceName={selectedProvinceName}
+        provinceName={selectedProvinceDisplayName}
         provinceAreaKm2={selectedProvinceAreaKm2}
         ownerCountryId={selectedOwnerId}
         colonizationCost={selectedColonizationCost}
@@ -1573,7 +1810,7 @@ export function MapView({
         selectedColonizedProvinceId={selectedProvinceId}
         onSelectColonizedProvince={(provinceId) => {
           setSelectedProvince(provinceId);
-          setSelectedProvinceName(provinceNamesByIdRef.current.get(provinceId) ?? provinceId);
+          setSelectedProvinceName(getProvinceDisplayName(provinceId));
         }}
         canStart={selectedCanStartColonization}
         canCancel={selectedCanCancelColonization}

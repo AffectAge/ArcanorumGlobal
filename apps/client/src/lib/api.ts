@@ -236,6 +236,7 @@ export type GameSettings = {
     recolorDucats: number;
     flagDucats: number;
     crestDucats: number;
+    provinceRenameDucats: number;
   };
   eventLog: {
     retentionTurns: number;
@@ -430,7 +431,7 @@ export async function updateGameSettings(
   payload: {
     economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
-    customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number };
+    customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
     eventLog?: { retentionTurns?: number };
     turnTimer?: { enabled?: boolean; secondsPerTurn?: number };
     map?: { showAntarctica?: boolean };
@@ -565,6 +566,25 @@ export async function cancelCountryColonization(token: string, provinceId: strin
     const err = await response.json();
     throw new Error(err.error ?? "COLONIZATION_CANCEL_FAILED");
   }
+}
+
+export async function renameOwnedProvince(
+  token: string,
+  payload: { provinceId: string; provinceName: string },
+): Promise<{ provinceId: string; provinceName: string; chargedDucats: number; resources: { ducats: number } }> {
+  const response = await fetch(`${API}/country/province-rename`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "PROVINCE_RENAME_FAILED");
+  }
+  return (await response.json()) as { provinceId: string; provinceName: string; chargedDucats: number; resources: { ducats: number } };
 }
 
 export async function fetchAdminProvinces(token: string): Promise<AdminProvinceItem[]> {

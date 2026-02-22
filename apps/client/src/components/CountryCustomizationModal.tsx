@@ -25,6 +25,7 @@ const defaultPrices: CustomizationPrices = {
   recolorDucats: 10,
   flagDucats: 15,
   crestDucats: 15,
+  provinceRenameDucats: 25,
 };
 
 function formatCompact(value: number): string {

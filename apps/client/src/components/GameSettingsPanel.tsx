@@ -53,6 +53,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [recolorDucats, setRecolorDucats] = useState(10);
   const [flagDucats, setFlagDucats] = useState(15);
   const [crestDucats, setCrestDucats] = useState(15);
+  const [provinceRenameDucats, setProvinceRenameDucats] = useState(25);
   const [eventLogRetentionTurns, setEventLogRetentionTurns] = useState(3);
   const [turnTimerEnabled, setTurnTimerEnabled] = useState(false);
   const [turnTimerSeconds, setTurnTimerSeconds] = useState(300);
@@ -88,6 +89,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setRecolorDucats(settings.customization.recolorDucats);
         setFlagDucats(settings.customization.flagDucats);
         setCrestDucats(settings.customization.crestDucats);
+        setProvinceRenameDucats(settings.customization.provinceRenameDucats ?? 25);
         setEventLogRetentionTurns(settings.eventLog.retentionTurns);
         setTurnTimerEnabled(settings.turnTimer?.enabled ?? false);
         setTurnTimerSeconds(settings.turnTimer?.secondsPerTurn ?? 300);
@@ -176,12 +178,14 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
           recolorDucats: Math.max(0, Math.floor(recolorDucats)),
           flagDucats: Math.max(0, Math.floor(flagDucats)),
           crestDucats: Math.max(0, Math.floor(crestDucats)),
+          provinceRenameDucats: Math.max(0, Math.floor(provinceRenameDucats)),
         },
       });
       setRenameDucats(updated.customization.renameDucats);
       setRecolorDucats(updated.customization.recolorDucats);
       setFlagDucats(updated.customization.flagDucats);
       setCrestDucats(updated.customization.crestDucats);
+      setProvinceRenameDucats(updated.customization.provinceRenameDucats ?? 25);
       onSettingsUpdated?.(updated);
       toast.success("Цены кастомизации сохранены");
     } catch {
@@ -477,6 +481,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <div><label className="mb-1 block text-xs text-slate-300">Смена цвета</label><input type="number" min={0} value={recolorDucats} onChange={(e) => setRecolorDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                         <div><label className="mb-1 block text-xs text-slate-300">Смена флага</label><input type="number" min={0} value={flagDucats} onChange={(e) => setFlagDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                         <div><label className="mb-1 block text-xs text-slate-300">Смена герба</label><input type="number" min={0} value={crestDucats} onChange={(e) => setCrestDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
+                        <div><label className="mb-1 block text-xs text-slate-300">Переименование провинции</label><input type="number" min={0} value={provinceRenameDucats} onChange={(e) => setProvinceRenameDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                       </div>
                       <button onClick={saveCustomization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />

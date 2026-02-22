@@ -82,8 +82,13 @@ export default function App() {
     turnId: 0,
     amount: 0,
   });
+  const [provinceRenameDucatSpend, setProvinceRenameDucatSpend] = useState<{ turnId: number; amount: number }>({
+    turnId: 0,
+    amount: 0,
+  });
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationCostPer1000Km2, setColonizationCostPer1000Km2] = useState({ points: 5, ducats: 5 });
+  const [provinceRenameDucatsCost, setProvinceRenameDucatsCost] = useState(25);
   const [provinceAreaKm2ById, setProvinceAreaKm2ById] = useState<Record<string, number>>({});
   const [showAntarctica, setShowAntarctica] = useState(true);
   const [showMapControls, setShowMapControls] = useState(false);
@@ -309,6 +314,7 @@ export default function App() {
             ducats: ui.colonization.ducatsCostPer1000Km2,
           });
           setShowAntarctica(ui.map?.showAntarctica ?? true);
+          setProvinceRenameDucatsCost(ui.customization?.provinceRenameDucats ?? 25);
           setTurnTimerUi({
             enabled: ui.turnTimer?.enabled ?? false,
             secondsPerTurn: ui.turnTimer?.secondsPerTurn ?? 300,
@@ -480,6 +486,9 @@ export default function App() {
     if (customizationDucatSpend.turnId === turnId && customizationDucatSpend.amount > 0) {
       totals.ducats += customizationDucatSpend.amount;
     }
+    if (provinceRenameDucatSpend.turnId === turnId && provinceRenameDucatSpend.amount > 0) {
+      totals.ducats += provinceRenameDucatSpend.amount;
+    }
 
     if (myColonizationProjection.predictedPointsSpend > 0) {
       totals.colonization += myColonizationProjection.predictedPointsSpend;
@@ -491,9 +500,10 @@ export default function App() {
     }
 
     return totals;
-  }, [auth, currentResources.ducats, customizationDucatSpend.amount, customizationDucatSpend.turnId, myColonizationProjection.predictedPointsSpend, myColonizationProjection.predictedSupportDucatSpend, ordersByTurn, turnId]);
+  }, [auth, currentResources.ducats, customizationDucatSpend.amount, customizationDucatSpend.turnId, myColonizationProjection.predictedPointsSpend, myColonizationProjection.predictedSupportDucatSpend, ordersByTurn, provinceRenameDucatSpend.amount, provinceRenameDucatSpend.turnId, turnId]);
   useEffect(() => {
     setCustomizationDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
+    setProvinceRenameDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
   }, [turnId]);
 
   const logoutToAuth = () => {
@@ -641,6 +651,7 @@ export default function App() {
         ducatsIconUrl={resourceIcons.ducats}
         maxActiveColonizations={maxActiveColonizations}
         colonizationCostPer1000Km2={colonizationCostPer1000Km2}
+        provinceRenameDucatsCost={provinceRenameDucatsCost}
         showMapControls={showMapControls}
         showAntarctica={showAntarctica}
         onOpenAdminProvinceEditor={(provinceId) => {
@@ -664,6 +675,12 @@ export default function App() {
             createIfMissing: true,
           });
           setCivilopediaOpen(true);
+        }}
+        onProvinceRenameCharged={(chargedDucats) => {
+          if (chargedDucats <= 0) return;
+          setProvinceRenameDucatSpend((prev) =>
+            prev.turnId === turnId ? { turnId, amount: prev.amount + chargedDucats } : { turnId, amount: chargedDucats },
+          );
         }}
       />
 
@@ -826,6 +843,7 @@ export default function App() {
             }));
             setEventLogRetentionTurns(updated.eventLog.retentionTurns);
             setShowAntarctica(updated.map?.showAntarctica ?? true);
+            setProvinceRenameDucatsCost(updated.customization?.provinceRenameDucats ?? 25);
             setTurnTimerUi((prev) => ({
               enabled: updated.turnTimer?.enabled ?? prev.enabled,
               secondsPerTurn: updated.turnTimer?.secondsPerTurn ?? prev.secondsPerTurn,

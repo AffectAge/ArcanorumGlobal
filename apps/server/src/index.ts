@@ -218,6 +218,7 @@ type GameSettings = {
     recolorDucats: number;
     flagDucats: number;
     crestDucats: number;
+    provinceRenameDucats: number;
   };
   eventLog: {
     retentionTurns: number;
@@ -440,6 +441,7 @@ const defaultGameSettings = (): GameSettings => ({
     recolorDucats: 10,
     flagDucats: 15,
     crestDucats: 15,
+    provinceRenameDucats: 25,
   },
   eventLog: {
     retentionTurns: 3,
@@ -473,6 +475,7 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
       "p-south": "ARC",
       "p-east": "VAL",
     },
+    provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
   };
@@ -571,6 +574,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.customization?.crestDucats === "number"
             ? Math.max(0, Math.floor(next.customization.crestDucats))
             : defaults.customization.crestDucats,
+        provinceRenameDucats:
+          typeof next.customization?.provinceRenameDucats === "number"
+            ? Math.max(0, Math.floor(next.customization.provinceRenameDucats))
+            : defaults.customization.provinceRenameDucats,
       },
       eventLog: {
         retentionTurns:
@@ -620,6 +627,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         turnId,
         resourcesByCountry: candidate.resourcesByCountry,
         provinceOwner: candidate.provinceOwner,
+        provinceNameById:
+          candidate.provinceNameById && typeof candidate.provinceNameById === "object"
+            ? (candidate.provinceNameById as Record<string, string>)
+            : {},
         colonyProgressByProvince: candidate.colonyProgressByProvince,
         provinceColonizationByProvince: normalizeProvinceColonizationMap(
           (candidate as Partial<WorldBase> & { provinceColonizationByProvince?: unknown }).provinceColonizationByProvince,
@@ -1407,6 +1418,7 @@ const gameSettingsSchema = z.object({
       recolorDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       flagDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       crestDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      provinceRenameDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
     .optional(),
   eventLog: z
@@ -1684,6 +1696,9 @@ app.patch("/admin/game-settings", async (req, res) => {
     if (typeof nextCustomization.crestDucats === "number") {
       gameSettings.customization.crestDucats = nextCustomization.crestDucats;
     }
+    if (typeof nextCustomization.provinceRenameDucats === "number") {
+      gameSettings.customization.provinceRenameDucats = nextCustomization.provinceRenameDucats;
+    }
   }
 
   const nextEventLog = parsed.data.eventLog;
@@ -1755,6 +1770,11 @@ app.patch("/admin/game-settings", async (req, res) => {
 
 const colonizationActionSchema = z.object({
   provinceId: z.string().min(1),
+});
+
+const provinceRenameSchema = z.object({
+  provinceId: z.string().min(1),
+  provinceName: z.string().trim().min(1).max(64),
 });
 
 app.post("/country/colonization/start", async (req, res) => {
@@ -1894,6 +1914,67 @@ app.post("/country/colonization/cancel", async (req, res) => {
   });
 
   return res.json({ ok: true, worldBase, turnId });
+});
+
+app.patch("/country/province-rename", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = provinceRenameSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, provinceName } = parsed.data;
+  const ownerCountryId = worldBase.provinceOwner[provinceId] ?? null;
+  if (!ownerCountryId || ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "NOT_PROVINCE_OWNER" });
+  }
+
+  if (!adm1ProvinceIndex.some((p) => p.id === provinceId)) {
+    return res.status(404).json({ error: "PROVINCE_NOT_FOUND" });
+  }
+
+  ensureCountryInWorldBase(auth.countryId);
+  const resources = worldBase.resourcesByCountry[auth.countryId];
+  if (!resources) {
+    return res.status(500).json({ error: "NO_RESOURCES" });
+  }
+  const provinceRenameDucatsCost = Math.max(0, Math.floor(gameSettings.customization.provinceRenameDucats ?? 25));
+  if (resources.ducats < provinceRenameDucatsCost) {
+    return res.status(400).json({
+      error: "INSUFFICIENT_DUCATS",
+      required: provinceRenameDucatsCost,
+      available: resources.ducats,
+    });
+  }
+
+  resources.ducats = Math.max(0, resources.ducats - provinceRenameDucatsCost);
+  worldBase.provinceNameById[provinceId] = provinceName;
+
+  savePersistentState();
+  broadcastWorldBaseSync(wss);
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "politics",
+      title: "Провинция переименована",
+      message: `${auth.countryId} переименовал провинцию ${provinceId} в "${provinceName}"`,
+      countryId: auth.countryId,
+      priority: "low",
+      visibility: "public",
+    }),
+  });
+
+  return res.json({
+    provinceId,
+    provinceName,
+    chargedDucats: provinceRenameDucatsCost,
+    resources: { ducats: resources.ducats },
+  });
 });
 
 const adminProvinceColonizationSchema = z.object({

@@ -62,6 +62,7 @@ export type WorldBase = {
   turnId: number;
   resourcesByCountry: Record<string, ResourceTotals>;
   provinceOwner: Record<string, string>;
+  provinceNameById: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
 };
