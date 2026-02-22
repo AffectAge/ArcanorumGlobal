@@ -1,6 +1,7 @@
 import { Dialog } from "@headlessui/react";
 import { useEffect, useState } from "react";
 import { Coins, Flag, RefreshCcw, Save, X } from "lucide-react";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { adminRecalculateAutoProvinceCosts, adminUploadResourceIcons, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
 
@@ -14,6 +15,7 @@ type Props = {
 
 const categories = [
   { id: "economy", label: "Экономика" },
+  { id: "turnTimer", label: "Таймер хода" },
   { id: "colonization", label: "Колонизация" },
   { id: "customization", label: "Кастомизация" },
   { id: "eventLog", label: "Журнал событий" },
@@ -52,6 +54,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [flagDucats, setFlagDucats] = useState(15);
   const [crestDucats, setCrestDucats] = useState(15);
   const [eventLogRetentionTurns, setEventLogRetentionTurns] = useState(3);
+  const [turnTimerEnabled, setTurnTimerEnabled] = useState(false);
+  const [turnTimerSeconds, setTurnTimerSeconds] = useState(300);
   const [showAntarctica, setShowAntarctica] = useState(true);
   const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
     culture: null,
@@ -85,6 +89,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setFlagDucats(settings.customization.flagDucats);
         setCrestDucats(settings.customization.crestDucats);
         setEventLogRetentionTurns(settings.eventLog.retentionTurns);
+        setTurnTimerEnabled(settings.turnTimer?.enabled ?? false);
+        setTurnTimerSeconds(settings.turnTimer?.secondsPerTurn ?? 300);
         setShowAntarctica(settings.map?.showAntarctica ?? true);
         setResourceIcons(settings.resourceIcons);
         setResourceIconFiles({});
@@ -201,6 +207,26 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
     }
   };
 
+  const saveTurnTimer = async () => {
+    setSaving(true);
+    try {
+      const updated = await updateGameSettings(token, {
+        turnTimer: {
+          enabled: turnTimerEnabled,
+          secondsPerTurn: Math.max(10, Math.floor(turnTimerSeconds || 10)),
+        },
+      });
+      setTurnTimerEnabled(updated.turnTimer.enabled);
+      setTurnTimerSeconds(updated.turnTimer.secondsPerTurn);
+      onSettingsUpdated?.(updated);
+      toast.success("Таймер хода сохранён");
+    } catch {
+      toast.error("Не удалось сохранить таймер хода");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveResourceIcons = async () => {
     const selected = Object.entries(resourceIconFiles).filter(([, f]) => f) as Array<[keyof ResourceIconsMap, File]>;
     if (selected.length === 0) {
@@ -246,8 +272,22 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[125]">
-      <div className="fixed inset-0 bg-black/55" aria-hidden="true" />
+      <motion.div
+        aria-hidden="true"
+        className="fixed inset-0 bg-black/55"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.16, ease: "easeOut" }}
+      />
       <div className="fixed inset-0">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 6 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="h-full w-full"
+        >
         <Dialog.Panel className="glass panel-border h-full w-full rounded-none p-4">
           <div className="mb-4 flex items-center justify-between">
             <Dialog.Title className="font-display text-2xl tracking-wide text-arc-accent">Настройки игры</Dialog.Title>
@@ -291,6 +331,54 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         </div>
                       </div>
                       <button onClick={saveEconomy} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                        <Save size={14} />
+                        Сохранить
+                      </button>
+                    </div>
+                  )}
+
+                  {activeCategory === "turnTimer" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <RefreshCcw size={15} className="text-arc-accent" />
+                        Автоматический переход хода по таймеру
+                      </div>
+                      <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                        <div>
+                          <div className="text-sm text-slate-100">Включить авто-переход хода</div>
+                          <div className="text-xs text-slate-500">Сервер завершит ход по таймеру даже если не все страны нажали следующий ход</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setTurnTimerEnabled((v) => !v)}
+                          className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
+                            turnTimerEnabled ? "border-emerald-400/50 bg-emerald-500/20" : "border-white/10 bg-white/5"
+                          }`}
+                          aria-pressed={turnTimerEnabled}
+                          aria-label={turnTimerEnabled ? "Выключить таймер хода" : "Включить таймер хода"}
+                        >
+                          <span
+                            className={`h-5 w-5 rounded-full transition ${
+                              turnTimerEnabled
+                                ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                : "translate-x-1 bg-white/60"
+                            }`}
+                          />
+                        </button>
+                      </label>
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-300">Секунд на ход</label>
+                        <input
+                          type="number"
+                          min={10}
+                          max={86400}
+                          value={turnTimerSeconds}
+                          onChange={(e) => setTurnTimerSeconds(Math.max(10, Number(e.target.value) || 10))}
+                          className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                        />
+                        <div className="mt-1 text-xs text-slate-500">Минимум 10 секунд. Таймер сбрасывается после каждого резолва хода.</div>
+                      </div>
+                      <button onClick={saveTurnTimer} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -440,6 +528,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
             </section>
           </div>
         </Dialog.Panel>
+        </motion.div>
       </div>
     </Dialog>
   );

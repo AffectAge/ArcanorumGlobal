@@ -1,5 +1,6 @@
 import { Dialog, Listbox } from "@headlessui/react";
 import { Check, ChevronDown, Coins, Flag, Lock, Settings, Trophy, X } from "lucide-react";
+import { motion } from "framer-motion";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 
@@ -72,8 +73,22 @@ export function ColonizationModal({
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[130]">
-      <div className="fixed inset-0 bg-black/55" aria-hidden="true" />
+      <motion.div
+        aria-hidden="true"
+        className="fixed inset-0 bg-black/55"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.16, ease: "easeOut" }}
+      />
       <div className="fixed inset-0">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="h-full w-full"
+        >
         <Dialog.Panel className="glass panel-border h-full w-full rounded-none p-4 shadow-2xl">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -294,6 +309,7 @@ export function ColonizationModal({
             </Tooltip>
           </div>
         </Dialog.Panel>
+        </motion.div>
       </div>
     </Dialog>
   );

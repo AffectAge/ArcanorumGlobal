@@ -203,6 +203,10 @@ type GameSettings = {
   eventLog: {
     retentionTurns: number;
   };
+  turnTimer: {
+    enabled: boolean;
+    secondsPerTurn: number;
+  };
   map: {
     showAntarctica: boolean;
   };
@@ -236,6 +240,10 @@ const defaultGameSettings = (): GameSettings => ({
   eventLog: {
     retentionTurns: 3,
   },
+  turnTimer: {
+    enabled: false,
+    secondsPerTurn: 300,
+  },
   map: {
     showAntarctica: false,
   },
@@ -268,6 +276,8 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
 
 let gameSettings: GameSettings = defaultGameSettings();
 let worldBase: WorldBase = defaultWorldBase(turnId);
+let currentTurnStartedAtMs = Date.now();
+let isResolvingTurnNow = false;
 
 const persistedStatePath = resolve(__dirname, "../data/game-state.json");
 const GAME_STATE_ROW_ID = "primary";
@@ -358,6 +368,16 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.eventLog?.retentionTurns === "number"
             ? Math.max(1, Math.floor(next.eventLog.retentionTurns))
             : defaults.eventLog.retentionTurns,
+      },
+      turnTimer: {
+        enabled:
+          typeof (next as Partial<{ turnTimer?: { enabled?: unknown } }>).turnTimer?.enabled === "boolean"
+            ? Boolean((next as Partial<{ turnTimer?: { enabled?: boolean } }>).turnTimer?.enabled)
+            : defaults.turnTimer.enabled,
+        secondsPerTurn:
+          typeof (next as Partial<{ turnTimer?: { secondsPerTurn?: unknown } }>).turnTimer?.secondsPerTurn === "number"
+            ? Math.max(10, Math.floor((next as Partial<{ turnTimer?: { secondsPerTurn?: number } }>).turnTimer?.secondsPerTurn ?? defaults.turnTimer.secondsPerTurn))
+            : defaults.turnTimer.secondsPerTurn,
       },
       map: {
         showAntarctica:
@@ -888,6 +908,11 @@ function getReadySetForTurn(turn: number): Set<string> {
   }
   return readySet;
 }
+
+function resetTurnTimerAnchor(): void {
+  currentTurnStartedAtMs = Date.now();
+}
+
 function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldPatch["rejectedOrders"] = [];
@@ -1039,6 +1064,7 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
     ...worldBase,
     turnId,
   };
+  resetTurnTimerAnchor();
 
   ordersByTurn.delete(turnId - 1);
   resolveReadyByTurn.delete(turnId - 1);
@@ -1053,6 +1079,23 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
     },
     news,
   };
+}
+
+function resolveAndBroadcastCurrentTurn(wsServer: WebSocketServer): boolean {
+  if (isResolvingTurnNow) {
+    return false;
+  }
+  isResolvingTurnNow = true;
+  try {
+    const { patch, news } = resolveTurn();
+    broadcast(wsServer, patch);
+    for (const event of news) {
+      broadcast(wsServer, { type: "NEWS_EVENT", event });
+    }
+    return true;
+  } finally {
+    isResolvingTurnNow = false;
+  }
 }
 
 app.get("/health", async (_req, res) => {
@@ -1158,6 +1201,12 @@ const gameSettingsSchema = z.object({
       retentionTurns: z.coerce.number().int().min(1).max(100).optional(),
     })
     .optional(),
+  turnTimer: z
+    .object({
+      enabled: z.boolean().optional(),
+      secondsPerTurn: z.coerce.number().int().min(10).max(86_400).optional(),
+    })
+    .optional(),
   map: z
     .object({
       showAntarctica: z.boolean().optional(),
@@ -1171,6 +1220,7 @@ app.get("/game-settings/public", (_req, res) => {
     colonization: gameSettings.colonization,
     customization: gameSettings.customization,
     eventLog: gameSettings.eventLog,
+    turnTimer: gameSettings.turnTimer,
     map: gameSettings.map,
     resourceIcons: gameSettings.resourceIcons,
   });
@@ -1325,6 +1375,27 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
   }
 
+  const nextTurnTimer = parsed.data.turnTimer;
+  let turnTimerConfigChanged = false;
+  if (nextTurnTimer) {
+    if (typeof nextTurnTimer.enabled === "boolean") {
+      if (gameSettings.turnTimer.enabled !== nextTurnTimer.enabled) {
+        turnTimerConfigChanged = true;
+      }
+      gameSettings.turnTimer.enabled = nextTurnTimer.enabled;
+    }
+    if (typeof nextTurnTimer.secondsPerTurn === "number") {
+      const nextSeconds = Math.max(10, Math.floor(nextTurnTimer.secondsPerTurn));
+      if (gameSettings.turnTimer.secondsPerTurn !== nextSeconds) {
+        turnTimerConfigChanged = true;
+      }
+      gameSettings.turnTimer.secondsPerTurn = nextSeconds;
+    }
+    if (turnTimerConfigChanged) {
+      resetTurnTimerAnchor();
+    }
+  }
+
   const nextMap = parsed.data.map;
   if (nextMap) {
     if (typeof nextMap.showAntarctica === "boolean") {
@@ -1337,6 +1408,7 @@ app.patch("/admin/game-settings", async (req, res) => {
     parsed.data.colonization ? "колонизация" : null,
     parsed.data.customization ? "кастомизация" : null,
     parsed.data.eventLog ? "журнал событий" : null,
+    parsed.data.turnTimer ? "таймер хода" : null,
     parsed.data.map ? "карта" : null,
   ].filter((v): v is string => Boolean(v));
 
@@ -2381,11 +2453,7 @@ wss.on("connection", (socket) => {
         send({ type: "ERROR", code: "FORBIDDEN", message: "Admin only" });
         return;
       }
-      const { patch, news } = resolveTurn();
-      broadcast(wss, patch);
-      for (const event of news) {
-        broadcast(wss, { type: "NEWS_EVENT", event });
-      }
+      resolveAndBroadcastCurrentTurn(wss);
       return;
     }
 
@@ -2437,11 +2505,7 @@ wss.on("connection", (socket) => {
         return;
       }
 
-      const { patch, news } = resolveTurn();
-      broadcast(wss, patch);
-      for (const event of news) {
-        broadcast(wss, { type: "NEWS_EVENT", event });
-      }
+      resolveAndBroadcastCurrentTurn(wss);
     }
 
   });
@@ -2456,6 +2520,32 @@ wss.on("connection", (socket) => {
 
 async function startServer(): Promise<void> {
   await loadPersistentState();
+  resetTurnTimerAnchor();
+  setInterval(() => {
+    try {
+      if (!gameSettings.turnTimer.enabled) return;
+      const seconds = Math.max(10, Math.floor(gameSettings.turnTimer.secondsPerTurn || 0));
+      if (seconds <= 0) return;
+      const elapsedMs = Date.now() - currentTurnStartedAtMs;
+      if (elapsedMs < seconds * 1000) return;
+      const resolved = resolveAndBroadcastCurrentTurn(wss);
+      if (resolved) {
+        broadcast(wss, {
+          type: "NEWS_EVENT",
+          event: makeOfficialNews({
+            turn: turnId,
+            category: "system",
+            title: "Авто-переход хода",
+            message: `Ход автоматически завершён по таймеру (${seconds} сек.)`,
+            priority: "medium",
+            visibility: "public",
+          }),
+        });
+      }
+    } catch (error) {
+      console.error("[turn-timer] Auto resolve failed:", error);
+    }
+  }, 1000);
   server.listen(env.port, () => {
     console.log(`Arcanorum server running on http://localhost:${env.port}`);
   });

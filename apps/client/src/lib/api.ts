@@ -240,6 +240,10 @@ export type GameSettings = {
   eventLog: {
     retentionTurns: number;
   };
+  turnTimer: {
+    enabled: boolean;
+    secondsPerTurn: number;
+  };
   map: {
     showAntarctica: boolean;
   };
@@ -328,6 +332,7 @@ export async function updateGameSettings(
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number };
     eventLog?: { retentionTurns?: number };
+    turnTimer?: { enabled?: boolean; secondsPerTurn?: number };
     map?: { showAntarctica?: boolean };
   },
 ): Promise<GameSettings> {

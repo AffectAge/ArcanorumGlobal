@@ -1,6 +1,7 @@
 import { Dialog } from "@headlessui/react";
 import { useEffect, useMemo, useState } from "react";
 import { LoaderCircle, X } from "lucide-react";
+import { motion } from "framer-motion";
 import { fetchTurnStatus, type TurnStatusItem } from "../lib/api";
 
 type Props = {
@@ -96,9 +97,23 @@ export function TurnStatusModal({ open, onClose }: Props) {
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[130]">
-      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" aria-hidden="true" />
+      <motion.div
+        aria-hidden="true"
+        className="fixed inset-0 bg-black/70 backdrop-blur-sm"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.16, ease: "easeOut" }}
+      />
       <div className="fixed inset-0 flex items-start justify-center p-4 pt-24">
-        <Dialog.Panel className="glass panel-border w-full max-w-2xl rounded-xl p-4">
+        <motion.div
+          initial={{ opacity: 0, y: -10, scale: 0.985 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -6, scale: 0.99 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="w-full max-w-2xl"
+        >
+        <Dialog.Panel className="glass panel-border w-full rounded-xl p-4">
           <div className="mb-3 flex items-center justify-between">
             <div>
               <Dialog.Title className="text-sm font-semibold text-slate-100">Готовность стран к ходу</Dialog.Title>
@@ -141,6 +156,7 @@ export function TurnStatusModal({ open, onClose }: Props) {
             </div>
           )}
         </Dialog.Panel>
+        </motion.div>
       </div>
     </Dialog>
   );

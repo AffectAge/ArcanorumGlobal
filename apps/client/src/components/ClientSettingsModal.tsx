@@ -1,6 +1,7 @@
 import { Dialog } from "@headlessui/react";
 import { Monitor, Save, Sliders, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 
 type Props = {
   open: boolean;
@@ -21,8 +22,22 @@ export function ClientSettingsModal({ open, showMapControls, onClose, onSave }: 
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[126]">
-      <div className="fixed inset-0 bg-black/55" aria-hidden="true" />
+      <motion.div
+        aria-hidden="true"
+        className="fixed inset-0 bg-black/55"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.16, ease: "easeOut" }}
+      />
       <div className="fixed inset-0">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 6 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="h-full w-full"
+        >
         <Dialog.Panel className="glass panel-border h-full w-full rounded-none p-4">
           <div className="mb-4 flex items-center justify-between">
             <Dialog.Title className="font-display text-2xl tracking-wide text-arc-accent">Настройки клиента</Dialog.Title>
@@ -109,6 +124,7 @@ export function ClientSettingsModal({ open, showMapControls, onClose, onSave }: 
             </section>
           </div>
         </Dialog.Panel>
+        </motion.div>
       </div>
     </Dialog>
   );
