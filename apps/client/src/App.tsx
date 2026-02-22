@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 import type { OrderDelta, WsOutMessage } from "@arcanorum/shared";
 import { AuthPanel, type AuthSuccess } from "./components/AuthPanel";
 import { MapView } from "./components/MapView";
@@ -26,6 +27,11 @@ type SessionCountry = {
 };
 
 export default function App() {
+  const [turnResolveOverlay, setTurnResolveOverlay] = useState<
+    | { phase: "idle" }
+    | { phase: "processing"; startedAtMs: number }
+    | { phase: "done"; startedAtMs: number; finishedAtMs: number; durationMs: number; resolvedTurnId: number }
+  >({ phase: "idle" });
   const [country, setCountry] = useState<SessionCountry | null>(null);
   const [mapMode, setMapMode] = useState(() => {
     try {
@@ -125,7 +131,24 @@ export default function App() {
         });
       }
 
+      if (msg.type === "TURN_RESOLVE_STARTED") {
+        setTurnResolveOverlay((prev) =>
+          prev.phase === "idle" ? { phase: "processing", startedAtMs: Date.now() } : prev,
+        );
+      }
+
       if (msg.type === "WORLD_PATCH") {
+        setTurnResolveOverlay((prev) =>
+          prev.phase === "processing"
+            ? {
+                phase: "done",
+                startedAtMs: prev.startedAtMs,
+                finishedAtMs: Date.now(),
+                durationMs: Math.max(0, Date.now() - prev.startedAtMs),
+                resolvedTurnId: msg.turnId,
+              }
+            : prev,
+        );
         setWorldBase(msg.worldBase, msg.turnId);
         setTurnTimerUi((prev) => ({ ...prev, startedAtMs: Date.now() }));
         resetOverlay(msg.turnId);
@@ -175,6 +198,7 @@ export default function App() {
       }
 
       if (msg.type === "ERROR") {
+        setTurnResolveOverlay((prev) => (prev.phase === "processing" ? { phase: "idle" } : prev));
         toast.error(msg.message);
         addEvent({ category: "system", title: "Ошибка", message: msg.message, priority: "high", visibility: "private" });
       }
@@ -467,6 +491,7 @@ export default function App() {
       return;
     }
 
+    setTurnResolveOverlay({ phase: "processing", startedAtMs: Date.now() });
     send({ type: "ADMIN_FORCE_RESOLVE" });
     toast("Админ-команда отправлена", { description: "Принудительный резолв хода" });
     addEvent({ category: "system", title: "Админ-команда", message: "Отправлен принудительный резолв хода", priority: "high", visibility: "private", countryId: auth.countryId });
@@ -550,6 +575,29 @@ export default function App() {
     pruneLogEntries(turnId);
   }, [eventLogRetentionTurns, pruneLogEntries, turnId]);
 
+  useEffect(() => {
+    if (!auth) return;
+    if (turnResolveOverlay.phase !== "idle") return;
+    if (!turnTimerUi.enabled || !turnTimerUi.startedAtMs) return;
+
+    const dueAtMs = turnTimerUi.startedAtMs + Math.max(10, turnTimerUi.secondsPerTurn) * 1000;
+    const tick = () => {
+      if (Date.now() >= dueAtMs) {
+        setTurnResolveOverlay((prev) => (prev.phase === "idle" ? { phase: "processing", startedAtMs: Date.now() } : prev));
+      }
+    };
+
+    tick();
+    const id = window.setInterval(tick, 500);
+    return () => window.clearInterval(id);
+  }, [auth, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
+
+  const requestNextTurn = () => {
+    if (turnResolveOverlay.phase === "processing") return;
+    setTurnResolveOverlay({ phase: "processing", startedAtMs: Date.now() });
+    send({ type: "REQUEST_RESOLVE" });
+  };
+
   return (
     <div className="relative h-screen overflow-hidden bg-arc-bg text-white">
       <MapView
@@ -595,7 +643,7 @@ export default function App() {
             turnId={turnId}
             resources={currentResources}
             onOpenTurnStatus={() => setTurnStatusOpen(true)}
-            onNextTurn={() => send({ type: "REQUEST_RESOLVE" })}
+            onNextTurn={requestNextTurn}
             onLogout={logoutToAuth}
             isAdmin={auth.isAdmin}
             onAdminForceResolve={forceResolveAsAdmin}
@@ -715,6 +763,67 @@ export default function App() {
           }}
         />
       )}
+
+      <AnimatePresence>
+        {auth && turnResolveOverlay.phase !== "idle" && (
+          <motion.div
+            key="turn-resolve-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[160] flex items-center justify-center bg-black/55 backdrop-blur-md"
+          >
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(18,26,38,0.18),rgba(4,8,12,0.78)_72%)]" />
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="glass panel-border relative z-10 w-[min(92vw,34rem)] rounded-2xl bg-[#0b111b] p-6 shadow-2xl"
+            >
+              {turnResolveOverlay.phase === "processing" ? (
+                <div className="flex flex-col items-center gap-4 text-center">
+                  <div className="relative flex h-16 w-16 items-center justify-center rounded-full border border-emerald-400/30 bg-emerald-500/10">
+                    <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold text-white">Идет обработка хода</div>
+                    <div className="mt-1 text-sm text-white/60">Подождите, сервер выполняет резолв приказов</div>
+                  </div>
+                  <div className="text-xs text-white/45">Во время обработки действия временно недоступны</div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-4 text-center">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full border border-arc-accent/30 bg-arc-accent/10 text-2xl text-arc-accent">
+                    ✓
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold text-white">
+                      Обработка хода завершена
+                    </div>
+                    <div className="mt-1 text-sm text-white/65">
+                      Ход #{turnResolveOverlay.resolvedTurnId} успешно обработан
+                    </div>
+                  </div>
+                  <div className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                    <div className="text-xs text-white/55">Общее время обработки</div>
+                    <div className="mt-1 text-xl font-semibold tabular-nums text-white">
+                      {(turnResolveOverlay.durationMs / 1000).toFixed(2)} c
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTurnResolveOverlay({ phase: "idle" })}
+                    className="panel-border inline-flex h-11 items-center justify-center rounded-xl bg-arc-accent px-5 text-sm font-semibold text-black transition hover:brightness-110"
+                  >
+                    Вернуться к игре
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
     </div>

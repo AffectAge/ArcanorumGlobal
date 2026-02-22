@@ -85,6 +85,7 @@ export type WsOutMessage =
   | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }
   | { type: "ORDER_BROADCAST"; order: Order }
   | { type: "WORLD_BASE_SYNC"; worldBase: WorldBase; turnId: number }
+  | { type: "TURN_RESOLVE_STARTED"; turnId: number; reason: "manual" | "admin" | "auto" }
   | { type: "NEWS_EVENT"; event: EventLogEntry }
   | { type: "ERROR"; code: string; message: string }
   | { type: "PONG" }

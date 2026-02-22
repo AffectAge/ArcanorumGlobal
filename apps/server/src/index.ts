@@ -1098,6 +1098,10 @@ function resolveAndBroadcastCurrentTurn(wsServer: WebSocketServer): boolean {
   }
 }
 
+function broadcastTurnResolveStarted(wsServer: WebSocketServer, reason: "manual" | "admin" | "auto"): void {
+  broadcast(wsServer, { type: "TURN_RESOLVE_STARTED", turnId, reason });
+}
+
 app.get("/health", async (_req, res) => {
   res.json({ status: env.serverStatus, turnId, serverTime: new Date().toISOString() });
 });
@@ -2456,6 +2460,7 @@ wss.on("connection", (socket) => {
         send({ type: "ERROR", code: "FORBIDDEN", message: "Admin only" });
         return;
       }
+      broadcastTurnResolveStarted(wss, "admin");
       resolveAndBroadcastCurrentTurn(wss);
       return;
     }
@@ -2508,6 +2513,7 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      broadcastTurnResolveStarted(wss, "manual");
       resolveAndBroadcastCurrentTurn(wss);
     }
 
@@ -2531,6 +2537,7 @@ async function startServer(): Promise<void> {
       if (seconds <= 0) return;
       const elapsedMs = Date.now() - currentTurnStartedAtMs;
       if (elapsedMs < seconds * 1000) return;
+      broadcastTurnResolveStarted(wss, "auto");
       const resolved = resolveAndBroadcastCurrentTurn(wss);
       if (resolved) {
         broadcast(wss, {
