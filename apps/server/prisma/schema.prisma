@@ -21,3 +21,13 @@ model Country {
   ignoreUntilTurn  Int?
   createdAt        DateTime  @default(now())
 }
+
+model GameState {
+  id                 String   @id
+  turnId             Int
+  gameSettingsJson   Json
+  worldBaseJson      Json
+  ordersByTurnJson   Json
+  resolveReadyByTurnJson Json
+  updatedAt          DateTime @updatedAt
+}

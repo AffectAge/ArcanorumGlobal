@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import multer from "multer";
 import { imageSize } from "image-size";
@@ -117,7 +117,7 @@ type GameSettings = {
   };
 };
 
-let gameSettings: GameSettings = {
+const defaultGameSettings = (): GameSettings => ({
   economy: {
     baseDucatsPerTurn: 5,
     baseGoldPerTurn: 10,
@@ -126,21 +126,246 @@ let gameSettings: GameSettings = {
     maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
     pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
   },
-};
+});
 
-let worldBase: WorldBase = {
-  turnId,
-  resourcesByCountry: {
-    ARC: { culture: 12, science: 9, religion: 6, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 35, gold: 120 },
-    VAL: { culture: 8, science: 12, religion: 7, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 28, gold: 110 },
-  },
-  provinceOwner: {
-    "p-north": "ARC",
-    "p-south": "ARC",
-    "p-east": "VAL",
-  },
-  colonyProgressByProvince: {},
-};
+function defaultWorldBase(currentTurnId: number): WorldBase {
+  return {
+    turnId: currentTurnId,
+    resourcesByCountry: {
+      ARC: { culture: 12, science: 9, religion: 6, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 35, gold: 120 },
+      VAL: { culture: 8, science: 12, religion: 7, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 28, gold: 110 },
+    },
+    provinceOwner: {
+      "p-north": "ARC",
+      "p-south": "ARC",
+      "p-east": "VAL",
+    },
+    colonyProgressByProvince: {},
+  };
+}
+
+let gameSettings: GameSettings = defaultGameSettings();
+let worldBase: WorldBase = defaultWorldBase(turnId);
+
+const persistedStatePath = resolve(__dirname, "../data/game-state.json");
+const GAME_STATE_ROW_ID = "primary";
+
+function serializeOrdersByTurn(): Array<{ turnId: number; players: Array<{ playerId: string; orders: Order[] }> }> {
+  return [...ordersByTurn.entries()].map(([savedTurnId, players]) => ({
+    turnId: savedTurnId,
+    players: [...players.entries()].map(([playerId, orders]) => ({ playerId, orders })),
+  }));
+}
+
+function serializeResolveReadyByTurn(): Array<{ turnId: number; countryIds: string[] }> {
+  return [...resolveReadyByTurn.entries()].map(([savedTurnId, readySet]) => ({
+    turnId: savedTurnId,
+    countryIds: [...readySet],
+  }));
+}
+
+function parseAndApplyPersistentState(input: unknown): boolean {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+
+  const parsed = input as Partial<{
+    turnId: unknown;
+    gameSettings: unknown;
+    worldBase: unknown;
+    ordersByTurn: unknown;
+    resolveReadyByTurn: unknown;
+  }>;
+
+  if (typeof parsed.turnId === "number" && Number.isFinite(parsed.turnId) && parsed.turnId >= 1) {
+    turnId = Math.floor(parsed.turnId);
+  }
+
+  if (parsed.gameSettings && typeof parsed.gameSettings === "object") {
+    const next = parsed.gameSettings as Partial<GameSettings>;
+    const defaults = defaultGameSettings();
+    gameSettings = {
+      economy: {
+        baseDucatsPerTurn:
+          typeof next.economy?.baseDucatsPerTurn === "number"
+            ? Math.max(0, Math.floor(next.economy.baseDucatsPerTurn))
+            : defaults.economy.baseDucatsPerTurn,
+        baseGoldPerTurn:
+          typeof next.economy?.baseGoldPerTurn === "number"
+            ? Math.max(0, Math.floor(next.economy.baseGoldPerTurn))
+            : defaults.economy.baseGoldPerTurn,
+      },
+      colonization: {
+        maxActiveColonizations:
+          typeof next.colonization?.maxActiveColonizations === "number"
+            ? Math.max(1, Math.floor(next.colonization.maxActiveColonizations))
+            : defaults.colonization.maxActiveColonizations,
+        pointsPerTurn:
+          typeof next.colonization?.pointsPerTurn === "number"
+            ? Math.max(0, Math.floor(next.colonization.pointsPerTurn))
+            : defaults.colonization.pointsPerTurn,
+      },
+    };
+  }
+
+  if (parsed.worldBase && typeof parsed.worldBase === "object") {
+    const candidate = parsed.worldBase as Partial<WorldBase>;
+    if (
+      candidate.resourcesByCountry &&
+      typeof candidate.resourcesByCountry === "object" &&
+      candidate.provinceOwner &&
+      typeof candidate.provinceOwner === "object" &&
+      candidate.colonyProgressByProvince &&
+      typeof candidate.colonyProgressByProvince === "object"
+    ) {
+      worldBase = {
+        turnId,
+        resourcesByCountry: candidate.resourcesByCountry,
+        provinceOwner: candidate.provinceOwner,
+        colonyProgressByProvince: candidate.colonyProgressByProvince,
+      };
+    } else {
+      worldBase = defaultWorldBase(turnId);
+    }
+  } else {
+    worldBase = defaultWorldBase(turnId);
+  }
+
+  ordersByTurn.clear();
+  if (Array.isArray(parsed.ordersByTurn)) {
+    for (const turnEntry of parsed.ordersByTurn) {
+      if (!turnEntry || typeof turnEntry !== "object") {
+        continue;
+      }
+      const savedTurn = (turnEntry as { turnId?: unknown }).turnId;
+      const players = (turnEntry as { players?: unknown }).players;
+      if (typeof savedTurn !== "number" || !Number.isFinite(savedTurn) || !Array.isArray(players)) {
+        continue;
+      }
+
+      const playerMap = new Map<string, Order[]>();
+      for (const playerEntry of players) {
+        if (!playerEntry || typeof playerEntry !== "object") {
+          continue;
+        }
+        const savedPlayerId = (playerEntry as { playerId?: unknown }).playerId;
+        const savedOrders = (playerEntry as { orders?: unknown }).orders;
+        if (typeof savedPlayerId !== "string" || !Array.isArray(savedOrders)) {
+          continue;
+        }
+        playerMap.set(savedPlayerId, savedOrders as Order[]);
+      }
+      if (playerMap.size > 0) {
+        ordersByTurn.set(Math.floor(savedTurn), playerMap);
+      }
+    }
+  }
+
+  resolveReadyByTurn.clear();
+  if (Array.isArray(parsed.resolveReadyByTurn)) {
+    for (const turnEntry of parsed.resolveReadyByTurn) {
+      if (!turnEntry || typeof turnEntry !== "object") {
+        continue;
+      }
+      const savedTurn = (turnEntry as { turnId?: unknown }).turnId;
+      const countryIds = (turnEntry as { countryIds?: unknown }).countryIds;
+      if (typeof savedTurn !== "number" || !Number.isFinite(savedTurn) || !Array.isArray(countryIds)) {
+        continue;
+      }
+      const ids = countryIds.filter((id): id is string => typeof id === "string");
+      if (ids.length > 0) {
+        resolveReadyByTurn.set(Math.floor(savedTurn), new Set(ids));
+      }
+    }
+  }
+
+  return true;
+}
+
+async function persistStateToDb(): Promise<void> {
+  const payload = {
+    turnId,
+    gameSettings,
+    worldBase: {
+      ...worldBase,
+      turnId,
+    },
+    ordersByTurn: serializeOrdersByTurn(),
+    resolveReadyByTurn: serializeResolveReadyByTurn(),
+  };
+
+  await prisma.gameState.upsert({
+    where: { id: GAME_STATE_ROW_ID },
+    create: {
+      id: GAME_STATE_ROW_ID,
+      turnId,
+      gameSettingsJson: payload.gameSettings as unknown as Prisma.InputJsonValue,
+      worldBaseJson: payload.worldBase as unknown as Prisma.InputJsonValue,
+      ordersByTurnJson: payload.ordersByTurn as unknown as Prisma.InputJsonValue,
+      resolveReadyByTurnJson: payload.resolveReadyByTurn as unknown as Prisma.InputJsonValue,
+    },
+    update: {
+      turnId,
+      gameSettingsJson: payload.gameSettings as unknown as Prisma.InputJsonValue,
+      worldBaseJson: payload.worldBase as unknown as Prisma.InputJsonValue,
+      ordersByTurnJson: payload.ordersByTurn as unknown as Prisma.InputJsonValue,
+      resolveReadyByTurnJson: payload.resolveReadyByTurn as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+let persistStateQueue: Promise<void> = Promise.resolve();
+
+function savePersistentState(): void {
+  persistStateQueue = persistStateQueue
+    .then(async () => {
+      await persistStateToDb();
+    })
+    .catch((error) => {
+      console.error("[state] Failed to save game state to DB:", error);
+    });
+}
+
+async function tryImportPersistentStateFromFile(): Promise<boolean> {
+  if (!existsSync(persistedStatePath)) {
+    return false;
+  }
+
+  try {
+    const raw = readFileSync(persistedStatePath, "utf8");
+    const fileState = JSON.parse(raw) as unknown;
+    const ok = parseAndApplyPersistentState(fileState);
+    if (!ok) {
+      return false;
+    }
+    await persistStateToDb();
+    console.log("[state] Imported persistent game state from JSON file into database");
+    return true;
+  } catch (error) {
+    console.error("[state] Failed to import persisted game state from file:", error);
+    return false;
+  }
+}
+
+async function loadPersistentState(): Promise<void> {
+  try {
+    const row = await prisma.gameState.findUnique({ where: { id: GAME_STATE_ROW_ID } });
+    if (row) {
+      parseAndApplyPersistentState({
+        turnId: row.turnId,
+        gameSettings: row.gameSettingsJson,
+        worldBase: row.worldBaseJson,
+        ordersByTurn: row.ordersByTurnJson,
+        resolveReadyByTurn: row.resolveReadyByTurnJson,
+      });
+      return;
+    }
+
+    await tryImportPersistentStateFromFile();
+  } catch (error) {
+    console.error("[state] Failed to load persisted game state from DB, using defaults:", error);
+  }
+}
 
 const redis = env.redisUrl ? new Redis(env.redisUrl, { lazyConnect: true }) : null;
 if (redis) {
@@ -171,6 +396,7 @@ function ensureCountryInWorldBase(countryId: string): void {
       ducats: 20,
       gold: 80,
     };
+    savePersistentState();
   }
 }
 
@@ -383,6 +609,7 @@ function resolveTurn(): WorldPatch {
 
   ordersByTurn.delete(turnId - 1);
   resolveReadyByTurn.delete(turnId - 1);
+  savePersistentState();
 
   return {
     type: "WORLD_PATCH",
@@ -518,6 +745,7 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
   }
 
+  savePersistentState();
   return res.json(gameSettings);
 });
 
@@ -668,6 +896,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
     delete progress[countryIdParam];
   }
 
+  savePersistentState();
   return res.json({ ok: true });
 });
 
@@ -780,6 +1009,7 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
       };
     }
 
+    savePersistentState();
     return res.status(201).json(countryFromDb(country));
   } catch {
     removeUploadedFile(flagFile);
@@ -1023,6 +1253,7 @@ wss.on("connection", (socket) => {
       playerOrders.push(order);
       turnOrders.set(playerId, playerOrders);
       ordersByTurn.set(turnId, turnOrders);
+      savePersistentState();
 
       broadcast(wss, { type: "ORDER_BROADCAST", order });
       return;
@@ -1066,8 +1297,12 @@ wss.on("connection", (socket) => {
       );
 
       const readySet = getReadySetForTurn(turnId);
+      const readySizeBefore = readySet.size;
       if (activeCountryIds.has(playerCountryId)) {
         readySet.add(playerCountryId);
+      }
+      if (readySet.size !== readySizeBefore) {
+        savePersistentState();
       }
 
       const readyCount = [...readySet].filter((countryId) => activeCountryIds.has(countryId)).length;
@@ -1096,8 +1331,16 @@ wss.on("connection", (socket) => {
   });
 });
 
-server.listen(env.port, () => {
-  console.log(`Arcanorum server running on http://localhost:${env.port}`);
+async function startServer(): Promise<void> {
+  await loadPersistentState();
+  server.listen(env.port, () => {
+    console.log(`Arcanorum server running on http://localhost:${env.port}`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error("[startup] Failed to initialize server:", error);
+  process.exit(1);
 });
 
 
