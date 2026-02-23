@@ -273,23 +273,25 @@ export function AuthPanel({ onSuccess }: Props) {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "LOGIN_FAILED";
+      const [msgCode, lockReasonRaw] = msg.split("__REASON__");
+      const lockReasonText = lockReasonRaw ? decodeURIComponent(lockReasonRaw) : "";
       let text = "Сервер недоступен";
 
-      if (msg === "INVALID_PASSWORD") {
+      if (msgCode === "INVALID_PASSWORD") {
         text = "Неверный пароль";
-      } else if (msg === "ACCOUNT_LOCKED_PERMANENT" || msg === "ACCOUNT_LOCKED") {
+      } else if (msgCode === "ACCOUNT_LOCKED_PERMANENT" || msgCode === "ACCOUNT_LOCKED") {
         text = "Аккаунт заблокирован бессрочно";
-      } else if (msg.startsWith("ACCOUNT_LOCKED_TURN_")) {
-        const turn = msg.replace("ACCOUNT_LOCKED_TURN_", "");
+      } else if (msgCode.startsWith("ACCOUNT_LOCKED_TURN_")) {
+        const turn = msgCode.replace("ACCOUNT_LOCKED_TURN_", "");
         text = `Аккаунт заблокирован до хода #${turn}`;
-      } else if (msg.startsWith("ACCOUNT_LOCKED_TIME_")) {
-        const raw = msg.replace("ACCOUNT_LOCKED_TIME_", "");
+      } else if (msgCode.startsWith("ACCOUNT_LOCKED_TIME_")) {
+        const raw = msgCode.replace("ACCOUNT_LOCKED_TIME_", "");
         const when = new Date(raw);
         text = Number.isNaN(when.getTime())
           ? `Аккаунт заблокирован до ${raw}`
           : `Аккаунт заблокирован до ${when.toLocaleString()}`;
       }
-      toast.error(text);
+      toast.error(text, lockReasonText ? { description: `Причина: ${lockReasonText}` } : undefined);
     } finally {
       setSubmitting(false);
     }

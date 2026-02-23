@@ -56,16 +56,18 @@ export async function login(payload: LoginPayload): Promise<{ token: string; pla
   if (!response.ok) {
     const err = await response.json();
     if (err?.error === "ACCOUNT_LOCKED") {
+      const reasonText = typeof err?.lockReason === "string" && err.lockReason.trim() ? err.lockReason.trim() : null;
+      const encodedReasonText = reasonText ? encodeURIComponent(reasonText) : null;
       if (typeof err?.blockedUntilTurn === "number") {
-        throw new Error(`ACCOUNT_LOCKED_TURN_${err.blockedUntilTurn}`);
+        throw new Error(`ACCOUNT_LOCKED_TURN_${err.blockedUntilTurn}${encodedReasonText ? `__REASON__${encodedReasonText}` : ""}`);
       }
 
       if (typeof err?.blockedUntilAt === "string") {
-        throw new Error(`ACCOUNT_LOCKED_TIME_${err.blockedUntilAt}`);
+        throw new Error(`ACCOUNT_LOCKED_TIME_${err.blockedUntilAt}${encodedReasonText ? `__REASON__${encodedReasonText}` : ""}`);
       }
 
       if (err?.reason === "PERMANENT") {
-        throw new Error("ACCOUNT_LOCKED_PERMANENT");
+        throw new Error(`ACCOUNT_LOCKED_PERMANENT${encodedReasonText ? `__REASON__${encodedReasonText}` : ""}`);
       }
     }
 
@@ -174,10 +176,10 @@ export async function adminSetCountryPunishment(
   token: string,
   countryId: string,
   payload:
-    | { action: "unlock" }
-    | { action: "permanent" }
-    | { action: "turns"; turns: number }
-    | { action: "time"; blockedUntilAt: string },
+    | { action: "unlock"; reasonText?: string }
+    | { action: "permanent"; reasonText?: string }
+    | { action: "turns"; turns: number; reasonText?: string }
+    | { action: "time"; blockedUntilAt: string; reasonText?: string },
 ): Promise<Country> {
   const response = await fetch(`${API}/admin/countries/${countryId}/punishments`, {
     method: "PATCH",

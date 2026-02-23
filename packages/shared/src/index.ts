@@ -10,6 +10,7 @@ export type Country = {
   isLocked?: boolean;
   blockedUntilTurn?: number | null;
   blockedUntilAt?: string | null;
+  lockReason?: string | null;
   ignoreUntilTurn?: number | null;
   eventLogRetentionTurns?: number | null;
 };

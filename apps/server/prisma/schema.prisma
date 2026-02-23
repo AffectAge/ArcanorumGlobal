@@ -18,6 +18,7 @@ model Country {
   isAdmin          Boolean   @default(false)
   blockedUntilTurn Int?
   blockedUntilAt   DateTime?
+  lockReason       String?
   ignoreUntilTurn  Int?
   eventLogRetentionTurns Int @default(3)
   createdAt        DateTime  @default(now())

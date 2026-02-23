@@ -175,6 +175,7 @@ const countrySelect = {
   isLocked: true,
   blockedUntilTurn: true,
   blockedUntilAt: true,
+  lockReason: true,
   ignoreUntilTurn: true,
   eventLogRetentionTurns: true,
 } as const;
@@ -1015,10 +1016,11 @@ function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
   });
 }
 
-function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null; ignoreUntilTurn: number | null; eventLogRetentionTurns?: number | null }): Country {
+function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null; lockReason?: string | null; ignoreUntilTurn: number | null; eventLogRetentionTurns?: number | null }): Country {
   return {
     ...row,
     blockedUntilAt: row.blockedUntilAt ? row.blockedUntilAt.toISOString() : null,
+    lockReason: row.lockReason ?? null,
   };
 }
 
@@ -2450,6 +2452,7 @@ const punishSchema = z
     action: z.enum(["unlock", "permanent", "turns", "time"]),
     turns: z.coerce.number().int().min(1).max(5000).optional(),
     blockedUntilAt: z.string().datetime().optional(),
+    reasonText: z.string().trim().max(300).optional(),
   })
   .superRefine((val, ctx) => {
     if (val.action === "turns" && !val.turns) {
@@ -2478,18 +2481,19 @@ app.patch("/admin/countries/:countryId/punishments", async (req, res) => {
   }
 
   const input = parsed.data;
-  let data: { isLocked?: boolean; blockedUntilTurn?: number | null; blockedUntilAt?: Date | null } = {};
+  const reasonText = input.reasonText?.trim() ? input.reasonText.trim() : null;
+  let data: { isLocked?: boolean; blockedUntilTurn?: number | null; blockedUntilAt?: Date | null; lockReason?: string | null } = {};
 
   if (input.action === "unlock") {
-    data = { isLocked: false, blockedUntilTurn: null, blockedUntilAt: null };
+    data = { isLocked: false, blockedUntilTurn: null, blockedUntilAt: null, lockReason: null };
   }
 
   if (input.action === "permanent") {
-    data = { isLocked: true, blockedUntilTurn: null, blockedUntilAt: null };
+    data = { isLocked: true, blockedUntilTurn: null, blockedUntilAt: null, lockReason: reasonText };
   }
 
   if (input.action === "turns") {
-    data = { isLocked: false, blockedUntilTurn: turnId + (input.turns ?? 0), blockedUntilAt: null };
+    data = { isLocked: false, blockedUntilTurn: turnId + (input.turns ?? 0), blockedUntilAt: null, lockReason: reasonText };
   }
 
   if (input.action === "time") {
@@ -2497,11 +2501,11 @@ app.patch("/admin/countries/:countryId/punishments", async (req, res) => {
     if (Number.isNaN(until.getTime()) || until <= new Date()) {
       return res.status(400).json({ error: "INVALID_TIME" });
     }
-    data = { isLocked: false, blockedUntilTurn: null, blockedUntilAt: until };
+    data = { isLocked: false, blockedUntilTurn: null, blockedUntilAt: until, lockReason: reasonText };
   }
 
   const updated = await prisma.country.update({ where: { id: countryIdParam }, data, select: countrySelect });
-  const punishmentNewsMessage =
+  const punishmentNewsMessageBase =
     input.action === "unlock"
       ? `С страны ${updated.name} сняты ограничения`
       : input.action === "permanent"
@@ -2509,6 +2513,8 @@ app.patch("/admin/countries/:countryId/punishments", async (req, res) => {
         : input.action === "turns"
           ? `Страна ${updated.name} заблокирована до хода #${data.blockedUntilTurn ?? turnId}`
           : `Страна ${updated.name} заблокирована по времени`;
+  const punishmentNewsMessage =
+    input.action !== "unlock" && reasonText ? `${punishmentNewsMessageBase}. Причина: ${reasonText}` : punishmentNewsMessageBase;
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -2614,7 +2620,7 @@ app.post("/auth/login", async (req, res) => {
 
   if (block.blocked) {
     if (block.reason === "PERMANENT") {
-      return res.status(403).json({ error: "ACCOUNT_LOCKED", reason: "PERMANENT" });
+      return res.status(403).json({ error: "ACCOUNT_LOCKED", reason: "PERMANENT", lockReason: country.lockReason ?? null });
     }
 
     if (block.reason === "TURN") {
@@ -2623,6 +2629,7 @@ app.post("/auth/login", async (req, res) => {
         reason: "TURN",
         blockedUntilTurn: block.blockedUntilTurn,
         currentTurn: turnId,
+        lockReason: country.lockReason ?? null,
       });
     }
 
@@ -2630,6 +2637,7 @@ app.post("/auth/login", async (req, res) => {
       error: "ACCOUNT_LOCKED",
       reason: "TIME",
       blockedUntilAt: block.blockedUntilAt?.toISOString() ?? null,
+      lockReason: country.lockReason ?? null,
     });
   }
 

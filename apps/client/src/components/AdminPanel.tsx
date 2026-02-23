@@ -48,6 +48,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [crestPreviewUrl, setCrestPreviewUrl] = useState<string | null>(null);
   const [turnsToBlock, setTurnsToBlock] = useState(3);
   const [blockUntilAt, setBlockUntilAt] = useState("");
+  const [punishmentReasonText, setPunishmentReasonText] = useState("");
   const [ignoreUntilTurn, setIgnoreUntilTurn] = useState(0);
   const [selectedProvinceId, setSelectedProvinceId] = useState<string>("");
   const [provinceOwnerCountryId, setProvinceOwnerCountryId] = useState<string>("");
@@ -134,6 +135,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     setFlagPreviewUrl(selectedCountry.flagUrl ?? null);
     setCrestPreviewUrl(selectedCountry.crestUrl ?? null);
     setIgnoreUntilTurn(selectedCountry.ignoreUntilTurn ?? 0);
+    setPunishmentReasonText(selectedCountry.lockReason ?? "");
   }, [selectedCountryId, selectedCountry]);
 
   useEffect(() => {
@@ -210,7 +212,10 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
 
     setSaving(true);
     try {
-      const updated = await adminSetCountryPunishment(token, selectedCountry.id, payload);
+      const updated = await adminSetCountryPunishment(token, selectedCountry.id, {
+        ...payload,
+        reasonText: punishmentReasonText.trim() || undefined,
+      });
       setCountries((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
       if (updated.id === currentCountryId) {
         onSessionCountryUpdated(updated);
@@ -626,6 +631,19 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                       {countrySection === "punishments" && (
                         <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-3">
                           <div className="text-sm text-slate-200">Текущий статус: <span className="text-arc-accent">{punishmentStatus}</span></div>
+                          <div>
+                            <label className="mb-1 block text-xs text-slate-300">Причина блокировки (необязательно)</label>
+                            <textarea
+                              value={punishmentReasonText}
+                              onChange={(e) => setPunishmentReasonText(e.target.value.slice(0, 300))}
+                              rows={3}
+                              placeholder="Например: нарушение правил сервера"
+                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                            />
+                            <div className="mt-1 text-[11px] text-slate-500">
+                              Будет показана игроку при попытке входа. До 300 символов.
+                            </div>
+                          </div>
 
                           <div className="flex flex-wrap items-end gap-2">
                             <div>
