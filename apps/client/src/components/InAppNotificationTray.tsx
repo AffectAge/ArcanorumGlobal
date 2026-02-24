@@ -167,20 +167,12 @@ export function InAppNotificationTray({
                   style={
                     isUnread
                       ? {
-                          boxShadow: `0 0 0 1px ${glowColor} inset, 0 0 16px ${glowColor}, 0 10px 24px rgba(0,0,0,0.35)`,
+                          boxShadow: `0 0 0 1px ${glowColor} inset, 0 0 20px ${glowColor}, 0 0 34px ${glowColor}, 0 10px 24px rgba(0,0,0,0.35)`,
                         }
                       : undefined
                   }
                   aria-label={tooltipText(item)}
                 >
-                  {isUnread && (
-                    <span
-                      className="pointer-events-none absolute -inset-1 rounded-2xl blur-md"
-                      style={{ background: glowColor, opacity: 0.38 }}
-                      aria-hidden="true"
-                    />
-                  )}
-                  <span className="pointer-events-none absolute inset-x-1 bottom-0 h-px bg-gradient-to-r from-transparent via-arc-accent/70 to-transparent opacity-0 transition group-hover:opacity-100" />
                   <Icon
                     size={17}
                     className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 transition-all duration-200 group-hover:left-3 group-hover:top-[14px] group-hover:translate-x-0 group-hover:translate-y-0"

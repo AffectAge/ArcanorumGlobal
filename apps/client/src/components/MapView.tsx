@@ -1275,7 +1275,7 @@ export function MapView({
 
   const legendPanelBaseClass =
     "pointer-events-auto absolute z-30 rounded-xl border border-white/10 bg-[#0b111b] text-xs text-white/80 shadow-2xl backdrop-blur-xl";
-  const legendCompactClass = "w-72 px-2 py-2";
+  const legendCompactClass = "w-10 p-0";
   const legendExpandedClass = "w-72 p-3";
   const mapControlsRhythmClass = "h-11 rounded-xl";
 
@@ -1344,18 +1344,18 @@ export function MapView({
         </div>
       )}
 
-      <div className="pointer-events-auto absolute bottom-20 left-4 z-30 md:bottom-5 md:left-1/2 md:-translate-x-full md:-ml-[12.3rem]">
+      <div className="pointer-events-auto absolute bottom-[4rem] left-1/2 z-30 -translate-x-1/2 ml-[6rem]">
         <Tooltip content={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"} placement="top">
           <button
             type="button"
             onClick={() => setShowProvinceBorders((v) => !v)}
-            className={`group glass panel-border relative flex ${mapControlsRhythmClass} w-11 items-center justify-center overflow-hidden bg-[#0b111b]/86 text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
+            className={`group glass panel-border relative flex h-10 w-10 rounded-xl items-center justify-center overflow-hidden bg-[#0b111b]/86 text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
               showProvinceBorders ? "border-[#6ee7b7]/50 text-emerald-500 hover:text-emerald-500" : ""
             }`}
             aria-label={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"}
           >
             <Grid3X3
-              size={18}
+              size={17}
               className={`relative z-10 transition-colors ${
                 showProvinceBorders ? "text-emerald-500" : ""
               }`}
@@ -1482,22 +1482,26 @@ export function MapView({
 
       {activeMode === "Колонизация" && (
         <motion.div
-          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
-            isColonizationLegendExpanded ? legendExpandedClass : legendCompactClass
-          }`}
+          className={`${legendPanelBaseClass} bottom-[4rem] left-1/2 right-auto -translate-x-1/2 ${
+            isColonizationLegendExpanded ? "ml-[16.75rem]" : "ml-[9rem]"
+          } ${isColonizationLegendExpanded ? legendExpandedClass : legendCompactClass}`}
         >
           <button
             type="button"
             onClick={() => setColonizationLegendPinnedOpen((v) => !v)}
-            className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
+            className={`flex w-full items-center rounded-lg border border-white/10 bg-black/25 text-left ${
+              isColonizationLegendExpanded ? "justify-between gap-2 px-2 py-2" : "h-10 justify-center p-0"
+            }`}
           >
-            <div className="flex items-center gap-2">
+            <div className={`flex items-center ${isColonizationLegendExpanded ? "gap-2" : "justify-center"}`}>
               <Sparkles size={14} className="text-white" />
-              <span className="font-semibold text-white">Колонизация</span>
+              {isColonizationLegendExpanded && <span className="font-semibold text-white">Колонизация</span>}
             </div>
-            <div className="flex items-center gap-1">
-              <ChevronDown size={14} className={`transition ${isColonizationLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
-            </div>
+            {isColonizationLegendExpanded && (
+              <div className="flex items-center gap-1">
+                <ChevronDown size={14} className={`transition ${isColonizationLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
+              </div>
+            )}
           </button>
           <AnimatePresence initial={false}>
             {isColonizationLegendExpanded && (
@@ -1523,22 +1527,26 @@ export function MapView({
 
       {activeMode === "Политическая карта" && (
         <motion.div
-          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
-            isPoliticalLegendExpanded ? legendExpandedClass : legendCompactClass
-          }`}
+          className={`${legendPanelBaseClass} bottom-[4rem] left-1/2 right-auto -translate-x-1/2 ${
+            isPoliticalLegendExpanded ? "ml-[16.75rem]" : "ml-[9rem]"
+          } ${isPoliticalLegendExpanded ? legendExpandedClass : legendCompactClass}`}
         >
           <button
             type="button"
             onClick={() => setPoliticalLegendPinnedOpen((v) => !v)}
-            className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
+            className={`flex w-full items-center rounded-lg border border-white/10 bg-black/25 text-left ${
+              isPoliticalLegendExpanded ? "justify-between gap-2 px-2 py-2" : "h-10 justify-center p-0"
+            }`}
           >
-            <div className="flex items-center gap-2">
+            <div className={`flex items-center ${isPoliticalLegendExpanded ? "gap-2" : "justify-center"}`}>
               <MapIcon size={14} className="text-white" />
-              <span className="font-semibold text-white">Политическая карта</span>
+              {isPoliticalLegendExpanded && <span className="font-semibold text-white">Политическая карта</span>}
             </div>
-            <div className="flex items-center gap-1">
-              <ChevronDown size={14} className={`transition ${isPoliticalLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
-            </div>
+            {isPoliticalLegendExpanded && (
+              <div className="flex items-center gap-1">
+                <ChevronDown size={14} className={`transition ${isPoliticalLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
+              </div>
+            )}
           </button>
 
           <AnimatePresence initial={false}>

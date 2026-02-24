@@ -30,11 +30,11 @@ export function MapModePanel({ activeMode, onModeChange }: Props) {
               whileHover={{ y: -2, scale: 1.03 }}
               transition={{ type: "tween", duration: 0.12 }}
               onClick={() => onModeChange(mode.key)}
-              className={`group glass panel-border relative flex h-11 w-11 items-center justify-start overflow-hidden rounded-xl bg-[#0b111b]/86 px-3 text-slate-100 transition-[width,color] duration-150 hover:w-[170px] hover:text-arc-accent ${isActive ? "text-emerald-500 shadow-neon" : ""}`}
+              className={`group glass panel-border relative flex h-10 w-10 items-center justify-start overflow-hidden rounded-xl bg-[#0b111b]/86 px-3 text-slate-100 transition-[width,color] duration-150 hover:w-[164px] hover:text-arc-accent ${isActive ? "text-emerald-500 shadow-neon" : ""}`}
               aria-label={mode.key}
             >
-              <Icon size={18} className="relative z-10 shrink-0" />
-              <span className="relative z-10 ml-2 max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-150 group-hover:max-w-[120px] group-hover:opacity-100">
+              <Icon size={17} className="relative z-10 shrink-0" />
+              <span className="relative z-10 ml-2 max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-150 group-hover:max-w-[114px] group-hover:opacity-100">
                 {mode.key}
               </span>
             </motion.button>
