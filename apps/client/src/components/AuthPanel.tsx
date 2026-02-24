@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { colord } from "colord";
-import { Check, LoaderCircle, LogIn, Palette, Ruler, Server, ShieldCheck, Sparkles, Upload, UserPlus } from "lucide-react";
+import { BookOpen, Check, LoaderCircle, LogIn, Palette, Ruler, Server, ShieldCheck, Sparkles, Upload, UserPlus } from "lucide-react";
 import { fetchCountries, fetchServerStatus, login, register } from "../lib/api";
 import type { Country, ServerStatus } from "@arcanorum/shared";
 import { toast } from "sonner";
@@ -54,6 +54,7 @@ export type AuthSuccess = {
 
 type Props = {
   onSuccess: (payload: AuthSuccess) => void;
+  onOpenCivilopedia?: () => void;
 };
 
 const statusMeta: Record<ServerStatus, { text: string; cls: string }> = {
@@ -116,7 +117,7 @@ async function isImageWithinMaxSize(file: File, maxSize = 256): Promise<boolean>
   });
 }
 
-export function AuthPanel({ onSuccess }: Props) {
+export function AuthPanel({ onSuccess, onOpenCivilopedia }: Props) {
   const [countries, setCountries] = useState<Country[]>([]);
   const [serverStatus, setServerStatus] = useState<ServerStatus>("offline");
   const [loading, setLoading] = useState(true);
@@ -534,6 +535,14 @@ export function AuthPanel({ onSuccess }: Props) {
                   <ShieldCheck size={15} />
                   {submitting ? "Вход..." : "Войти"}
                 </button>
+                <button
+                  type="button"
+                  onClick={onOpenCivilopedia}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition hover:border-arc-accent/30 hover:text-arc-accent"
+                >
+                  <BookOpen size={15} />
+                  Хранилище знаний
+                </button>
               </form>
               </motion.div>
             </Tab.Panel>
@@ -665,6 +674,14 @@ export function AuthPanel({ onSuccess }: Props) {
                 <button disabled={submitting} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-arc-accent px-3 py-2 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-60">
                   <UserPlus size={15} />
                   {submitting ? "Создание..." : "Создать страну"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenCivilopedia}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition hover:border-arc-accent/30 hover:text-arc-accent"
+                >
+                  <BookOpen size={15} />
+                  Хранилище знаний
                 </button>
               </form>
               </motion.div>

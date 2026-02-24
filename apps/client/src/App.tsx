@@ -873,7 +873,13 @@ export default function App() {
             ) : null}
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(5,8,13,0.15),rgba(5,8,13,0.78)_72%)]" />
             <div className="relative z-10">
-              <AuthPanel onSuccess={onAuthSuccess} />
+              <AuthPanel
+                onSuccess={onAuthSuccess}
+                onOpenCivilopedia={() => {
+                  setCivilopediaIntent(null);
+                  setCivilopediaOpen(true);
+                }}
+              />
             </div>
           </motion.div>
         )}
