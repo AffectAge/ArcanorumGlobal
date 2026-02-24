@@ -52,6 +52,12 @@ function statusClass(item: TurnStatusItem): string {
   return "bg-rose-500/15 text-rose-300 border-rose-400/30";
 }
 
+function onlineBadgeClass(isOnline: boolean): string {
+  return isOnline
+    ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300"
+    : "border-slate-400/20 bg-slate-500/10 text-slate-300";
+}
+
 export function TurnStatusModal({ open, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [payload, setPayload] = useState<TurnStatusPayload | null>(null);
@@ -148,9 +154,21 @@ export function TurnStatusModal({ open, onClose }: Props) {
                         style={{ backgroundColor: item.color ?? "#94a3b8" }}
                       />
                     )}
-                    <div className="text-sm text-slate-100">{item.name}</div>
+                    <div>
+                      <div className="text-sm text-slate-100">{item.name}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <span>
+                          Последний вход: {item.lastLoginAt ? new Date(item.lastLoginAt).toLocaleString() : "нет данных"}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className={`rounded-md border px-2 py-1 text-xs ${statusClass(item)}`}>{statusText(item)}</div>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-24 rounded-md border px-2 py-1 text-center text-xs ${onlineBadgeClass(item.online)}`}>
+                      {item.online ? "Онлайн" : "Оффлайн"}
+                    </div>
+                    <div className={`w-24 rounded-md border px-2 py-1 text-center text-xs ${statusClass(item)}`}>{statusText(item)}</div>
+                  </div>
                 </div>
               ))}
             </div>

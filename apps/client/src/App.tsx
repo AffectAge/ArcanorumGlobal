@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Dialog } from "@headlessui/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -1036,62 +1037,72 @@ export default function App() {
 
       <AnimatePresence>
         {auth && turnResolveOverlay.phase !== "idle" && (
-          <motion.div
+          <Dialog
             key="turn-resolve-overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[160] flex items-center justify-center bg-black/55 backdrop-blur-md"
+            open
+            onClose={() => {
+              if (turnResolveOverlay.phase === "done") {
+                setTurnResolveOverlay({ phase: "idle" });
+              }
+            }}
+            className="relative z-[220]"
           >
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(18,26,38,0.18),rgba(4,8,12,0.78)_72%)]" />
             <motion.div
-              initial={{ opacity: 0, y: 12, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.98 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-              className="glass panel-border relative z-10 w-[min(92vw,34rem)] rounded-2xl bg-[#0b111b] p-6 shadow-2xl"
-            >
-              {turnResolveOverlay.phase === "processing" ? (
-                <div className="flex flex-col items-center gap-4 text-center">
-                  <div className="relative flex h-16 w-16 items-center justify-center rounded-full border border-emerald-400/30 bg-emerald-500/10">
-                    <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-                  </div>
-                  <div>
-                    <div className="text-lg font-semibold text-white">Идет обработка хода</div>
-                    <div className="mt-1 text-sm text-white/60">Подождите, сервер выполняет резолв приказов</div>
-                  </div>
-                  <div className="text-xs text-white/45">Во время обработки действия временно недоступны</div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-4 text-center">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-full border border-arc-accent/30 bg-arc-accent/10 text-2xl text-arc-accent">
-                    ✓
-                  </div>
-                  <div>
-                    <div className="text-lg font-semibold text-white">
-                      Обработка хода завершена
+              aria-hidden="true"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/55 backdrop-blur-md"
+            />
+            <div className="fixed inset-0 z-[221] flex items-center justify-center p-4">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(18,26,38,0.18),rgba(4,8,12,0.78)_72%)]" />
+              <motion.div
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="glass panel-border relative z-10 w-[min(92vw,34rem)] rounded-2xl bg-[#0b111b] p-6 shadow-2xl"
+              >
+                {turnResolveOverlay.phase === "processing" ? (
+                  <div className="flex flex-col items-center gap-4 text-center">
+                    <div className="relative flex h-16 w-16 items-center justify-center rounded-full border border-emerald-400/30 bg-emerald-500/10">
+                      <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
                     </div>
-                    <div className="mt-1 text-sm text-white/65">
-                      Ход #{turnResolveOverlay.resolvedTurnId} успешно обработан
+                    <div>
+                      <Dialog.Title className="text-lg font-semibold text-white">Идет обработка хода</Dialog.Title>
+                      <div className="mt-1 text-sm text-white/60">Подождите, сервер выполняет резолв приказов</div>
                     </div>
+                    <div className="text-xs text-white/45">Во время обработки действия временно недоступны</div>
                   </div>
-                  <div className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-xs text-white/55">Общее время обработки</div>
-                    <div className="mt-1 text-xl font-semibold tabular-nums text-white">
-                      {(turnResolveOverlay.durationMs / 1000).toFixed(2)} c
+                ) : (
+                  <div className="flex flex-col items-center gap-4 text-center">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-arc-accent/30 bg-arc-accent/10 text-2xl text-arc-accent">
+                      ✓
                     </div>
+                    <div>
+                      <Dialog.Title className="text-lg font-semibold text-white">Обработка хода завершена</Dialog.Title>
+                      <div className="mt-1 text-sm text-white/65">
+                        Ход #{turnResolveOverlay.resolvedTurnId} успешно обработан
+                      </div>
+                    </div>
+                    <div className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                      <div className="text-xs text-white/55">Общее время обработки</div>
+                      <div className="mt-1 text-xl font-semibold tabular-nums text-white">
+                        {(turnResolveOverlay.durationMs / 1000).toFixed(2)} c
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTurnResolveOverlay({ phase: "idle" })}
+                      className="panel-border inline-flex h-11 items-center justify-center rounded-xl bg-arc-accent px-5 text-sm font-semibold text-black transition hover:brightness-110"
+                    >
+                      Вернуться к игре
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setTurnResolveOverlay({ phase: "idle" })}
-                    className="panel-border inline-flex h-11 items-center justify-center rounded-xl bg-arc-accent px-5 text-sm font-semibold text-black transition hover:brightness-110"
-                  >
-                    Вернуться к игре
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          </motion.div>
+                )}
+              </motion.div>
+            </div>
+          </Dialog>
         )}
       </AnimatePresence>
 

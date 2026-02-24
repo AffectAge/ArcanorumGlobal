@@ -183,6 +183,7 @@ const countrySelect = {
 
 let turnId = 1;
 const onlinePlayers = new Set<string>();
+const lastLoginAtByCountryId = new Map<string, string>();
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
 const resolveReadyByTurn = new Map<number, Set<string>>();
 const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
@@ -1407,6 +1408,16 @@ function broadcastTurnResolveStarted(wsServer: WebSocketServer, reason: "manual"
   broadcast(wsServer, { type: "TURN_RESOLVE_STARTED", turnId, reason });
 }
 
+function getOnlineCountryIdsFromSockets(wsServer: WebSocketServer): Set<string> {
+  const ids = new Set<string>();
+  wsServer.clients.forEach((client) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    const meta = client as WebSocket & { __arcCountryId?: string };
+    if (meta.__arcCountryId) ids.add(meta.__arcCountryId);
+  });
+  return ids;
+}
+
 app.get("/health", async (_req, res) => {
   res.json({ status: env.serverStatus, turnId, serverTime: new Date().toISOString() });
 });
@@ -1435,6 +1446,7 @@ app.get("/turn/status", async (_req, res) => {
   });
 
   const readySet = getReadySetForTurn(turnId);
+  const onlineCountryIds = getOnlineCountryIdsFromSockets(wss);
 
   const items = countries.map((country) => {
     const block = getCountryBlockInfo(country, turnId, now);
@@ -1452,6 +1464,8 @@ app.get("/turn/status", async (_req, res) => {
       blockedUntilTurn: block.blockedUntilTurn,
       blockedUntilAt: block.blockedUntilAt ? block.blockedUntilAt.toISOString() : null,
       ignoreUntilTurn: skip.ignoreUntilTurn,
+      online: onlineCountryIds.has(country.id),
+      lastLoginAt: lastLoginAtByCountryId.get(country.id) ?? null,
     };
   });
 
@@ -2752,6 +2766,7 @@ app.post("/auth/login", async (req, res) => {
   }
 
   ensureCountryInWorldBase(country.id);
+  lastLoginAtByCountryId.set(country.id, new Date().toISOString());
   const token = createToken({ id: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin }, rememberMe);
   return res.json({
     token,
@@ -2950,6 +2965,9 @@ wss.on("connection", (socket) => {
         isAdmin = Boolean(country.isAdmin);
         (socket as WebSocket & { __arcIsAdmin?: boolean; __arcCountryId?: string }).__arcIsAdmin = isAdmin;
         (socket as WebSocket & { __arcIsAdmin?: boolean; __arcCountryId?: string }).__arcCountryId = country.id;
+        if (!lastLoginAtByCountryId.has(country.id)) {
+          lastLoginAtByCountryId.set(country.id, new Date().toISOString());
+        }
         onlinePlayers.add(payload.id);
         ensureCountryInWorldBase(payload.countryId);
         send({

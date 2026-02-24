@@ -211,6 +211,8 @@ export type TurnStatusItem = {
   blockedUntilTurn: number | null;
   blockedUntilAt: string | null;
   ignoreUntilTurn: number | null;
+  online: boolean;
+  lastLoginAt: string | null;
 };
 
 export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: number; requiredCount: number; countries: TurnStatusItem[] }> {
