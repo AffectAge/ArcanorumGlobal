@@ -1,9 +1,9 @@
 import { Dialog } from "@headlessui/react";
 import { useEffect, useState } from "react";
-import { Coins, Flag, Image as ImageIcon, Palette, RefreshCcw, Save, ScrollText, Timer, Wallet, X } from "lucide-react";
+import { Coins, Flag, Image as ImageIcon, Palette, RefreshCcw, Save, ScrollText, Timer, Wallet, X, Monitor } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { adminRecalculateAutoProvinceCosts, adminUploadResourceIcons, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
+import { adminRecalculateAutoProvinceCosts, adminUploadResourceIcons, adminUploadUiBackground, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
 
 type Props = {
   open: boolean;
@@ -20,6 +20,7 @@ const categories = [
   { id: "registration", label: "Регистрация", icon: Flag },
   { id: "customization", label: "Кастомизация", icon: Palette },
   { id: "eventLog", label: "Журнал событий", icon: ScrollText },
+  { id: "background", label: "Фон интерфейса", icon: Monitor },
   { id: "resourceIcons", label: "Иконки очков", icon: ImageIcon },
 ] as const;
 
@@ -69,6 +70,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
     gold: null,
   });
   const [resourceIconFiles, setResourceIconFiles] = useState<Partial<Record<keyof ResourceIconsMap, File | null>>>({});
+  const [uiBackgroundImageUrl, setUiBackgroundImageUrl] = useState<string | null>(null);
+  const [uiBackgroundFile, setUiBackgroundFile] = useState<File | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -97,6 +100,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setTurnTimerEnabled(settings.turnTimer?.enabled ?? false);
         setTurnTimerSeconds(settings.turnTimer?.secondsPerTurn ?? 300);
         setShowAntarctica(settings.map?.showAntarctica ?? true);
+        setUiBackgroundImageUrl(settings.map?.backgroundImageUrl ?? null);
+        setUiBackgroundFile(null);
         setResourceIcons(settings.resourceIcons);
         setResourceIconFiles({});
       })
@@ -286,6 +291,51 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       } else {
         toast.error("Не удалось обновить иконки очков");
       }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveUiBackground = async () => {
+    if (!uiBackgroundFile) {
+      toast.error("Сначала выберите изображение");
+      return;
+    }
+    const ok = await isImageWithinMaxSize(uiBackgroundFile, 4096);
+    if (!ok) {
+      toast.error("Фоновое изображение должно быть максимум 4096x4096");
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await adminUploadUiBackground(token, uiBackgroundFile);
+      setUiBackgroundImageUrl(updated.map.backgroundImageUrl);
+      setUiBackgroundFile(null);
+      const next = await fetchGameSettings(token);
+      onSettingsUpdated?.(next);
+      toast.success("Фон интерфейса обновлён");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "UI_BACKGROUND_UPDATE_FAILED";
+      if (msg === "IMAGE_DIMENSIONS_TOO_LARGE") {
+        toast.error("Фоновое изображение должно быть максимум 4096x4096");
+      } else {
+        toast.error("Не удалось обновить фон интерфейса");
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearUiBackground = async () => {
+    setSaving(true);
+    try {
+      const updated = await updateGameSettings(token, { map: { backgroundImageUrl: null } });
+      setUiBackgroundImageUrl(updated.map.backgroundImageUrl ?? null);
+      setUiBackgroundFile(null);
+      onSettingsUpdated?.(updated);
+      toast.success("Фон интерфейса удалён");
+    } catch {
+      toast.error("Не удалось удалить фон интерфейса");
     } finally {
       setSaving(false);
     }
@@ -562,6 +612,50 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <Save size={14} />
                         Сохранить
                       </button>
+                    </div>
+                  )}
+
+                  {activeCategory === "background" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <Monitor size={15} className="text-arc-accent" />
+                        Фоновое изображение интерфейса (макс. 4096x4096)
+                      </div>
+                      <div className="panel-border rounded-lg bg-black/25 p-3">
+                        <div className="mb-2 text-xs text-slate-400">Текущий фон</div>
+                        <div className="flex h-40 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/30">
+                          {uiBackgroundImageUrl ? (
+                            <img src={uiBackgroundImageUrl} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="text-xs text-slate-500">Фон не установлен</div>
+                          )}
+                        </div>
+                      </div>
+                      <label className="panel-border flex cursor-pointer items-center justify-center rounded-lg bg-white/5 px-3 py-2 text-sm text-slate-200 transition hover:border-arc-accent/40">
+                        Выбрать изображение
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => setUiBackgroundFile(e.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                      {uiBackgroundFile ? <div className="text-xs text-emerald-500">Выбран файл: {uiBackgroundFile.name}</div> : null}
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={saveUiBackground} disabled={saving || !uiBackgroundFile} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                          <Save size={14} />
+                          Загрузить фон
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearUiBackground}
+                          disabled={saving || (!uiBackgroundImageUrl && !uiBackgroundFile)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 transition hover:border-rose-300/30 hover:text-rose-200 disabled:opacity-60"
+                        >
+                          <X size={14} />
+                          Удалить фон
+                        </button>
+                      </div>
                     </div>
                   )}
 

@@ -40,7 +40,14 @@ const categories: Array<{ id: EventCategory; label: string; icon: LucideIcon; co
 ];
 
 const priorityWeight = { low: 0, medium: 1, high: 2 } as const;
+const allPriorityIds = ["low", "medium", "high"] as const;
 const allCategoryIds = categories.map((c) => c.id);
+
+const priorityMeta = {
+  low: { label: "Низкий", colorCls: "text-slate-300", chipCls: "border-slate-400/20 bg-slate-500/10 text-slate-200" },
+  medium: { label: "Средний", colorCls: "text-amber-300", chipCls: "border-amber-400/20 bg-amber-500/10 text-amber-200" },
+  high: { label: "Высокий", colorCls: "text-rose-300", chipCls: "border-rose-400/20 bg-rose-500/10 text-rose-200" },
+} as const;
 
 function dedupeEntries(entries: EventLogEntry[]): Array<{ entry: EventLogEntry; count: number }> {
   const grouped = new Map<string, { entry: EventLogEntry; count: number }>();
@@ -75,10 +82,11 @@ function IconBtn({
         whileHover={{ y: -2, scale: 1.03 }}
         transition={{ type: "tween", duration: 0.12 }}
         className={`group panel-border relative overflow-hidden rounded-md p-2 text-slate-300 transition ${
-          tone === "danger" ? "bg-white/5 hover:text-rose-300" : "bg-white/5 hover:text-arc-accent"
+          tone === "danger"
+            ? "border-white/10 bg-black/20 hover:border-rose-300/25 hover:text-rose-300"
+            : "border-white/10 bg-black/20 hover:border-white/15 hover:text-arc-accent"
         }`}
       >
-        <span className="pointer-events-none absolute left-1/2 top-1/2 h-2.5 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-transparent via-arc-accent/70 to-transparent opacity-0 blur-[2px] transition-opacity duration-100 group-hover:opacity-100" />
         <Icon size={15} className="relative z-10" />
       </motion.button>
     </Tooltip>
@@ -131,6 +139,26 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
       return new Set(allCategoryIds);
     }
   });
+  const [enabledPriorities, setEnabledPriorities] = useState<Set<keyof typeof priorityWeight>>(() => {
+    try {
+      const raw = localStorage.getItem("arc.ui.eventLog.enabledPriorities");
+      if (!raw) return new Set(allPriorityIds);
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return new Set(allPriorityIds);
+      const next = parsed.filter((v): v is keyof typeof priorityWeight => allPriorityIds.includes(v as keyof typeof priorityWeight));
+      return new Set(next.length > 0 ? next : allPriorityIds);
+    } catch {
+      return new Set(allPriorityIds);
+    }
+  });
+  const [groupDuplicates, setGroupDuplicates] = useState(() => {
+    try {
+      return localStorage.getItem("arc.ui.eventLog.groupDuplicates") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [expandedMessageKeys, setExpandedMessageKeys] = useState<Set<string>>(new Set());
   const [newEventsPulse, setNewEventsPulse] = useState(false);
   const [countriesById, setCountriesById] = useState<Record<string, { name: string; flagUrl?: string | null; color?: string }>>({});
   const prevEntriesCountRef = useRef(entries.length);
@@ -140,6 +168,9 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
         return false;
       }
       if (entry.category !== "system" && !enabledCategories.has(entry.category)) {
+        return false;
+      }
+      if (!enabledPriorities.has(entry.priority)) {
         return false;
       }
       if (countryScope === "own") {
@@ -161,8 +192,11 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
       return b.turn - a.turn || b.timestamp.localeCompare(a.timestamp);
     });
 
+    if (!groupDuplicates) {
+      return filtered.map((entry) => ({ entry, count: 1 }));
+    }
     return dedupeEntries(filtered);
-  }, [countryScope, currentCountryId, enabledCategories, entries, sortMode]);
+  }, [countryScope, currentCountryId, enabledCategories, enabledPriorities, entries, groupDuplicates, sortMode]);
 
   const toggleCategory = (category: EventCategory) => {
     if (category === "system") {
@@ -174,6 +208,30 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
         next.delete(category);
       } else {
         next.add(category);
+      }
+      return next;
+    });
+  };
+
+  const togglePriority = (priority: keyof typeof priorityWeight) => {
+    setEnabledPriorities((prev) => {
+      const next = new Set(prev);
+      if (next.has(priority)) {
+        next.delete(priority);
+      } else {
+        next.add(priority);
+      }
+      return next.size > 0 ? next : prev;
+    });
+  };
+
+  const toggleMessageExpanded = (key: string) => {
+    setExpandedMessageKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
       }
       return next;
     });
@@ -206,6 +264,15 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
           setEnabledCategories(new Set(next.length > 0 ? (["system", ...next.filter((v) => v !== "system")] as EventCategory[]) : allCategoryIds));
         }
       }
+      const savedPriorities = localStorage.getItem(`arc.ui.${scope}.eventLog.enabledPriorities`);
+      if (savedPriorities) {
+        const parsed = JSON.parse(savedPriorities) as unknown;
+        if (Array.isArray(parsed)) {
+          const next = parsed.filter((v): v is keyof typeof priorityWeight => allPriorityIds.includes(v as keyof typeof priorityWeight));
+          setEnabledPriorities(new Set(next.length > 0 ? next : allPriorityIds));
+        }
+      }
+      setGroupDuplicates(localStorage.getItem(`arc.ui.${scope}.eventLog.groupDuplicates`) !== "0");
     } catch {
       // ignore
     }
@@ -244,6 +311,22 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
   }, [currentCountryId, enabledCategories]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(`arc.ui.${currentCountryId ?? "guest"}.eventLog.enabledPriorities`, JSON.stringify([...enabledPriorities]));
+    } catch {
+      // ignore
+    }
+  }, [currentCountryId, enabledPriorities]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`arc.ui.${currentCountryId ?? "guest"}.eventLog.groupDuplicates`, groupDuplicates ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [currentCountryId, groupDuplicates]);
+
+  useEffect(() => {
     let cancelled = false;
     fetchCountries()
       .then((countries) => {
@@ -263,7 +346,7 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
   }, []);
 
   return (
-    <aside className="pointer-events-auto absolute right-4 top-24 z-[72] w-[min(400px,calc(100vw-1.5rem))]">
+    <aside className="pointer-events-auto absolute bottom-20 right-4 top-24 z-[72] flex w-[min(400px,calc(100vw-1.5rem))] flex-col justify-end">
       <AnimatePresence mode="wait" initial={false}>
         {collapsed ? (
           <motion.div
@@ -294,13 +377,13 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
             animate={{ opacity: 1, x: 0, scale: 1 }}
             exit={{ opacity: 0, x: 12, scale: 0.985 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="glass panel-border relative overflow-hidden rounded-2xl p-3.5"
+            className="glass panel-border relative overflow-hidden rounded-2xl border-white/10 bg-[#0b111b]/95 p-3.5 shadow-xl shadow-black/20"
           >
-            <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-emerald-500/40 to-transparent" />
-
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Bell size={18} className="text-arc-accent" />
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-arc-accent/20 bg-arc-accent/10">
+                  <Bell size={15} className="text-arc-accent" />
+                </span>
                 <div className="text-base font-semibold text-slate-100">Журнал событий</div>
                 <Tooltip content="Количество записей в журнале" placement="bottom">
                   <motion.span
@@ -310,7 +393,7 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
                         : { scale: 1, boxShadow: "0 0 0 rgba(0,0,0,0)" }
                     }
                     transition={{ duration: 0.55, ease: "easeOut" }}
-                    className="rounded-md bg-white/5 px-2 py-0.5 text-xs text-slate-300"
+                    className="rounded-md border border-white/10 bg-black/20 px-2 py-0.5 text-xs text-slate-300"
                   >
                     {entries.length}
                   </motion.span>
@@ -328,7 +411,7 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
               </div>
             </div>
 
-            <div className="mb-3 rounded-xl border border-white/10 bg-gradient-to-b from-white/[0.03] to-black/20 p-2.5">
+            <div className="mb-3 rounded-xl border border-white/10 bg-black/20 p-2.5">
               <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
                 <Filter size={13} />
                 Категории
@@ -343,11 +426,12 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
                       onClick={() => toggleCategory(cat.id)}
                       whileHover={cat.id === "system" ? undefined : { y: -2, scale: 1.04 }}
                       transition={{ type: "tween", duration: 0.12 }}
-                      className={`group panel-border relative inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg transition ${
-                        enabled ? "bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]" : "bg-black/15 text-slate-500"
+                      className={`group panel-border relative inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border transition ${
+                        enabled
+                          ? "border-white/15 bg-white/10 text-slate-100"
+                          : "border-white/10 bg-black/20 text-slate-500"
                       } ${cat.id === "system" ? "cursor-default opacity-95" : "hover:text-white"}`}
                     >
-                      <span className={`pointer-events-none absolute left-1/2 top-1/2 h-2.5 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-transparent ${enabled ? "via-white/60" : "via-arc-accent/70"} to-transparent opacity-0 blur-[2px] transition-opacity duration-100 group-hover:opacity-100`} />
                       <Icon size={18} className={`relative z-10 ${enabled ? cat.colorCls : ""}`} />
                     </motion.button>
                   );
@@ -361,12 +445,48 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
               </div>
             </div>
 
-            <div className="mb-3 rounded-xl border border-white/10 bg-gradient-to-b from-white/[0.03] to-black/20 p-2.5">
+            <div className="mb-3 rounded-xl border border-white/10 bg-black/20 p-2.5">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-xs uppercase tracking-wide text-slate-400">Приоритет</div>
+                <Tooltip content="Объединять одинаковые события в одну запись с счетчиком xN" placement="top">
+                  <button
+                    type="button"
+                    onClick={() => setGroupDuplicates((v) => !v)}
+                    className={`rounded-md border px-2 py-1 text-[10px] transition ${
+                      groupDuplicates ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-200" : "border-white/10 bg-black/20 text-slate-300"
+                    }`}
+                  >
+                    {groupDuplicates ? "Группировка: вкл" : "Группировка: выкл"}
+                  </button>
+                </Tooltip>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {allPriorityIds.map((priority) => {
+                  const enabled = enabledPriorities.has(priority);
+                  const meta = priorityMeta[priority];
+                  return (
+                    <Tooltip key={priority} content={`Показать события с приоритетом: ${meta.label.toLowerCase()}`} placement="top">
+                      <button
+                        type="button"
+                        onClick={() => togglePriority(priority)}
+                        className={`rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                          enabled ? meta.chipCls : "border-white/10 bg-black/20 text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        {meta.label}
+                      </button>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mb-3 rounded-xl border border-white/10 bg-black/20 p-2.5">
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-xs uppercase tracking-wide text-slate-400">Принадлежность</div>
                 <div className="text-[10px] text-white/35">Фильтр по стране</div>
               </div>
-              <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/10 bg-black/25 p-1">
+              <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/10 bg-black/20 p-1">
                 {([
                   { id: "all", label: "Все" },
                   { id: "own", label: "Наши" },
@@ -380,11 +500,10 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
                       transition={{ type: "tween", duration: 0.12 }}
                       className={`group panel-border relative overflow-hidden rounded-lg px-2 py-2 text-sm transition ${
                         countryScope === scope.id
-                          ? "border-emerald-400/35 bg-emerald-500/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-                          : "border-white/10 bg-white/5 text-slate-300 hover:border-emerald-400/20 hover:text-white"
+                          ? "border-emerald-400/35 bg-emerald-500/10 text-white"
+                          : "border-white/10 bg-black/20 text-slate-300 hover:border-emerald-400/20 hover:text-white"
                       }`}
                     >
-                      <span className="pointer-events-none absolute left-1/2 top-1/2 h-2.5 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-transparent via-arc-accent/70 to-transparent opacity-0 blur-[2px] transition-opacity duration-100 group-hover:opacity-100" />
                       <span className="relative z-10 flex flex-col items-center gap-1">
                         <ScopeIcon scope={scope.id} />
                         <span className="text-[11px] leading-none">{scope.label}</span>
@@ -406,7 +525,22 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
                     const categoryMeta = categories.find((c) => c.id === entry.category) ?? categories[0];
                     const CatIcon = categoryMeta.icon;
                     const priorityCls = entry.priority === "high" ? "text-rose-300" : entry.priority === "medium" ? "text-amber-300" : "text-slate-400";
+                    const categoryAccent =
+                      entry.category === "politics"
+                        ? "bg-sky-300"
+                        : entry.category === "economy"
+                          ? "bg-emerald-400"
+                          : entry.category === "system"
+                            ? "bg-slate-300"
+                            : entry.category === "military"
+                              ? "bg-rose-300"
+                              : entry.category === "diplomacy"
+                                ? "bg-violet-300"
+                                : "bg-emerald-400";
                     const localDate = new Date(entry.timestamp);
+                    const messageKey = `${entry.id}-${entry.timestamp}-${count}`;
+                    const isLongMessage = (entry.message?.length ?? 0) > 180;
+                    const isMessageExpanded = expandedMessageKeys.has(messageKey);
                     return (
                       <motion.div
                         key={`${entry.id}-${count}`}
@@ -415,8 +549,9 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -6, scale: 0.985 }}
                         transition={{ duration: 0.16, ease: "easeOut", delay: Math.min(idx * 0.015, 0.12) }}
-                        className="group rounded-xl border border-white/10 bg-black/20 p-3.5 transition hover:border-white/15 hover:bg-black/25"
+                        className="group relative rounded-xl border border-white/10 bg-black/20 p-3 transition hover:border-white/15 hover:bg-black/25"
                       >
+                        <span className={`pointer-events-none absolute inset-y-2 left-0.5 w-0.5 rounded-full ${categoryAccent} opacity-85`} />
                         <div className="mb-1.5 flex items-start justify-between gap-2">
                           <div className="flex min-w-0 items-center gap-2">
                             <Tooltip content={`Категория: ${categoryMeta.label}`} placement="top">
@@ -429,7 +564,7 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
                             </Tooltip>
                             {count > 1 && (
                               <Tooltip content="Сколько одинаковых событий объединено" placement="top">
-                                <span className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-slate-100">x{count}</span>
+                                <span className="rounded border border-white/10 bg-black/20 px-1.5 py-0.5 text-xs text-slate-100">x{count}</span>
                               </Tooltip>
                             )}
                           </div>
@@ -458,20 +593,36 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
                           </div>
                         </div>
 
-                        {entry.title ? <div className="mb-1.5 text-base font-semibold leading-tight text-slate-100">{entry.title}</div> : null}
-                        <div className="text-sm leading-relaxed text-slate-200">{entry.message}</div>
+                        {entry.title ? <div className="mb-1 pr-3 text-sm font-semibold leading-tight text-slate-100">{entry.title}</div> : null}
+                        <div className="pr-3">
+                          <div className={`text-sm leading-relaxed text-slate-200 ${isLongMessage && !isMessageExpanded ? "line-clamp-3" : ""}`}>{entry.message}</div>
+                          {isLongMessage && (
+                            <Tooltip content={isMessageExpanded ? "Скрыть полное сообщение" : "Развернуть полное сообщение"} placement="top">
+                              <button
+                                type="button"
+                                onClick={() => toggleMessageExpanded(messageKey)}
+                                className="mt-1 text-xs text-arc-accent transition hover:brightness-110"
+                              >
+                                {isMessageExpanded ? "Свернуть" : "Показать полностью"}
+                              </button>
+                            </Tooltip>
+                          )}
+                        </div>
 
                         <div className="mt-2.5 flex items-center justify-between gap-2 text-xs text-slate-400">
                           <div className="flex items-center gap-2">
                             <Tooltip content="Категория события" placement="top">
-                              <span className={`inline-flex items-center gap-1 ${categoryMeta.colorCls}`}>{categoryMeta.label}</span>
+                              <span className={`inline-flex items-center gap-1 ${categoryMeta.colorCls}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${categoryAccent}`} />
+                                {categoryMeta.label}
+                              </span>
                             </Tooltip>
                             {entry.countryId ? (
                               <Tooltip
                                 content={countriesById[entry.countryId]?.name ? `Страна: ${countriesById[entry.countryId].name}` : "Страна, к которой относится событие"}
                                 placement="top"
                               >
-                                <span className="inline-flex max-w-[10.5rem] items-center gap-1.5 rounded bg-white/5 px-1.5 py-0.5 text-slate-200">
+                                <span className="inline-flex max-w-[10.5rem] items-center gap-1.5 rounded border border-white/10 bg-black/20 px-1.5 py-0.5 text-slate-200">
                                   {countriesById[entry.countryId]?.flagUrl ? (
                                     <img
                                       src={countriesById[entry.countryId].flagUrl ?? undefined}

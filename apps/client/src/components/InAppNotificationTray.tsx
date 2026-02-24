@@ -163,7 +163,7 @@ export function InAppNotificationTray({
                 <button
                   type="button"
                   onClick={() => onClickItem(item)}
-                  className={`group relative inline-flex h-10 w-10 items-start justify-start overflow-hidden rounded-xl border bg-[#131a22] px-3 py-[11px] shadow-xl shadow-black/35 transition-[width,height,transform] duration-200 hover:h-[56px] hover:w-[240px] hover:scale-[1.03] ${colorClass}`}
+                  className={`group relative inline-flex h-10 w-10 items-start justify-start overflow-hidden rounded-xl border bg-[#131a22] px-3 py-[11px] shadow-xl shadow-black/35 transition-[width,height,transform] duration-200 hover:h-[92px] hover:w-[260px] hover:scale-[1.03] ${colorClass}`}
                   style={
                     isUnread
                       ? {
@@ -189,7 +189,7 @@ export function InAppNotificationTray({
                     <span className="block max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-200 group-hover:max-w-[180px] group-hover:opacity-100">
                       {label}
                     </span>
-                    <span className="block max-h-0 max-w-[180px] overflow-hidden text-[10px] leading-3 text-white/70 opacity-0 transition-all duration-200 group-hover:mt-0.5 group-hover:max-h-8 group-hover:opacity-100">
+                    <span className="arc-scrollbar block max-h-0 max-w-[200px] overflow-hidden text-[10px] leading-3 text-white/70 opacity-0 transition-all duration-200 group-hover:mt-0.5 group-hover:max-h-[56px] group-hover:overflow-y-auto group-hover:opacity-100">
                       {hoverText}
                     </span>
                   </span>

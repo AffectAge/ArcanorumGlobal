@@ -82,6 +82,7 @@ export default function App() {
     ducats: null,
     gold: null,
   });
+  const [uiBackgroundImageUrl, setUiBackgroundImageUrl] = useState<string | null>(null);
   const [resourceGrowthByTurn, setResourceGrowthByTurn] = useState<{
     culture: number;
     science: number;
@@ -373,6 +374,7 @@ export default function App() {
             ducats: ui.colonization.ducatsCostPer1000Km2,
           });
           setShowAntarctica(ui.map?.showAntarctica ?? true);
+          setUiBackgroundImageUrl(ui.map?.backgroundImageUrl ?? null);
           setProvinceRenameDucatsCost(ui.customization?.provinceRenameDucats ?? 25);
           setTurnTimerUi({
             enabled: ui.turnTimer?.enabled ?? false,
@@ -859,9 +861,17 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-[3px]"
+            className="absolute inset-0 z-40 flex items-center justify-center bg-[#05080d]"
           >
-                        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(10,14,18,0.06),rgba(3,6,10,0.62)_72%)]" />
+            <div className="pointer-events-none absolute inset-0 bg-[#05080d]" />
+            {uiBackgroundImageUrl ? (
+              <div
+                className="pointer-events-none absolute inset-0 bg-cover bg-center bg-no-repeat opacity-35"
+                style={{ backgroundImage: `url("${uiBackgroundImageUrl}")` }}
+                aria-hidden="true"
+              />
+            ) : null}
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(5,8,13,0.15),rgba(5,8,13,0.78)_72%)]" />
             <div className="relative z-10">
               <AuthPanel onSuccess={onAuthSuccess} />
             </div>
@@ -1027,6 +1037,7 @@ export default function App() {
               points: updated.colonization.pointsCostPer1000Km2,
               ducats: updated.colonization.ducatsCostPer1000Km2,
             });
+            setUiBackgroundImageUrl(updated.map?.backgroundImageUrl ?? null);
             setResourceGrowthByTurn((prev) => ({
               ...prev,
               colonization: updated.colonization.pointsPerTurn,

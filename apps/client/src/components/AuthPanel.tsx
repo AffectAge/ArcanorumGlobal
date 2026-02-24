@@ -8,7 +8,7 @@ import { Check, LoaderCircle, LogIn, Palette, Ruler, Server, ShieldCheck, Sparkl
 import { fetchCountries, fetchServerStatus, login, register } from "../lib/api";
 import type { Country, ServerStatus } from "@arcanorum/shared";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { Tooltip } from "./Tooltip";
 
 const REMEMBER_LOGIN_KEY = "arc.auth.rememberedLogin";
@@ -126,6 +126,10 @@ export function AuthPanel({ onSuccess }: Props) {
   const [crestFile, setCrestFile] = useState<File | null>(null);
   const [flagPreviewUrl, setFlagPreviewUrl] = useState<string | null>(null);
   const [crestPreviewUrl, setCrestPreviewUrl] = useState<string | null>(null);
+  const [registrationPendingModal, setRegistrationPendingModal] = useState<{ open: boolean; countryName: string }>({
+    open: false,
+    countryName: "",
+  });
 
   const loginForm = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -324,7 +328,12 @@ export function AuthPanel({ onSuccess }: Props) {
       setFlagFile(null);
       setCrestFile(null);
       registerForm.reset({ countryName: "", countryColor: "#4ade80", password: "", confirmPassword: "" });
-      toast.success("Страна создана, теперь войдите");
+      if (country.isRegistrationApproved === false) {
+        setRegistrationPendingModal({ open: true, countryName: country.name });
+        toast.success("Заявка на регистрацию отправлена администраторам");
+      } else {
+        toast.success("Страна создана, теперь войдите");
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "REGISTER_FAILED";
       if (msg === "IMAGE_DIMENSIONS_TOO_LARGE") {
@@ -343,6 +352,44 @@ export function AuthPanel({ onSuccess }: Props) {
 
   return (
     <motion.div layout transition={{ layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] } }} className="glass panel-border relative z-20 w-[min(94vw,620px)] rounded-2xl p-6 shadow-2xl">
+      <AnimatePresence>
+        {registrationPendingModal.open && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-black/65 p-4 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 10, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+              className="glass panel-border w-full max-w-[28rem] rounded-xl border-arc-accent/20 bg-[#0b111b] p-4 shadow-2xl"
+            >
+              <div className="mb-2 flex items-center justify-center gap-2 text-center text-sm font-semibold text-arc-accent">
+                <ShieldCheck size={15} />
+                <span>Заявка на регистрацию отправлена</span>
+              </div>
+              <div className="mb-1 text-xs text-slate-200">
+                Страна <span className="text-white">{registrationPendingModal.countryName}</span> отправлена на подтверждение администраторам.
+              </div>
+              <div className="mb-4 text-xs text-slate-400">
+                Вы сможете войти в игру после одобрения заявки.
+              </div>
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setRegistrationPendingModal({ open: false, countryName: "" })}
+                  className="inline-flex items-center justify-center rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
+                >
+                  Буду ждать
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
           <div className="font-display text-5xl tracking-[0.18em]">ARCANORUM</div>

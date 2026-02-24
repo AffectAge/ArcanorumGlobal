@@ -283,6 +283,7 @@ export type GameSettings = {
   };
   map: {
     showAntarctica: boolean;
+    backgroundImageUrl: string | null;
   };
   resourceIcons: {
     culture: string | null;
@@ -315,6 +316,13 @@ function normalizeResourceIcons(icons?: Partial<ResourceIconsMap> | null): Resou
     colonization: withAssetBase(icons?.colonization) ?? null,
     ducats: withAssetBase(icons?.ducats) ?? null,
     gold: withAssetBase(icons?.gold) ?? null,
+  };
+}
+
+function normalizeMapSettings(map?: Partial<GameSettings["map"]> | null): GameSettings["map"] {
+  return {
+    showAntarctica: typeof map?.showAntarctica === "boolean" ? map.showAntarctica : true,
+    backgroundImageUrl: withAssetBase(map?.backgroundImageUrl) ?? null,
   };
 }
 
@@ -351,6 +359,7 @@ export async function fetchPublicGameUiSettings(): Promise<Pick<GameSettings, "e
   const data = (await response.json()) as Pick<GameSettings, "economy" | "colonization" | "customization" | "eventLog" | "turnTimer" | "map" | "resourceIcons">;
   return {
     ...data,
+    map: normalizeMapSettings(data.map),
     resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
 }
@@ -457,6 +466,7 @@ export async function fetchGameSettings(token: string): Promise<GameSettings> {
   const data = (await response.json()) as GameSettings;
   return {
     ...data,
+    map: normalizeMapSettings(data.map),
     resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
 }
@@ -470,7 +480,7 @@ export async function updateGameSettings(
     registration?: { requireAdminApproval?: boolean };
     eventLog?: { retentionTurns?: number };
     turnTimer?: { enabled?: boolean; secondsPerTurn?: number };
-    map?: { showAntarctica?: boolean };
+    map?: { showAntarctica?: boolean; backgroundImageUrl?: string | null };
   },
 ): Promise<GameSettings> {
   const response = await fetch(`${API}/admin/game-settings`, {
@@ -490,6 +500,7 @@ export async function updateGameSettings(
   const data = (await response.json()) as GameSettings;
   return {
     ...data,
+    map: normalizeMapSettings(data.map),
     resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
 }
@@ -566,6 +577,23 @@ export async function adminUploadResourceIcons(
   return {
     resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
+}
+
+export async function adminUploadUiBackground(token: string, file: File): Promise<{ map: GameSettings["map"] }> {
+  const formData = new FormData();
+  formData.set("uiBackground", file);
+
+  const response = await fetch(`${API}/admin/ui-background`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "UI_BACKGROUND_UPDATE_FAILED");
+  }
+  const data = (await response.json()) as { map: GameSettings["map"] };
+  return { map: normalizeMapSettings(data.map) };
 }
 
 export async function updateOwnCountryCustomization(

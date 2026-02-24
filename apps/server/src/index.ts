@@ -48,10 +48,12 @@ const uploadsRoot = resolve(__dirname, "../uploads");
 const flagsDir = resolve(uploadsRoot, "flags");
 const crestsDir = resolve(uploadsRoot, "crests");
 const resourceIconsDir = resolve(uploadsRoot, "resource-icons");
+const uiBackgroundsDir = resolve(uploadsRoot, "ui-backgrounds");
 const civilopediaImagesDir = resolve(uploadsRoot, "civilopedia");
 mkdirSync(flagsDir, { recursive: true });
 mkdirSync(crestsDir, { recursive: true });
 mkdirSync(resourceIconsDir, { recursive: true });
+mkdirSync(uiBackgroundsDir, { recursive: true });
 mkdirSync(civilopediaImagesDir, { recursive: true });
 
 const resourceIconFields = new Set(["culture", "science", "religion", "colonization", "ducats", "gold"]);
@@ -64,6 +66,10 @@ const storage = multer.diskStorage({
     }
     if (resourceIconFields.has(file.fieldname)) {
       cb(null, resourceIconsDir);
+      return;
+    }
+    if (file.fieldname === "uiBackground") {
+      cb(null, uiBackgroundsDir);
       return;
     }
     if (file.fieldname === "flag") {
@@ -242,6 +248,7 @@ type GameSettings = {
   };
   map: {
     showAntarctica: boolean;
+    backgroundImageUrl: string | null;
   };
   resourceIcons: {
     culture: string | null;
@@ -468,6 +475,7 @@ const defaultGameSettings = (): GameSettings => ({
   },
   map: {
     showAntarctica: false,
+    backgroundImageUrl: null,
   },
   resourceIcons: {
     culture: null,
@@ -620,6 +628,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
       map: {
         showAntarctica:
           typeof next.map?.showAntarctica === "boolean" ? next.map.showAntarctica : defaults.map.showAntarctica,
+        backgroundImageUrl:
+          typeof next.map?.backgroundImageUrl === "string" || next.map?.backgroundImageUrl === null
+            ? (next.map?.backgroundImageUrl ?? null)
+            : defaults.map.backgroundImageUrl,
       },
       resourceIcons: {
         culture: typeof next.resourceIcons?.culture === "string" || next.resourceIcons?.culture === null ? (next.resourceIcons?.culture ?? null) : defaults.resourceIcons.culture,
@@ -1616,6 +1628,7 @@ const gameSettingsSchema = z.object({
   map: z
     .object({
       showAntarctica: z.boolean().optional(),
+      backgroundImageUrl: z.string().max(400).nullable().optional(),
     })
     .optional(),
 });
@@ -1806,6 +1819,46 @@ app.patch(
   },
 );
 
+app.patch("/admin/ui-background", upload.single("uiBackground"), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const file = req.file as Express.Multer.File | undefined;
+  if (!file) {
+    return res.status(400).json({ error: "NO_FILE" });
+  }
+
+  if (!validateImageDimensions(file, 4096)) {
+    removeUploadedFile(file);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "4096x4096" });
+  }
+
+  const previousUrl = gameSettings.map.backgroundImageUrl;
+  gameSettings.map.backgroundImageUrl = `/uploads/ui-backgrounds/${file.filename}`;
+  if (previousUrl) {
+    removeUploadedByUrl(previousUrl);
+  }
+
+  savePersistentState();
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "system",
+      title: "Фон интерфейса обновлён",
+      message: "Администратор изменил фоновое изображение интерфейса",
+      countryId: auth.countryId,
+      priority: "low",
+      visibility: "public",
+    }),
+  });
+
+  return res.json({ map: gameSettings.map });
+});
+
 app.get("/admin/game-settings", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth || !(await isAdminCountry(auth.countryId))) {
@@ -1922,6 +1975,15 @@ app.patch("/admin/game-settings", async (req, res) => {
   if (nextMap) {
     if (typeof nextMap.showAntarctica === "boolean") {
       gameSettings.map.showAntarctica = nextMap.showAntarctica;
+    }
+    if (nextMap.backgroundImageUrl === null) {
+      const previousUrl = gameSettings.map.backgroundImageUrl;
+      gameSettings.map.backgroundImageUrl = null;
+      if (previousUrl) {
+        removeUploadedByUrl(previousUrl);
+      }
+    } else if (typeof nextMap.backgroundImageUrl === "string") {
+      gameSettings.map.backgroundImageUrl = nextMap.backgroundImageUrl;
     }
   }
 
