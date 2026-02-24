@@ -5,6 +5,7 @@ export type InAppUiNotification = {
   id: string;
   category: "registration" | "system" | "politics" | "economy";
   createdAt: string;
+  receivedTurnId?: number;
   title?: string | null;
   message?: string | null;
   action:

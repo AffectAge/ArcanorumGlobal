@@ -64,10 +64,18 @@ export function RegistrationApprovalModal({ open, pending = false, country, onCl
                     ) : (
                       <span className="h-8 w-8 rounded-full border border-white/10" style={{ backgroundColor: country.color }} />
                     )}
-                    {country.crestUrl ? <img src={country.crestUrl} alt="" className="h-8 w-8 rounded-full object-cover" /> : null}
+                    {country.crestUrl ? (
+                      <img src={country.crestUrl} alt="" className="h-8 w-8 rounded-full border border-white/15 object-cover" />
+                    ) : (
+                      <span
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/15 text-[10px] font-semibold text-white/80"
+                        style={{ backgroundColor: country.color }}
+                      >
+                        {country.name.slice(0, 1).toUpperCase()}
+                      </span>
+                    )}
                     <div>
                       <div className="text-sm font-semibold text-white">{country.name}</div>
-                      <div className="text-xs text-white/55">ID: {country.id}</div>
                     </div>
                   </div>
                   <div className="text-xs text-white/65">Подтвердить регистрацию этой страны и разрешить вход в игру?</div>
@@ -102,4 +110,3 @@ export function RegistrationApprovalModal({ open, pending = false, country, onCl
     </Dialog>
   );
 }
-

@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, type LucideIcon } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, Bell, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
@@ -26,6 +26,7 @@ type Props = {
   onOpenGameSettings?: () => void;
   onOpenCountryCustomization?: () => void;
   onOpenClientSettings?: () => void;
+  onOpenNotificationHistory?: () => void;
   onOpenCivilopedia?: () => void;
   resourceIconUrls?: Partial<Record<(typeof cards)[number]["key"], string | null>>;
   resourceGrowthByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
@@ -128,6 +129,7 @@ export function TopBar({
   onOpenGameSettings,
   onOpenCountryCustomization,
   onOpenClientSettings,
+  onOpenNotificationHistory,
   onOpenCivilopedia,
   resourceIconUrls,
   resourceGrowthByTurn,
@@ -379,6 +381,7 @@ export function TopBar({
         </div>
 
         <div className="flex justify-end gap-2">
+          <TopIconActionButton label="История уведомлений" onClick={onOpenNotificationHistory} icon={Bell} />
           <TopIconActionButton label="Хранилище знаний" onClick={onOpenCivilopedia} icon={BookOpen} />
           <TopIconActionButton label="Настройки клиента" onClick={onOpenClientSettings} icon={Sliders} />
 

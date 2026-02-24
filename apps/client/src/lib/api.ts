@@ -1,4 +1,4 @@
-import type { Country, LoginPayload, ServerStatus } from "@arcanorum/shared";
+import type { Country, LoginPayload, ServerStatus, WsOutMessage } from "@arcanorum/shared";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -215,6 +215,8 @@ export type TurnStatusItem = {
   lastLoginAt: string | null;
 };
 
+export type UiNotificationItem = Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"];
+
 export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: number; requiredCount: number; countries: TurnStatusItem[] }> {
   const response = await fetch(`${API}/turn/status`);
   if (!response.ok) {
@@ -225,6 +227,29 @@ export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: n
     ...data,
     countries: data.countries.map((c) => ({ ...c, flagUrl: withAssetBase(c.flagUrl) ?? null })),
   };
+}
+
+export async function fetchPendingUiNotifications(token: string): Promise<UiNotificationItem[]> {
+  const response = await fetch(`${API}/notifications/ui/pending`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "UI_NOTIFICATIONS_PENDING_FAILED");
+  }
+  const data = (await response.json()) as { notifications: UiNotificationItem[] };
+  return data.notifications;
+}
+
+export async function markUiNotificationViewed(token: string, notificationId: string): Promise<void> {
+  const response = await fetch(`${API}/notifications/ui/${encodeURIComponent(notificationId)}/viewed`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok && response.status !== 404) {
+    const err = await response.json();
+    throw new Error(err.error ?? "UI_NOTIFICATION_VIEW_FAILED");
+  }
 }
 
 export type GameSettings = {

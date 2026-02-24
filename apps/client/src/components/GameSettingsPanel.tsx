@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { useEffect, useState } from "react";
-import { Coins, Flag, Image, Palette, RefreshCcw, Save, ScrollText, Timer, Wallet, X } from "lucide-react";
+import { Coins, Flag, Image as ImageIcon, Palette, RefreshCcw, Save, ScrollText, Timer, Wallet, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { adminRecalculateAutoProvinceCosts, adminUploadResourceIcons, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
@@ -20,7 +20,7 @@ const categories = [
   { id: "registration", label: "Регистрация", icon: Flag },
   { id: "customization", label: "Кастомизация", icon: Palette },
   { id: "eventLog", label: "Журнал событий", icon: ScrollText },
-  { id: "resourceIcons", label: "Иконки очков", icon: Image },
+  { id: "resourceIcons", label: "Иконки очков", icon: ImageIcon },
 ] as const;
 
 async function isImageWithinMaxSize(file: File, maxSize = 64): Promise<boolean> {

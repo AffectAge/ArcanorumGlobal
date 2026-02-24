@@ -18,8 +18,9 @@ import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
+import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
-import { adminReviewRegistration, apiBase, fetchCountries, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
+import { adminReviewRegistration, apiBase, fetchCountries, fetchPendingUiNotifications, fetchProvinceIndex, fetchPublicGameUiSettings, markUiNotificationViewed, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
 
@@ -43,7 +44,9 @@ export default function App() {
     | { phase: "done"; startedAtMs: number; finishedAtMs: number; durationMs: number; resolvedTurnId: number }
   >({ phase: "idle" });
   const [uiNotifications, setUiNotifications] = useState<InAppUiNotification[]>([]);
+  const [uiNotificationHistory, setUiNotificationHistory] = useState<InAppUiNotification[]>([]);
   const [viewedUiNotificationIds, setViewedUiNotificationIds] = useState<Set<string>>(new Set());
+  const [notificationHistoryOpen, setNotificationHistoryOpen] = useState(false);
   const [registrationApprovalModal, setRegistrationApprovalModal] = useState<{
     open: boolean;
     country: RegistrationApprovalCountry | null;
@@ -226,8 +229,17 @@ export default function App() {
       }
 
       if (msg.type === "UI_NOTIFY") {
+        const notification = {
+          ...(msg.notification as InAppUiNotification),
+          receivedTurnId: (msg.notification as InAppUiNotification).receivedTurnId ?? turnId,
+        } satisfies InAppUiNotification;
+        setUiNotificationHistory((prev) => {
+          const next = [notification, ...prev.filter((n) => n.id !== notification.id)];
+          next.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          return next.slice(0, 200);
+        });
         setUiNotifications((prev) => {
-          const next = [msg.notification as InAppUiNotification, ...prev.filter((n) => n.id !== msg.notification.id)];
+          const next = [notification, ...prev.filter((n) => n.id !== notification.id)];
           return next.slice(0, 8);
         });
       }
@@ -242,7 +254,7 @@ export default function App() {
         addEvent({ category: "system", title: "Ошибка", message: msg.message, priority: "high", visibility: "private" });
       }
     },
-    [addEvent, addOrder, pruneLogEntries, resetOverlay, setEventLogRetentionTurns, setPresence, setWorldBase],
+    [addEvent, addOrder, pruneLogEntries, resetOverlay, setEventLogRetentionTurns, setPresence, setWorldBase, turnId],
   );
 
   const { send } = useWs(onWsMessage, auth?.token);
@@ -676,6 +688,52 @@ export default function App() {
     });
   }, [auth, country, provinceIndexLoaded, publicUiLoaded, worldBase]);
 
+  useEffect(() => {
+    if (!auth?.token) return;
+    let cancelled = false;
+    fetchPendingUiNotifications(auth.token)
+      .then((items) => {
+        if (cancelled || items.length === 0) return;
+        setUiNotificationHistory((prev) => {
+          const next = [...prev];
+          for (const item of items) {
+            const normalizedItem = {
+              ...(item as InAppUiNotification),
+              receivedTurnId: (item as InAppUiNotification).receivedTurnId ?? turnId,
+            } satisfies InAppUiNotification;
+            const existingIdx = next.findIndex((n) => n.id === normalizedItem.id);
+            if (existingIdx >= 0) {
+              next.splice(existingIdx, 1);
+            }
+            next.unshift(normalizedItem);
+          }
+          next.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          return next.slice(0, 200);
+        });
+        setUiNotifications((prev) => {
+          const next = [...prev];
+          for (const item of items) {
+            const normalizedItem = {
+              ...(item as InAppUiNotification),
+              receivedTurnId: (item as InAppUiNotification).receivedTurnId ?? turnId,
+            } satisfies InAppUiNotification;
+            const existingIdx = next.findIndex((n) => n.id === normalizedItem.id);
+            if (existingIdx >= 0) {
+              next.splice(existingIdx, 1);
+            }
+            next.unshift(normalizedItem);
+          }
+          return next.slice(0, 8);
+        });
+      })
+      .catch(() => {
+        // keep realtime-only behavior if endpoint fails
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth?.token, turnId]);
+
   const requestNextTurn = () => {
     if (turnResolveOverlay.phase === "processing") return;
     setTurnResolveOverlay({ phase: "processing", startedAtMs: Date.now() });
@@ -689,6 +747,11 @@ export default function App() {
       next.add(item.id);
       return next;
     });
+    if (auth?.token) {
+      void markUiNotificationViewed(auth.token, item.id).catch(() => {
+        // non-blocking best-effort ack
+      });
+    }
     if (sortNotifications) {
       setUiNotifications((prev) => {
         const idx = prev.findIndex((n) => n.id === item.id);
@@ -715,6 +778,7 @@ export default function App() {
     try {
       const result = await adminReviewRegistration(auth.token, registrationApprovalModal.country.id, approve);
       setUiNotifications((prev) => prev.filter((n) => n.id !== registrationApprovalModal.notificationId));
+      setUiNotificationHistory((prev) => prev.filter((n) => n.id !== registrationApprovalModal.notificationId));
       setRegistrationApprovalModal({ open: false, country: null, notificationId: null, pending: false });
       toast.success(approve ? "Регистрация подтверждена" : "Регистрация отклонена");
       if (result.country) {
@@ -892,6 +956,7 @@ export default function App() {
             onOpenGameSettings={() => setGameSettingsOpen(true)}
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
             onOpenClientSettings={() => setClientSettingsOpen(true)}
+            onOpenNotificationHistory={() => setNotificationHistoryOpen(true)}
             onOpenCivilopedia={() => {
               setCivilopediaIntent(null);
               setCivilopediaOpen(true);
@@ -930,6 +995,18 @@ export default function App() {
       )}
 
       {auth && <TurnStatusModal open={turnStatusOpen} onClose={() => setTurnStatusOpen(false)} />}
+      {auth && (
+        <NotificationHistoryModal
+          open={notificationHistoryOpen}
+          items={uiNotificationHistory}
+          viewedIds={viewedUiNotificationIds}
+          onClose={() => setNotificationHistoryOpen(false)}
+          onOpenItem={(item) => {
+            setNotificationHistoryOpen(false);
+            openUiNotification(item);
+          }}
+        />
+      )}
 
       {auth?.isAdmin && auth?.token && (
         <GameSettingsPanel

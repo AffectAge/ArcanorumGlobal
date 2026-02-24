@@ -184,6 +184,13 @@ const countrySelect = {
 let turnId = 1;
 const onlinePlayers = new Set<string>();
 const lastLoginAtByCountryId = new Map<string, string>();
+const MAX_UI_NOTIFICATION_QUEUE = 500;
+type QueuedUiNotification = {
+  audience: "all" | "admins";
+  notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"];
+  viewedByCountryIds: Set<string>;
+};
+const uiNotificationQueue: QueuedUiNotification[] = [];
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
 const resolveReadyByTurn = new Map<number, Set<string>>();
 const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
@@ -1071,10 +1078,41 @@ function sendUiNotificationToSocket(
   socket.send(JSON.stringify({ type: "UI_NOTIFY", notification } satisfies WsOutMessage));
 }
 
+function enqueueUiNotification(
+  notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"],
+  audience: "all" | "admins",
+): void {
+  const existingIndex = uiNotificationQueue.findIndex((item) => item.notification.id === notification.id);
+  if (existingIndex >= 0) {
+    uiNotificationQueue[existingIndex] = {
+      ...uiNotificationQueue[existingIndex],
+      audience,
+      notification,
+    };
+    return;
+  }
+  uiNotificationQueue.unshift({
+    audience,
+    notification,
+    viewedByCountryIds: new Set<string>(),
+  });
+  if (uiNotificationQueue.length > MAX_UI_NOTIFICATION_QUEUE) {
+    uiNotificationQueue.length = MAX_UI_NOTIFICATION_QUEUE;
+  }
+}
+
+function removeQueuedUiNotification(notificationId: string): void {
+  const idx = uiNotificationQueue.findIndex((item) => item.notification.id === notificationId);
+  if (idx >= 0) {
+    uiNotificationQueue.splice(idx, 1);
+  }
+}
+
 function sendUiNotificationToAdmins(
   wsServer: WebSocketServer,
   notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"],
 ): void {
+  enqueueUiNotification(notification, "admins");
   wsServer.clients.forEach((client) => {
     if (client.readyState !== WebSocket.OPEN) return;
     const meta = client as WebSocket & { __arcIsAdmin?: boolean };
@@ -1087,10 +1125,11 @@ function broadcastUiNotification(
   wsServer: WebSocketServer,
   notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"],
 ): void {
+  enqueueUiNotification(notification, "all");
   broadcast(wsServer, { type: "UI_NOTIFY", notification });
 }
 
-async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSocket): Promise<void> {
+async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSocket, adminCountryId: string): Promise<void> {
   const pending = await prisma.country.findMany({
     where: { isRegistrationApproved: false },
     orderBy: { createdAt: "desc" },
@@ -1104,7 +1143,11 @@ async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSock
     },
   });
   for (const country of pending) {
-    sendUiNotificationToSocket(socket, makeRegistrationApprovalUiNotification(country));
+    const notification = makeRegistrationApprovalUiNotification(country);
+    enqueueUiNotification(notification, "admins");
+    const queued = uiNotificationQueue.find((item) => item.notification.id === notification.id);
+    if (queued?.viewedByCountryIds.has(adminCountryId)) continue;
+    sendUiNotificationToSocket(socket, notification);
   }
 }
 
@@ -1418,6 +1461,12 @@ function getOnlineCountryIdsFromSockets(wsServer: WebSocketServer): Set<string> 
   return ids;
 }
 
+function getPendingUiNotificationsForCountry(params: { countryId: string; isAdmin: boolean }) {
+  return uiNotificationQueue
+    .filter((item) => (item.audience === "all" || params.isAdmin) && !item.viewedByCountryIds.has(params.countryId))
+    .map((item) => item.notification);
+}
+
 app.get("/health", async (_req, res) => {
   res.json({ status: env.serverStatus, turnId, serverTime: new Date().toISOString() });
 });
@@ -1495,6 +1544,34 @@ async function isAdminCountry(countryId: string): Promise<boolean> {
   });
   return Boolean(country?.isAdmin);
 }
+
+app.get("/notifications/ui/pending", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const isAdmin = await isAdminCountry(auth.countryId);
+  const notifications = getPendingUiNotificationsForCountry({ countryId: auth.countryId, isAdmin });
+  return res.json({ notifications });
+});
+
+app.patch("/notifications/ui/:id/viewed", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const notificationId = String(req.params.id);
+  const target = uiNotificationQueue.find((item) => item.notification.id === notificationId);
+  if (!target) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const isAdmin = await isAdminCountry(auth.countryId);
+  if (target.audience === "admins" && !isAdmin) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  target.viewedByCountryIds.add(auth.countryId);
+  return res.json({ ok: true });
+});
 
 const gameSettingsSchema = z.object({
   economy: z
@@ -2813,6 +2890,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
       data: { isRegistrationApproved: true },
       select: countrySelect,
     });
+    removeQueuedUiNotification(`registration-approval:${targetId}`);
     broadcast(wss, {
       type: "NEWS_EVENT",
       event: makeOfficialNews({
@@ -2847,6 +2925,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
     }
   }
   savePersistentState();
+  removeQueuedUiNotification(`registration-approval:${targetId}`);
   broadcastWorldBaseSync(wss);
   broadcast(wss, {
     type: "NEWS_EVENT",
@@ -2980,7 +3059,7 @@ wss.on("connection", (socket) => {
           clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
         });
         if (isAdmin) {
-          await sendPendingRegistrationNotificationsToAdminSocket(socket);
+          await sendPendingRegistrationNotificationsToAdminSocket(socket, country.id);
         }
         broadcast(wss, { type: "PRESENCE", onlinePlayerIds: [...onlinePlayers] });
       } catch {
