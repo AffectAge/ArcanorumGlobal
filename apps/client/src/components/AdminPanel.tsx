@@ -1,7 +1,7 @@
 import { Dialog } from "@headlessui/react";
 import { Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useState } from "react";
-import { BellRing, Check, ChevronDown, Palette, RotateCcw, Shield, Trash2, Upload, X } from "lucide-react";
+import { BellRing, Check, ChevronDown, Flag, Map as MapIcon, Palette, RotateCcw, Shield, Trash2, Upload, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
@@ -27,9 +27,9 @@ type Props = {
 };
 
 const categories = [
-  { id: "countries", label: "Управление странами" },
-  { id: "provinces", label: "Провинции / Колонизация" },
-  { id: "notifications", label: "Рассылка уведомлений" },
+  { id: "countries", label: "Управление странами", icon: Flag },
+  { id: "provinces", label: "Провинции / Колонизация", icon: MapIcon },
+  { id: "notifications", label: "Рассылка уведомлений", icon: BellRing },
 ] as const;
 
 export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCountryUpdated, initialProvinceId }: Props) {
@@ -376,16 +376,50 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                   onClick={() => setActiveCategory(cat.id)}
                   className={`mb-2 block w-full rounded-lg px-3 py-2 text-left text-sm transition ${activeCategory === cat.id ? "bg-arc-accent/20 text-arc-accent" : "text-slate-300 hover:text-white"}`}
                 >
-                  {cat.label}
+                  <span className="inline-flex items-center gap-2">
+                    <cat.icon size={14} />
+                    <span>{cat.label}</span>
+                  </span>
                 </button>
               ))}
             </aside>
 
-            <section className="arc-scrollbar panel-border rounded-xl bg-black/25 p-4 overflow-auto">
-              {loading ? (
-                <div className="text-sm text-slate-400">Загрузка стран...</div>
-              ) : (
-                <div className="space-y-4">
+            <div className="flex min-h-0 flex-col gap-3">
+              {activeCategory === "countries" && selectedCountry && (
+                <div className="panel-border rounded-xl bg-black/25 p-3">
+                  <div className="mb-2 px-1 text-[11px] uppercase tracking-wide text-white/45">Раздел управления страной</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCountrySection("general")}
+                      className={`inline-flex items-center border-b px-1 py-1.5 text-xs font-medium transition ${
+                        countrySection === "general"
+                          ? "border-arc-accent text-arc-accent"
+                          : "border-transparent text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      Основная информация
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCountrySection("punishments")}
+                      className={`inline-flex items-center border-b px-1 py-1.5 text-xs font-medium transition ${
+                        countrySection === "punishments"
+                          ? "border-rose-300 text-rose-300"
+                          : "border-transparent text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      Наказания
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <section className="arc-scrollbar panel-border min-h-0 rounded-xl bg-black/25 p-4 overflow-auto">
+                {loading ? (
+                  <div className="text-sm text-slate-400">Загрузка стран...</div>
+                ) : (
+                  <div className="space-y-4">
                   {activeCategory === "provinces" && (
                     <>
                       <div>
@@ -669,23 +703,6 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
 
                   {selectedCountry && (
                     <>
-                      <div className="flex gap-2 rounded-lg bg-black/30 p-1">
-                        <button
-                          type="button"
-                          onClick={() => setCountrySection("general")}
-                          className={`rounded-md px-3 py-1 text-xs transition ${countrySection === "general" ? "bg-arc-accent/20 text-arc-accent" : "text-slate-300 hover:text-white"}`}
-                        >
-                          Основная информация
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCountrySection("punishments")}
-                          className={`rounded-md px-3 py-1 text-xs transition ${countrySection === "punishments" ? "bg-rose-500/20 text-rose-300" : "text-slate-300 hover:text-white"}`}
-                        >
-                          Наказания
-                        </button>
-                      </div>
-
                       {countrySection === "general" && (
                         <>
                       <div className="grid gap-3 md:grid-cols-2">
@@ -748,111 +765,136 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                       )}
 
                       {countrySection === "punishments" && (
-                        <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-3">
-                          <div className="text-sm text-slate-200">Текущий статус: <span className="text-arc-accent">{punishmentStatus}</span></div>
-                          <div>
+                        <div className="space-y-4">
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+                            <div className="mb-2 text-[11px] uppercase tracking-wide text-white/45">Текущий статус</div>
+                            <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-200">
+                              <span className="text-white/70">Состояние:</span>{" "}
+                              <span className="font-medium text-arc-accent">{punishmentStatus}</span>
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+                            <div className="mb-3 text-[11px] uppercase tracking-wide text-white/45">Причина для игрока</div>
                             <label className="mb-1 block text-xs text-slate-300">Причина блокировки (необязательно)</label>
                             <textarea
                               value={punishmentReasonText}
                               onChange={(e) => setPunishmentReasonText(e.target.value.slice(0, 300))}
                               rows={3}
                               placeholder="Например: нарушение правил сервера"
-                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-rose-400/30"
                             />
-                            <div className="mt-1 text-[11px] text-slate-500">
-                              Будет показана игроку при попытке входа. До 300 символов.
+                            <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+                              <span>Будет показана игроку при попытке входа</span>
+                              <span>{punishmentReasonText.length}/300</span>
                             </div>
                           </div>
 
-                          <div className="flex flex-wrap items-end gap-2">
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-300">Блок на ходы</label>
-                              <input
-                                type="number"
-                                min={1}
-                                value={turnsToBlock}
-                                onChange={(e) => setTurnsToBlock(Math.max(1, Number(e.target.value) || 1))}
-                                className="w-28 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
-                              />
+                          <div className="grid gap-4 lg:grid-cols-2">
+                            <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+                              <div className="mb-3 text-[11px] uppercase tracking-wide text-white/45">Блокировка по ходам</div>
+                              <div className="flex flex-col gap-3">
+                                <div className="w-full">
+                                  <label className="mb-1 block text-xs text-slate-300">Количество ходов</label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={turnsToBlock}
+                                    onChange={(e) => setTurnsToBlock(Math.max(1, Number(e.target.value) || 1))}
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm outline-none transition focus:border-rose-400/30"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => applyPunishment({ action: "turns", turns: turnsToBlock })}
+                                  disabled={saving}
+                                  className="self-start rounded-lg border border-rose-400/20 bg-rose-600/20 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-600/25 disabled:opacity-60"
+                                >
+                                  Заблокировать
+                                </button>
+                              </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => applyPunishment({ action: "turns", turns: turnsToBlock })}
-                              disabled={saving}
-                              className="rounded-lg bg-rose-600/20 px-3 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
-                            >
-                              Заблокировать на ходы
-                            </button>
-                          </div>
 
-                          <div className="flex flex-wrap items-end gap-2">
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-300">Блок до времени</label>
-                              <input
-                                type="datetime-local"
-                                value={blockUntilAt}
-                                onChange={(e) => setBlockUntilAt(e.target.value)}
-                                className="rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
-                              />
+                            <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+                              <div className="mb-3 text-[11px] uppercase tracking-wide text-white/45">Блокировка по времени</div>
+                              <div className="flex flex-col gap-3">
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-300">До даты и времени</label>
+                                  <input
+                                    type="datetime-local"
+                                    value={blockUntilAt}
+                                    onChange={(e) => setBlockUntilAt(e.target.value)}
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm outline-none transition focus:border-rose-400/30"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => blockUntilAt && applyPunishment({ action: "time", blockedUntilAt: new Date(blockUntilAt).toISOString() })}
+                                  disabled={saving || !blockUntilAt}
+                                  className="self-start rounded-lg border border-rose-400/20 bg-rose-600/20 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-600/25 disabled:opacity-60"
+                                >
+                                  Заблокировать по времени
+                                </button>
+                              </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => blockUntilAt && applyPunishment({ action: "time", blockedUntilAt: new Date(blockUntilAt).toISOString() })}
-                              disabled={saving || !blockUntilAt}
-                              className="rounded-lg bg-rose-600/20 px-3 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
-                            >
-                              Заблокировать по времени
-                            </button>
                           </div>
 
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => applyPunishment({ action: "permanent" })}
-                              disabled={saving}
-                              className="rounded-lg bg-rose-700/30 px-3 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
-                            >
-                              Перманентная блокировка
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => applyPunishment({ action: "unlock" })}
-                              disabled={saving}
-                              className="rounded-lg bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-500 disabled:opacity-60"
-                            >
-                              Снять блокировку
-                            </button>
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+                            <div className="mb-3 text-[11px] uppercase tracking-wide text-white/45">Быстрые действия</div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => applyPunishment({ action: "permanent" })}
+                                disabled={saving}
+                                className="rounded-lg border border-rose-400/25 bg-rose-700/25 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-700/35 disabled:opacity-60"
+                              >
+                                Перманентная блокировка
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => applyPunishment({ action: "unlock" })}
+                                disabled={saving}
+                                className="rounded-lg border border-emerald-400/25 bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-600/25 disabled:opacity-60"
+                              >
+                                Снять блокировку
+                              </button>
+                            </div>
                           </div>
 
-                          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                            <div className="mb-2 text-xs text-slate-300">Не учитывать страну при ожидании пропуска хода</div>
-                            <div className="flex flex-wrap items-end gap-2">
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-400">До хода (включительно)</label>
+                          <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+                            <div className="mb-3 text-[11px] uppercase tracking-wide text-white/45">Исключение из ожидания хода</div>
+                            <div className="mb-2 text-xs text-slate-400">
+                              Страна не будет учитываться при проверке готовности к резолву до указанного хода включительно.
+                            </div>
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                              <div className="min-w-0 flex-1 sm:max-w-[220px]">
+                                <label className="mb-1 block text-xs text-slate-300">До хода (включительно)</label>
                                 <input
                                   type="number"
                                   min={0}
                                   value={ignoreUntilTurn}
                                   onChange={(e) => setIgnoreUntilTurn(Math.max(0, Number(e.target.value) || 0))}
-                                  className="w-36 rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm outline-none transition focus:border-amber-400/30"
                                 />
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => saveIgnoreUntilTurn(ignoreUntilTurn <= 0 ? null : ignoreUntilTurn)}
-                                disabled={saving}
-                                className="rounded-lg bg-amber-600/20 px-3 py-2 text-sm font-semibold text-amber-300 disabled:opacity-60"
-                              >
-                                Применить исключение
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => saveIgnoreUntilTurn(null)}
-                                disabled={saving}
-                                className="rounded-lg bg-slate-600/20 px-3 py-2 text-sm font-semibold text-slate-200 disabled:opacity-60"
-                              >
-                                Сбросить
-                              </button>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => saveIgnoreUntilTurn(ignoreUntilTurn <= 0 ? null : ignoreUntilTurn)}
+                                  disabled={saving}
+                                  className="rounded-lg border border-amber-400/20 bg-amber-600/20 px-3 py-2 text-sm font-semibold text-amber-300 transition hover:bg-amber-600/25 disabled:opacity-60"
+                                >
+                                  Применить исключение
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => saveIgnoreUntilTurn(null)}
+                                  disabled={saving}
+                                  className="rounded-lg border border-slate-400/20 bg-slate-600/20 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-600/30 disabled:opacity-60"
+                                >
+                                  Сбросить
+                                </button>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -861,9 +903,10 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                   )}
                   </>
                   )}
-                </div>
-              )}
-            </section>
+                  </div>
+                )}
+              </section>
+            </div>
           </div>
         </Dialog.Panel>
         </motion.div>

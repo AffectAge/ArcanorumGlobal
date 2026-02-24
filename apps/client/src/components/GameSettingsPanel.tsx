@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { useEffect, useState } from "react";
-import { Coins, Flag, RefreshCcw, Save, X } from "lucide-react";
+import { Coins, Flag, Image, Palette, RefreshCcw, Save, ScrollText, Timer, Wallet, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { adminRecalculateAutoProvinceCosts, adminUploadResourceIcons, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
@@ -14,13 +14,13 @@ type Props = {
 };
 
 const categories = [
-  { id: "economy", label: "Экономика" },
-  { id: "turnTimer", label: "Таймер хода" },
-  { id: "colonization", label: "Колонизация" },
-  { id: "registration", label: "Регистрация" },
-  { id: "customization", label: "Кастомизация" },
-  { id: "eventLog", label: "Журнал событий" },
-  { id: "resourceIcons", label: "Иконки очков" },
+  { id: "economy", label: "Экономика", icon: Wallet },
+  { id: "turnTimer", label: "Таймер хода", icon: Timer },
+  { id: "colonization", label: "Колонизация", icon: Flag },
+  { id: "registration", label: "Регистрация", icon: Flag },
+  { id: "customization", label: "Кастомизация", icon: Palette },
+  { id: "eventLog", label: "Журнал событий", icon: ScrollText },
+  { id: "resourceIcons", label: "Иконки очков", icon: Image },
 ] as const;
 
 async function isImageWithinMaxSize(file: File, maxSize = 64): Promise<boolean> {
@@ -334,7 +334,10 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                   onClick={() => setActiveCategory(cat.id)}
                   className={`mb-2 block w-full rounded-lg px-3 py-2 text-left text-sm transition ${activeCategory === cat.id ? "bg-arc-accent/20 text-arc-accent" : "text-slate-300 hover:text-white"}`}
                 >
-                  {cat.label}
+                  <span className="inline-flex items-center gap-2">
+                    <cat.icon size={14} />
+                    <span>{cat.label}</span>
+                  </span>
                 </button>
               ))}
             </aside>
