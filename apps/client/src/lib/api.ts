@@ -70,6 +70,9 @@ export async function login(payload: LoginPayload): Promise<{ token: string; pla
         throw new Error(`ACCOUNT_LOCKED_PERMANENT${encodedReasonText ? `__REASON__${encodedReasonText}` : ""}`);
       }
     }
+    if (err?.error === "REGISTRATION_PENDING_APPROVAL") {
+      throw new Error("REGISTRATION_PENDING_APPROVAL");
+    }
 
     throw new Error(err.error ?? "LOGIN_FAILED");
   }
@@ -239,6 +242,9 @@ export type GameSettings = {
     flagDucats: number;
     crestDucats: number;
     provinceRenameDucats: number;
+  };
+  registration: {
+    requireAdminApproval: boolean;
   };
   eventLog: {
     retentionTurns: number;
@@ -434,6 +440,7 @@ export async function updateGameSettings(
     economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
+    registration?: { requireAdminApproval?: boolean };
     eventLog?: { retentionTurns?: number };
     turnTimer?: { enabled?: boolean; secondsPerTurn?: number };
     map?: { showAntarctica?: boolean };
@@ -458,6 +465,52 @@ export async function updateGameSettings(
     ...data,
     resourceIcons: normalizeResourceIcons(data.resourceIcons),
   };
+}
+
+export async function adminReviewRegistration(
+  token: string,
+  countryId: string,
+  approve: boolean,
+): Promise<{ ok: true; approved: boolean; country?: Country; countryId?: string }> {
+  const response = await fetch(`${API}/admin/registrations/${countryId}/review`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ approve }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "REGISTRATION_REVIEW_FAILED");
+  }
+  const data = (await response.json()) as { ok: true; approved: boolean; country?: Country; countryId?: string };
+  return {
+    ...data,
+    country: data.country ? normalizeCountry(data.country) : undefined,
+  };
+}
+
+export async function adminBroadcastUiNotification(
+  token: string,
+  payload: {
+    category: "system" | "politics" | "economy";
+    title: string;
+    message: string;
+  },
+): Promise<void> {
+  const response = await fetch(`${API}/admin/ui-notifications`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_UI_NOTIFICATION_FAILED");
+  }
 }
 
 export async function adminUploadResourceIcons(

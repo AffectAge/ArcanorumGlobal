@@ -16,7 +16,9 @@ import { CountryCustomizationModal } from "./components/CountryCustomizationModa
 import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
-import { apiBase, fetchCountries, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
+import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
+import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
+import { adminReviewRegistration, apiBase, fetchCountries, fetchProvinceIndex, fetchPublicGameUiSettings, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
 
@@ -27,6 +29,11 @@ type SessionCountry = {
   crestUrl?: string | null;
 };
 
+type RegistrationApprovalCountry = Extract<
+  InAppUiNotification["action"],
+  { type: "registration-approval" }
+>["country"];
+
 export default function App() {
   const [entryLoadingGate, setEntryLoadingGate] = useState<"hidden" | "loading" | "ready">("hidden");
   const [turnResolveOverlay, setTurnResolveOverlay] = useState<
@@ -34,6 +41,14 @@ export default function App() {
     | { phase: "processing"; startedAtMs: number }
     | { phase: "done"; startedAtMs: number; finishedAtMs: number; durationMs: number; resolvedTurnId: number }
   >({ phase: "idle" });
+  const [uiNotifications, setUiNotifications] = useState<InAppUiNotification[]>([]);
+  const [viewedUiNotificationIds, setViewedUiNotificationIds] = useState<Set<string>>(new Set());
+  const [registrationApprovalModal, setRegistrationApprovalModal] = useState<{
+    open: boolean;
+    country: RegistrationApprovalCountry | null;
+    notificationId: string | null;
+    pending: boolean;
+  }>({ open: false, country: null, notificationId: null, pending: false });
   const [country, setCountry] = useState<SessionCountry | null>(null);
   const [mapMode, setMapMode] = useState(() => {
     try {
@@ -90,8 +105,9 @@ export default function App() {
   const [colonizationCostPer1000Km2, setColonizationCostPer1000Km2] = useState({ points: 5, ducats: 5 });
   const [provinceRenameDucatsCost, setProvinceRenameDucatsCost] = useState(25);
   const [provinceAreaKm2ById, setProvinceAreaKm2ById] = useState<Record<string, number>>({});
-  const [showAntarctica, setShowAntarctica] = useState(true);
+  const [showAntarctica, setShowAntarctica] = useState(false);
   const [showMapControls, setShowMapControls] = useState(false);
+  const [sortNotifications, setSortNotifications] = useState(true);
   const [provinceIndexLoaded, setProvinceIndexLoaded] = useState(false);
   const [publicUiLoaded, setPublicUiLoaded] = useState(false);
   const [turnTimerUi, setTurnTimerUi] = useState<{ enabled: boolean; secondsPerTurn: number; startedAtMs: number | null }>({
@@ -208,6 +224,13 @@ export default function App() {
         });
       }
 
+      if (msg.type === "UI_NOTIFY") {
+        setUiNotifications((prev) => {
+          const next = [msg.notification as InAppUiNotification, ...prev.filter((n) => n.id !== msg.notification.id)];
+          return next.slice(0, 8);
+        });
+      }
+
       if (msg.type === "PRESENCE") {
         setPresence(msg.onlinePlayerIds);
       }
@@ -272,6 +295,24 @@ export default function App() {
       // ignore storage failures
     }
   }, [auth?.countryId, showMapControls]);
+
+  useEffect(() => {
+    try {
+      const key = `arc.ui.${auth?.countryId ?? "guest"}.notifications.sort`;
+      const raw = localStorage.getItem(key);
+      setSortNotifications(raw == null ? true : raw === "1");
+    } catch {
+      setSortNotifications(true);
+    }
+  }, [auth?.countryId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`arc.ui.${auth?.countryId ?? "guest"}.notifications.sort`, sortNotifications ? "1" : "0");
+    } catch {
+      // ignore storage failures
+    }
+  }, [auth?.countryId, sortNotifications]);
 
   useEffect(() => {
     let cancelled = false;
@@ -640,6 +681,63 @@ export default function App() {
     send({ type: "REQUEST_RESOLVE" });
   };
 
+  const openUiNotification = (item: InAppUiNotification) => {
+    setViewedUiNotificationIds((prev) => {
+      if (prev.has(item.id)) return prev;
+      const next = new Set(prev);
+      next.add(item.id);
+      return next;
+    });
+    if (sortNotifications) {
+      setUiNotifications((prev) => {
+        const idx = prev.findIndex((n) => n.id === item.id);
+        if (idx < 0 || idx === prev.length - 1) return prev;
+        const next = [...prev];
+        const [opened] = next.splice(idx, 1);
+        next.push(opened);
+        return next;
+      });
+    }
+    if (item.action.type === "registration-approval") {
+      setRegistrationApprovalModal({
+        open: true,
+        country: item.action.country,
+        notificationId: item.id,
+        pending: false,
+      });
+    }
+  };
+
+  const resolveRegistrationApproval = async (approve: boolean) => {
+    if (!auth?.token || !registrationApprovalModal.country || !registrationApprovalModal.notificationId) return;
+    setRegistrationApprovalModal((prev) => ({ ...prev, pending: true }));
+    try {
+      const result = await adminReviewRegistration(auth.token, registrationApprovalModal.country.id, approve);
+      setUiNotifications((prev) => prev.filter((n) => n.id !== registrationApprovalModal.notificationId));
+      setRegistrationApprovalModal({ open: false, country: null, notificationId: null, pending: false });
+      toast.success(approve ? "Регистрация подтверждена" : "Регистрация отклонена");
+      if (result.country) {
+        addEvent({
+          category: "politics",
+          title: approve ? "Регистрация подтверждена" : "Регистрация отклонена",
+          message: `${result.country.name}`,
+          visibility: "private",
+          countryId: auth.countryId,
+        });
+      }
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "REGISTRATION_REVIEW_FAILED";
+      if (code === "REGISTRATION_ALREADY_REVIEWED") {
+        toast.error("Заявка уже обработана");
+        setUiNotifications((prev) => prev.filter((n) => n.id !== registrationApprovalModal.notificationId));
+        setRegistrationApprovalModal({ open: false, country: null, notificationId: null, pending: false });
+      } else {
+        toast.error("Не удалось обработать заявку");
+        setRegistrationApprovalModal((prev) => ({ ...prev, pending: false }));
+      }
+    }
+  };
+
   return (
     <div className="relative h-screen overflow-hidden bg-arc-bg text-white">
       <MapView
@@ -700,6 +798,15 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {auth?.isAdmin && (
+        <InAppNotificationTray
+          items={uiNotifications}
+          viewedIds={viewedUiNotificationIds}
+          topOffsetPx={80}
+          onClickItem={openUiNotification}
+        />
+      )}
 
       <AnimatePresence>
         {auth && entryLoadingGate !== "hidden" && (
@@ -895,10 +1002,23 @@ export default function App() {
         <ClientSettingsModal
           open={clientSettingsOpen}
           showMapControls={showMapControls}
+          sortNotifications={sortNotifications}
           onClose={() => setClientSettingsOpen(false)}
-          onSave={({ showMapControls: nextShowMapControls }) => {
+          onSave={({ showMapControls: nextShowMapControls, sortNotifications: nextSortNotifications }) => {
             setShowMapControls(nextShowMapControls);
+            setSortNotifications(nextSortNotifications);
           }}
+        />
+      )}
+
+      {auth?.isAdmin && (
+        <RegistrationApprovalModal
+          open={registrationApprovalModal.open}
+          pending={registrationApprovalModal.pending}
+          country={registrationApprovalModal.country}
+          onClose={() => setRegistrationApprovalModal((prev) => (prev.pending ? prev : { open: false, country: null, notificationId: null, pending: false }))}
+          onApprove={() => void resolveRegistrationApproval(true)}
+          onReject={() => void resolveRegistrationApproval(false)}
         />
       )}
 

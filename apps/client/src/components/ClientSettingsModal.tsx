@@ -6,19 +6,22 @@ import { motion } from "framer-motion";
 type Props = {
   open: boolean;
   showMapControls: boolean;
+  sortNotifications: boolean;
   onClose: () => void;
-  onSave: (settings: { showMapControls: boolean }) => void;
+  onSave: (settings: { showMapControls: boolean; sortNotifications: boolean }) => void;
 };
 
-export function ClientSettingsModal({ open, showMapControls, onClose, onSave }: Props) {
+export function ClientSettingsModal({ open, showMapControls, sortNotifications, onClose, onSave }: Props) {
   const [draftShowMapControls, setDraftShowMapControls] = useState(showMapControls);
+  const [draftSortNotifications, setDraftSortNotifications] = useState(sortNotifications);
   const [activeCategory, setActiveCategory] = useState<"interface">("interface");
 
   useEffect(() => {
     if (open) {
       setDraftShowMapControls(showMapControls);
+      setDraftSortNotifications(sortNotifications);
     }
-  }, [open, showMapControls]);
+  }, [open, showMapControls, sortNotifications]);
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[126]">
@@ -95,6 +98,32 @@ export function ClientSettingsModal({ open, showMapControls, onClose, onSave }: 
                       />
                     </button>
                   </label>
+
+                  <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                    <div>
+                      <div className="text-sm text-slate-100">Сортировка уведомлений</div>
+                      <div className="text-xs text-slate-500">При открытии непросмотренные уведомления переставляются влево/в конец ряда</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDraftSortNotifications((v) => !v)}
+                      className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
+                        draftSortNotifications
+                          ? "border-emerald-400/50 bg-emerald-500/20"
+                          : "border-white/10 bg-white/5"
+                      }`}
+                      aria-pressed={draftSortNotifications}
+                      aria-label={draftSortNotifications ? "Выключить сортировку уведомлений" : "Включить сортировку уведомлений"}
+                    >
+                      <span
+                        className={`h-5 w-5 rounded-full transition ${
+                          draftSortNotifications
+                            ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                            : "translate-x-1 bg-white/60"
+                        }`}
+                      />
+                    </button>
+                  </label>
                 </div>
 
                 <div className="rounded-xl border border-white/10 bg-black/20 p-4">
@@ -111,7 +140,7 @@ export function ClientSettingsModal({ open, showMapControls, onClose, onSave }: 
                   <button
                     type="button"
                     onClick={() => {
-                      onSave({ showMapControls: draftShowMapControls });
+                      onSave({ showMapControls: draftShowMapControls, sortNotifications: draftSortNotifications });
                       onClose();
                     }}
                     className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black"

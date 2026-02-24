@@ -1,7 +1,6 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3 } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
-import { Tooltip } from "./Tooltip";
 
 type Resources = {
   culture: number;
@@ -84,6 +83,34 @@ function formatCountdown(secondsLeft: number): string {
     return `${hours}ч ${minutes}м ${seconds}с`;
   }
   return `${minutes}м ${seconds}с`;
+}
+
+type TopIconActionButtonProps = {
+  label: string;
+  onClick?: () => void;
+  icon: LucideIcon;
+  variant?: "default" | "admin";
+};
+
+function TopIconActionButton({ label, onClick, icon: Icon, variant = "default" }: TopIconActionButtonProps) {
+  const variantClass =
+    variant === "admin"
+      ? "bg-rose-500/20 text-rose-300 hover:bg-rose-500/30"
+      : "bg-white/5 text-slate-100 hover:text-arc-accent";
+
+  return (
+    <button
+      onClick={onClick}
+      className={`group panel-border inline-flex h-10 w-10 items-center justify-start overflow-hidden rounded-lg px-3 transition-[width,color,background-color] duration-150 hover:w-[170px] ${variantClass}`}
+      aria-label={label}
+      type="button"
+    >
+      <Icon size={16} className="shrink-0" />
+      <span className="ml-2 max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-150 group-hover:max-w-[120px] group-hover:opacity-100">
+        {label}
+      </span>
+    </button>
+  );
 }
 
 export function TopBar({
@@ -352,106 +379,36 @@ export function TopBar({
         </div>
 
         <div className="flex justify-end gap-2">
-          <Tooltip content="Хранилище знаний" placement="top">
-            <button
-              onClick={onOpenCivilopedia}
-              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
-              aria-label="Хранилище знаний"
-            >
-              <BookOpen size={16} />
-            </button>
-          </Tooltip>
+          <TopIconActionButton label="Хранилище знаний" onClick={onOpenCivilopedia} icon={BookOpen} />
+          <TopIconActionButton label="Настройки клиента" onClick={onOpenClientSettings} icon={Sliders} />
 
-          <Tooltip content="Настройки клиента" placement="top">
-            <button
-              onClick={onOpenClientSettings}
-              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
-              aria-label="Настройки клиента"
-            >
-              <Sliders size={16} />
-            </button>
-          </Tooltip>
+          {isAdmin && <TopIconActionButton label="Панель администратора" onClick={onOpenAdminPanel} icon={SlidersHorizontal} variant="admin" />}
+          {isAdmin && <TopIconActionButton label="Настройки игры" onClick={onOpenGameSettings} icon={Cog} variant="admin" />}
+          {isAdmin && <TopIconActionButton label="Админ: форс-резолв" onClick={onAdminForceResolve} icon={ShieldAlert} variant="admin" />}
 
-          {isAdmin && (
-            <Tooltip content="Панель администратора" placement="top">
-              <button
-                onClick={onOpenAdminPanel}
-                className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300 transition hover:bg-rose-500/30"
-                aria-label="Панель администратора"
-              >
-                <SlidersHorizontal size={16} />
-              </button>
-            </Tooltip>
-          )}
+          <TopIconActionButton label="Выход" onClick={onLogout} icon={LogOut} />
+          <TopIconActionButton label="Статусы стран" onClick={onOpenTurnStatus} icon={ListChecks} />
 
-          {isAdmin && (
-            <Tooltip content="Настройки игры" placement="top">
-              <button
-                onClick={onOpenGameSettings}
-                className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300 transition hover:bg-rose-500/30"
-                aria-label="Настройки игры"
-              >
-                <Cog size={16} />
-              </button>
-            </Tooltip>
-          )}
-
-          {isAdmin && (
-            <Tooltip content="Админ: форс-резолв" placement="top">
-              <button
-                onClick={onAdminForceResolve}
-                className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300 transition hover:bg-rose-500/30"
-                aria-label="Админ: форс-резолв"
-              >
-                <ShieldAlert size={16} />
-              </button>
-            </Tooltip>
-          )}
-
-          <Tooltip content="Выход" placement="top">
-            <button
-              onClick={onLogout}
-              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
-              aria-label="Выход"
-            >
-              <LogOut size={16} />
-            </button>
-          </Tooltip>
-
-          <Tooltip content="Статусы стран" placement="top">
-            <button
-              onClick={onOpenTurnStatus}
-              className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-100 transition hover:text-arc-accent"
-              aria-label="Статусы стран"
-            >
-              <ListChecks size={16} />
-            </button>
-          </Tooltip>
-
-          <Tooltip
-            content={
-              turnTimer?.enabled && turnTimerRemainingSec !== null
-                ? `Следующий ход #${turnId} • авто через ${formatCountdown(turnTimerRemainingSec)}`
-                : `Следующий ход #${turnId}`
-            }
-            placement="top"
+          <button
+            onClick={onNextTurn}
+            className={`group inline-flex h-10 items-center justify-start overflow-hidden rounded-lg bg-arc-accent text-black transition-[width,filter] hover:brightness-110 ${
+              turnTimer?.enabled && turnTimerRemainingSec !== null ? "gap-2 px-3" : "w-10 px-3 hover:w-[190px]"
+            }`}
+            aria-label={`Следующий ход #${turnId}`}
+            type="button"
           >
-            <button
-              onClick={onNextTurn}
-              className={`inline-flex h-10 items-center justify-center rounded-lg bg-arc-accent text-black transition hover:brightness-110 ${
-                turnTimer?.enabled && turnTimerRemainingSec !== null ? "gap-2 px-3" : "w-10"
-              }`}
-              aria-label={`Следующий ход #${turnId}`}
-            >
-              <SkipForward size={16} />
-              {turnTimer?.enabled && turnTimerRemainingSec !== null && (
-                <span className="inline-flex items-center gap-1 text-xs font-semibold tabular-nums">
-                  <Clock3 size={13} className="text-black/80" />
-                  <span>{formatCountdown(turnTimerRemainingSec)}</span>
-                </span>
-              )}
-            </button>
-          </Tooltip>
+            <SkipForward size={16} className="shrink-0" />
+            {turnTimer?.enabled && turnTimerRemainingSec !== null ? (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold tabular-nums">
+                <Clock3 size={13} className="text-black/80" />
+                <span>{formatCountdown(turnTimerRemainingSec)}</span>
+              </span>
+            ) : (
+              <span className="ml-2 max-w-0 overflow-hidden whitespace-nowrap text-xs font-semibold opacity-0 transition-all duration-150 group-hover:max-w-[140px] group-hover:opacity-100">
+                Следующий ход #{turnId}
+              </span>
+            )}
+          </button>
         </div>
       </div>
     </header>

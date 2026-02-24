@@ -1,11 +1,12 @@
 import { Dialog } from "@headlessui/react";
 import { Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Palette, RotateCcw, Shield, Trash2, Upload, X } from "lucide-react";
+import { BellRing, Check, ChevronDown, Palette, RotateCcw, Shield, Trash2, Upload, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import {
+  adminBroadcastUiNotification,
   adminDeleteCountry,
   adminResetProvinceColonizationCostToAuto,
   adminSetCountryPunishment,
@@ -28,6 +29,7 @@ type Props = {
 const categories = [
   { id: "countries", label: "Управление странами" },
   { id: "provinces", label: "Провинции / Колонизация" },
+  { id: "notifications", label: "Рассылка уведомлений" },
 ] as const;
 
 export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCountryUpdated, initialProvinceId }: Props) {
@@ -55,6 +57,9 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [provinceColonizationCost, setProvinceColonizationCost] = useState(100);
   const [provinceColonizationDisabled, setProvinceColonizationDisabled] = useState(false);
   const [provinceSearch, setProvinceSearch] = useState("");
+  const [broadcastCategory, setBroadcastCategory] = useState<"system" | "politics" | "economy">("system");
+  const [broadcastTitle, setBroadcastTitle] = useState("");
+  const [broadcastMessage, setBroadcastMessage] = useState("");
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
   const selectedProvince = useMemo(() => provinces.find((p) => p.id === selectedProvinceId) ?? null, [provinces, selectedProvinceId]);
@@ -313,6 +318,30 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     }
   };
 
+  const sendBroadcastNotification = async () => {
+    const title = broadcastTitle.trim();
+    const message = broadcastMessage.trim();
+    if (!title || !message) {
+      toast.error("Заполните заголовок и текст уведомления");
+      return;
+    }
+    setSaving(true);
+    try {
+      await adminBroadcastUiNotification(token, {
+        category: broadcastCategory,
+        title,
+        message,
+      });
+      setBroadcastTitle("");
+      setBroadcastMessage("");
+      toast.success("Уведомление отправлено всем игрокам");
+    } catch {
+      toast.error("Не удалось отправить уведомление");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[120]">
       <motion.div
@@ -516,6 +545,96 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                         </div>
                       )}
                     </>
+                  )}
+
+                  {activeCategory === "notifications" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <BellRing size={16} className="text-arc-accent" />
+                        Рассылка UI-уведомления всем игрокам
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        Уведомления категории <span className="text-amber-300">registration</span> зарезервированы для заявок на регистрацию и по-прежнему отправляются только администраторам.
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-300">Категория</label>
+                        <Listbox value={broadcastCategory} onChange={setBroadcastCategory}>
+                          <div className="relative">
+                            <Listbox.Button className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 pr-10 text-left text-sm text-slate-100">
+                              {broadcastCategory === "system" ? "Система" : broadcastCategory === "politics" ? "Политика" : "Экономика"}
+                              <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            </Listbox.Button>
+                            <Listbox.Options className="arc-scrollbar panel-border absolute z-30 mt-2 max-h-56 w-full overflow-auto rounded-lg bg-arc-panel/95 p-1 text-sm shadow-2xl outline-none">
+                              {[
+                                { id: "system", label: "Система" },
+                                { id: "politics", label: "Политика" },
+                                { id: "economy", label: "Экономика" },
+                              ].map((option) => (
+                                <Listbox.Option
+                                  key={option.id}
+                                  value={option.id}
+                                  className={({ active }) => `relative cursor-pointer rounded-md px-3 py-2 pr-9 transition ${active ? "bg-arc-accent/15 text-arc-accent" : "text-slate-300"}`}
+                                >
+                                  {({ selected }) => (
+                                    <>
+                                      <span className={selected ? "text-arc-accent" : ""}>{option.label}</span>
+                                      {selected && <Check size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-arc-accent" />}
+                                    </>
+                                  )}
+                                </Listbox.Option>
+                              ))}
+                            </Listbox.Options>
+                          </div>
+                        </Listbox>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-300">Заголовок</label>
+                        <input
+                          value={broadcastTitle}
+                          onChange={(e) => setBroadcastTitle(e.target.value.slice(0, 120))}
+                          placeholder="Например: Важное объявление"
+                          className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                        />
+                        <div className="mt-1 text-[11px] text-slate-500">{broadcastTitle.length}/120</div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-300">Текст</label>
+                        <textarea
+                          value={broadcastMessage}
+                          onChange={(e) => setBroadcastMessage(e.target.value.slice(0, 500))}
+                          rows={4}
+                          placeholder="Текст уведомления для всех игроков"
+                          className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                        />
+                        <div className="mt-1 text-[11px] text-slate-500">{broadcastMessage.length}/500</div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={sendBroadcastNotification}
+                          disabled={saving || !broadcastTitle.trim() || !broadcastMessage.trim()}
+                          className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+                        >
+                          Отправить уведомление всем
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBroadcastTitle("");
+                            setBroadcastMessage("");
+                            setBroadcastCategory("system");
+                          }}
+                          disabled={saving}
+                          className="rounded-lg bg-slate-600/20 px-4 py-2 text-sm font-semibold text-slate-200 disabled:opacity-60"
+                        >
+                          Очистить
+                        </button>
+                      </div>
+                    </div>
                   )}
 
                   {activeCategory === "countries" && (

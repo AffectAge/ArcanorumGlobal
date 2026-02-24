@@ -178,6 +178,7 @@ const countrySelect = {
   lockReason: true,
   ignoreUntilTurn: true,
   eventLogRetentionTurns: true,
+  isRegistrationApproved: true,
 } as const;
 
 let turnId = 1;
@@ -220,6 +221,9 @@ type GameSettings = {
     flagDucats: number;
     crestDucats: number;
     provinceRenameDucats: number;
+  };
+  registration: {
+    requireAdminApproval: boolean;
   };
   eventLog: {
     retentionTurns: number;
@@ -444,6 +448,9 @@ const defaultGameSettings = (): GameSettings => ({
     crestDucats: 15,
     provinceRenameDucats: 25,
   },
+  registration: {
+    requireAdminApproval: false,
+  },
   eventLog: {
     retentionTurns: 3,
   },
@@ -579,6 +586,12 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.customization?.provinceRenameDucats === "number"
             ? Math.max(0, Math.floor(next.customization.provinceRenameDucats))
             : defaults.customization.provinceRenameDucats,
+      },
+      registration: {
+        requireAdminApproval:
+          typeof (next as Partial<{ registration?: { requireAdminApproval?: unknown } }>).registration?.requireAdminApproval === "boolean"
+            ? Boolean((next as Partial<{ registration?: { requireAdminApproval?: boolean } }>).registration?.requireAdminApproval)
+            : defaults.registration.requireAdminApproval,
       },
       eventLog: {
         retentionTurns:
@@ -1024,6 +1037,76 @@ function countryFromDb(row: { id: string; name: string; color: string; flagUrl: 
   };
 }
 
+function makeRegistrationApprovalUiNotification(country: {
+  id: string;
+  name: string;
+  color: string;
+  flagUrl: string | null;
+  crestUrl: string | null;
+  createdAt?: Date | null;
+}): Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"] {
+  return {
+    id: `registration-approval:${country.id}`,
+    category: "registration",
+    createdAt: (country.createdAt ?? new Date()).toISOString(),
+    action: {
+      type: "registration-approval",
+      country: {
+        id: country.id,
+        name: country.name,
+        color: country.color,
+        flagUrl: country.flagUrl,
+        crestUrl: country.crestUrl,
+      },
+    },
+  };
+}
+
+function sendUiNotificationToSocket(
+  socket: WebSocket,
+  notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"],
+): void {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "UI_NOTIFY", notification } satisfies WsOutMessage));
+}
+
+function sendUiNotificationToAdmins(
+  wsServer: WebSocketServer,
+  notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"],
+): void {
+  wsServer.clients.forEach((client) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    const meta = client as WebSocket & { __arcIsAdmin?: boolean };
+    if (!meta.__arcIsAdmin) return;
+    sendUiNotificationToSocket(client, notification);
+  });
+}
+
+function broadcastUiNotification(
+  wsServer: WebSocketServer,
+  notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"],
+): void {
+  broadcast(wsServer, { type: "UI_NOTIFY", notification });
+}
+
+async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSocket): Promise<void> {
+  const pending = await prisma.country.findMany({
+    where: { isRegistrationApproved: false },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      color: true,
+      flagUrl: true,
+      crestUrl: true,
+      createdAt: true,
+    },
+  });
+  for (const country of pending) {
+    sendUiNotificationToSocket(socket, makeRegistrationApprovalUiNotification(country));
+  }
+}
+
 function broadcastWorldBaseSync(wss: WebSocketServer): void {
   broadcast(wss, {
     type: "WORLD_BASE_SYNC",
@@ -1423,6 +1506,11 @@ const gameSettingsSchema = z.object({
       provinceRenameDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
     .optional(),
+  registration: z
+    .object({
+      requireAdminApproval: z.boolean().optional(),
+    })
+    .optional(),
   eventLog: z
     .object({
       retentionTurns: z.coerce.number().int().min(1).max(100).optional(),
@@ -1447,6 +1535,7 @@ app.get("/game-settings/public", (_req, res) => {
     economy: gameSettings.economy,
     colonization: gameSettings.colonization,
     customization: gameSettings.customization,
+    registration: gameSettings.registration,
     eventLog: gameSettings.eventLog,
     turnTimer: {
       ...gameSettings.turnTimer,
@@ -1700,6 +1789,13 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
     if (typeof nextCustomization.provinceRenameDucats === "number") {
       gameSettings.customization.provinceRenameDucats = nextCustomization.provinceRenameDucats;
+    }
+  }
+
+  const nextRegistration = parsed.data.registration;
+  if (nextRegistration) {
+    if (typeof nextRegistration.requireAdminApproval === "boolean") {
+      gameSettings.registration.requireAdminApproval = nextRegistration.requireAdminApproval;
     }
   }
 
@@ -2557,6 +2653,8 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
 
   try {
     const hasAnyAdmin = (await prisma.country.count({ where: { isAdmin: true } })) > 0;
+    const isAdminCountry = !hasAnyAdmin;
+    const requiresApproval = gameSettings.registration.requireAdminApproval && !isAdminCountry;
     const country = await prisma.country.create({
       data: {
         name: countryName,
@@ -2564,7 +2662,8 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
         flagUrl: flagFile ? `/uploads/flags/${flagFile.filename}` : null,
         crestUrl: crestFile ? `/uploads/crests/${crestFile.filename}` : null,
         passwordHash,
-        isAdmin: !hasAnyAdmin,
+        isAdmin: isAdminCountry,
+        isRegistrationApproved: !requiresApproval,
       },
       select: countrySelect,
     });
@@ -2581,13 +2680,16 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
     }
 
     savePersistentState();
+    if (requiresApproval) {
+      sendUiNotificationToAdmins(wss, makeRegistrationApprovalUiNotification(country));
+    }
     broadcast(wss, {
       type: "NEWS_EVENT",
       event: makeOfficialNews({
         turn: turnId,
         category: "politics",
         title: "Новая страна",
-        message: `Зарегистрирована страна ${country.name}`,
+        message: requiresApproval ? `Зарегистрирована страна ${country.name} (ожидает подтверждения)` : `Зарегистрирована страна ${country.name}`,
         countryId: country.id,
         priority: "medium",
         visibility: "public",
@@ -2645,6 +2747,9 @@ app.post("/auth/login", async (req, res) => {
   if (!ok) {
     return res.status(401).json({ error: "INVALID_PASSWORD" });
   }
+  if (country.isRegistrationApproved === false) {
+    return res.status(403).json({ error: "REGISTRATION_PENDING_APPROVAL" });
+  }
 
   ensureCountryInWorldBase(country.id);
   const token = createToken({ id: `player-${country.id}`, countryId: country.id, isAdmin: country.isAdmin }, rememberMe);
@@ -2657,6 +2762,113 @@ app.post("/auth/login", async (req, res) => {
     turnId,
     clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
   });
+});
+
+const registrationReviewSchema = z.object({
+  approve: z.boolean(),
+});
+
+const adminUiNotificationSchema = z.object({
+  category: z.enum(["system", "politics", "economy"]),
+  title: z.string().trim().min(1).max(120),
+  message: z.string().trim().min(1).max(500),
+});
+
+app.patch("/admin/registrations/:countryId/review", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsed = registrationReviewSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const targetId = String(req.params.countryId);
+  const target = await prisma.country.findUnique({ where: { id: targetId }, select: countrySelect });
+  if (!target) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+  if (target.isRegistrationApproved) {
+    return res.status(400).json({ error: "REGISTRATION_ALREADY_REVIEWED" });
+  }
+
+  if (parsed.data.approve) {
+    const updated = await prisma.country.update({
+      where: { id: targetId },
+      data: { isRegistrationApproved: true },
+      select: countrySelect,
+    });
+    broadcast(wss, {
+      type: "NEWS_EVENT",
+      event: makeOfficialNews({
+        turn: turnId,
+        category: "politics",
+        title: "Регистрация подтверждена",
+        message: `Администратор подтвердил регистрацию страны ${updated.name}`,
+        countryId: updated.id,
+        priority: "medium",
+        visibility: "public",
+      }),
+    });
+    return res.json({ ok: true, approved: true, country: countryFromDb(updated) });
+  }
+
+  const fullTarget = await prisma.country.findUnique({ where: { id: targetId } });
+  if (!fullTarget) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+  removeUploadedByUrl(fullTarget.flagUrl);
+  removeUploadedByUrl(fullTarget.crestUrl);
+  await prisma.country.delete({ where: { id: targetId } });
+
+  delete worldBase.resourcesByCountry[targetId];
+  for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
+    if (ownerId === targetId) delete worldBase.provinceOwner[provinceId];
+  }
+  for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
+    if (progressByCountry[targetId] != null) {
+      delete progressByCountry[targetId];
+      if (Object.keys(progressByCountry).length === 0) delete worldBase.colonyProgressByProvince[provinceId];
+    }
+  }
+  savePersistentState();
+  broadcastWorldBaseSync(wss);
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "politics",
+      title: "Регистрация отклонена",
+      message: `Администратор отклонил регистрацию страны ${target.name}`,
+      countryId: target.id,
+      priority: "medium",
+      visibility: "public",
+    }),
+  });
+  return res.json({ ok: true, approved: false, countryId: target.id });
+});
+
+app.post("/admin/ui-notifications", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsed = adminUiNotificationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const notification: Extract<WsOutMessage, { type: "UI_NOTIFY" }>["notification"] = {
+    id: randomUUID(),
+    category: parsed.data.category,
+    createdAt: new Date().toISOString(),
+    title: parsed.data.title,
+    message: parsed.data.message,
+    action: { type: "message" },
+  };
+
+  broadcastUiNotification(wss, notification);
+  return res.json({ ok: true, notification });
 });
 
 app.get("/tiles/adm1/:z/:x/:y.mvt", (req, res) => {
@@ -2736,6 +2948,8 @@ wss.on("connection", (socket) => {
           return;
         }
         isAdmin = Boolean(country.isAdmin);
+        (socket as WebSocket & { __arcIsAdmin?: boolean; __arcCountryId?: string }).__arcIsAdmin = isAdmin;
+        (socket as WebSocket & { __arcIsAdmin?: boolean; __arcCountryId?: string }).__arcCountryId = country.id;
         onlinePlayers.add(payload.id);
         ensureCountryInWorldBase(payload.countryId);
         send({
@@ -2747,6 +2961,9 @@ wss.on("connection", (socket) => {
           turnId,
           clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
         });
+        if (isAdmin) {
+          await sendPendingRegistrationNotificationsToAdminSocket(socket);
+        }
         broadcast(wss, { type: "PRESENCE", onlinePlayerIds: [...onlinePlayers] });
       } catch {
         send({ type: "ERROR", code: "UNAUTHORIZED", message: "Token invalid" });

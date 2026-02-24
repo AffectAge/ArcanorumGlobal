@@ -120,6 +120,23 @@ function darkenHexColor(hex: string, factor = 0.45): string {
   return `#${r}${g}${b}`;
 }
 
+function applyAntarcticaVisibilityFilter(map: MapLibreMap, showAntarctica: boolean): void {
+  const filter = showAntarctica
+    ? null
+    : ([
+        "all",
+        ["!=", ["coalesce", ["get", "admin"], ""], "Antarctica"],
+        ["!=", ["coalesce", ["get", "adm0_a3"], ""], "ATA"],
+      ] as unknown as maplibregl.FilterSpecification);
+
+  const layerIds = ["province-fill", "province-colonize-stripes", "province-hover", "province-selected", "province-colonize-ring", "province-line"] as const;
+  for (const layerId of layerIds) {
+    if (map.getLayer(layerId)) {
+      map.setFilter(layerId, filter);
+    }
+  }
+}
+
 function lightenHexColor(hex: string, amount = 0.28): string {
   const match = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
   if (!match) {
@@ -173,7 +190,7 @@ export function MapView({
   colonizationCostPer1000Km2,
   provinceRenameDucatsCost = 25,
   showMapControls = false,
-  showAntarctica = true,
+  showAntarctica = false,
 }: Props) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -310,8 +327,8 @@ export function MapView({
     setMapModeFadePulse((v) => v + 1);
   }, [activeMode]);
 
-  const isPoliticalLegendExpanded = activeMode === "Политическая карта" && (politicalLegendPinnedOpen || politicalLegendHovered);
-  const isColonizationLegendExpanded = activeMode === "Колонизация" && (colonizationLegendPinnedOpen || colonizationLegendHovered);
+  const isPoliticalLegendExpanded = activeMode === "Политическая карта" && politicalLegendPinnedOpen;
+  const isColonizationLegendExpanded = activeMode === "Колонизация" && colonizationLegendPinnedOpen;
   const filteredLegendCountries = useMemo(() => {
     const q = politicalLegendCountrySearch.trim().toLowerCase();
     if (!q) return countries;
@@ -667,6 +684,7 @@ export function MapView({
       ] as const) {
         map.setPaintProperty(layerId, `${prop}-transition`, { duration: 160, delay: 0 });
       }
+      applyAntarcticaVisibilityFilter(map, showAntarctica);
       map.resize();
       const c = map.getCenter();
       setView({ zoom: map.getZoom(), lng: c.lng, lat: c.lat });
@@ -875,21 +893,7 @@ export function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
-    const filter = showAntarctica
-      ? null
-      : ([
-          "all",
-          ["!=", ["coalesce", ["get", "admin"], ""], "Antarctica"],
-          ["!=", ["coalesce", ["get", "adm0_a3"], ""], "ATA"],
-        ] as unknown as maplibregl.FilterSpecification);
-
-    const layerIds = ["province-fill", "province-colonize-stripes", "province-hover", "province-selected", "province-colonize-ring", "province-line"] as const;
-    for (const layerId of layerIds) {
-      if (map.getLayer(layerId)) {
-        map.setFilter(layerId, filter);
-      }
-    }
+    applyAntarcticaVisibilityFilter(map, showAntarctica);
   }, [showAntarctica]);
 
   useEffect(() => {
@@ -1346,15 +1350,10 @@ export function MapView({
             type="button"
             onClick={() => setShowProvinceBorders((v) => !v)}
             className={`group glass panel-border relative flex ${mapControlsRhythmClass} w-11 items-center justify-center overflow-hidden bg-[#0b111b]/86 text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
-              showProvinceBorders ? "shadow-neon" : ""
+              showProvinceBorders ? "border-[#6ee7b7]/50 text-emerald-300 hover:text-emerald-300" : ""
             }`}
             aria-label={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"}
           >
-            <span
-              className={`pointer-events-none absolute left-1/2 top-1/2 h-3 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-transparent via-arc-accent/70 to-transparent blur-[2px] transition-opacity ${
-                showProvinceBorders ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-              }`}
-            />
             <Grid3X3
               size={18}
               className={`relative z-10 transition-colors ${
@@ -1484,8 +1483,6 @@ export function MapView({
       {activeMode === "Колонизация" && (
         <motion.div
           layout
-          onMouseEnter={() => setColonizationLegendHovered(true)}
-          onMouseLeave={() => setColonizationLegendHovered(false)}
           className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
             isColonizationLegendExpanded ? legendExpandedClass : legendCompactClass
           }`}
@@ -1535,8 +1532,6 @@ export function MapView({
       {activeMode === "Политическая карта" && (
         <motion.div
           layout
-          onMouseEnter={() => setPoliticalLegendHovered(true)}
-          onMouseLeave={() => setPoliticalLegendHovered(false)}
           className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
             isPoliticalLegendExpanded ? legendExpandedClass : legendCompactClass
           }`}

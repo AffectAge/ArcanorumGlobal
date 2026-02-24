@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
 import { Building2, Flag, HandCoins, Handshake, Hammer, Landmark, Users } from "lucide-react";
-import { Tooltip } from "./Tooltip";
 
 const modes = [
   { key: "Политическая карта", icon: Landmark },
@@ -26,18 +25,19 @@ export function MapModePanel({ activeMode, onModeChange }: Props) {
           const isActive = activeMode === mode.key;
 
           return (
-            <Tooltip key={mode.key} content={mode.key} placement="top">
-              <motion.button
-                whileHover={{ y: -2, scale: 1.03 }}
-                transition={{ type: "tween", duration: 0.12 }}
-                onClick={() => onModeChange(mode.key)}
-                className={`group glass panel-border relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-[#0b111b]/86 text-slate-100 transition-colors duration-100 hover:text-arc-accent ${isActive ? "text-emerald-300 shadow-neon" : ""}`}
-                aria-label={mode.key}
-              >
-                <span className={`pointer-events-none absolute left-1/2 top-1/2 h-3 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-transparent via-arc-accent/70 to-transparent blur-[2px] transition-opacity duration-100 ${isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`} />
-                <Icon size={18} className="relative z-10" />
-              </motion.button>
-            </Tooltip>
+            <motion.button
+              key={mode.key}
+              whileHover={{ y: -2, scale: 1.03 }}
+              transition={{ type: "tween", duration: 0.12 }}
+              onClick={() => onModeChange(mode.key)}
+              className={`group glass panel-border relative flex h-11 w-11 items-center justify-start overflow-hidden rounded-xl bg-[#0b111b]/86 px-3 text-slate-100 transition-[width,color] duration-150 hover:w-[170px] hover:text-arc-accent ${isActive ? "text-emerald-300 shadow-neon" : ""}`}
+              aria-label={mode.key}
+            >
+              <Icon size={18} className="relative z-10 shrink-0" />
+              <span className="relative z-10 ml-2 max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-150 group-hover:max-w-[120px] group-hover:opacity-100">
+                {mode.key}
+              </span>
+            </motion.button>
           );
         })}
       </div>

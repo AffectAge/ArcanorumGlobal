@@ -21,6 +21,7 @@ model Country {
   lockReason       String?
   ignoreUntilTurn  Int?
   eventLogRetentionTurns Int @default(3)
+  isRegistrationApproved Boolean @default(true)
   createdAt        DateTime  @default(now())
 }
 

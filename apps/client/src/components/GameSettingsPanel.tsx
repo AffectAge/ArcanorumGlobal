@@ -17,6 +17,7 @@ const categories = [
   { id: "economy", label: "Экономика" },
   { id: "turnTimer", label: "Таймер хода" },
   { id: "colonization", label: "Колонизация" },
+  { id: "registration", label: "Регистрация" },
   { id: "customization", label: "Кастомизация" },
   { id: "eventLog", label: "Журнал событий" },
   { id: "resourceIcons", label: "Иконки очков" },
@@ -55,6 +56,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [crestDucats, setCrestDucats] = useState(15);
   const [provinceRenameDucats, setProvinceRenameDucats] = useState(25);
   const [eventLogRetentionTurns, setEventLogRetentionTurns] = useState(3);
+  const [requireAdminApprovalForRegistration, setRequireAdminApprovalForRegistration] = useState(false);
   const [turnTimerEnabled, setTurnTimerEnabled] = useState(false);
   const [turnTimerSeconds, setTurnTimerSeconds] = useState(300);
   const [showAntarctica, setShowAntarctica] = useState(true);
@@ -91,6 +93,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setCrestDucats(settings.customization.crestDucats);
         setProvinceRenameDucats(settings.customization.provinceRenameDucats ?? 25);
         setEventLogRetentionTurns(settings.eventLog.retentionTurns);
+        setRequireAdminApprovalForRegistration(settings.registration?.requireAdminApproval ?? false);
         setTurnTimerEnabled(settings.turnTimer?.enabled ?? false);
         setTurnTimerSeconds(settings.turnTimer?.secondsPerTurn ?? 300);
         setShowAntarctica(settings.map?.showAntarctica ?? true);
@@ -206,6 +209,22 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       toast.success("Настройки журнала событий сохранены");
     } catch {
       toast.error("Не удалось сохранить настройки журнала событий");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveRegistrationSettings = async () => {
+    setSaving(true);
+    try {
+      const updated = await updateGameSettings(token, {
+        registration: { requireAdminApproval: requireAdminApprovalForRegistration },
+      });
+      setRequireAdminApprovalForRegistration(updated.registration?.requireAdminApproval ?? false);
+      onSettingsUpdated?.(updated);
+      toast.success("Настройки регистрации сохранены");
+    } catch {
+      toast.error("Не удалось сохранить настройки регистрации");
     } finally {
       setSaving(false);
     }
@@ -484,6 +503,42 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <div><label className="mb-1 block text-xs text-slate-300">Переименование провинции</label><input type="number" min={0} value={provinceRenameDucats} onChange={(e) => setProvinceRenameDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                       </div>
                       <button onClick={saveCustomization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                        <Save size={14} />
+                        Сохранить
+                      </button>
+                    </div>
+                  )}
+
+                  {activeCategory === "registration" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <Flag size={15} className="text-arc-accent" />
+                        Регистрация новых стран
+                      </div>
+                      <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                        <div>
+                          <div className="text-sm text-slate-100">Требовать подтверждение администратора</div>
+                          <div className="text-xs text-slate-500">Новые страны регистрируются, но не могут войти до одобрения админом</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setRequireAdminApprovalForRegistration((v) => !v)}
+                          className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
+                            requireAdminApprovalForRegistration ? "border-emerald-400/50 bg-emerald-500/20" : "border-white/10 bg-white/5"
+                          }`}
+                          aria-pressed={requireAdminApprovalForRegistration}
+                          aria-label={requireAdminApprovalForRegistration ? "Выключить подтверждение регистрации" : "Включить подтверждение регистрации"}
+                        >
+                          <span
+                            className={`h-5 w-5 rounded-full transition ${
+                              requireAdminApprovalForRegistration
+                                ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                : "translate-x-1 bg-white/60"
+                            }`}
+                          />
+                        </button>
+                      </label>
+                      <button onClick={saveRegistrationSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>

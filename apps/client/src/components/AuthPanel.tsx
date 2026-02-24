@@ -279,6 +279,8 @@ export function AuthPanel({ onSuccess }: Props) {
 
       if (msgCode === "INVALID_PASSWORD") {
         text = "Неверный пароль";
+      } else if (msgCode === "REGISTRATION_PENDING_APPROVAL") {
+        text = "Регистрация ожидает подтверждения администратора";
       } else if (msgCode === "ACCOUNT_LOCKED_PERMANENT" || msgCode === "ACCOUNT_LOCKED") {
         text = "Аккаунт заблокирован бессрочно";
       } else if (msgCode.startsWith("ACCOUNT_LOCKED_TURN_")) {

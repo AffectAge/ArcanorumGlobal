@@ -13,6 +13,7 @@ export type Country = {
   lockReason?: string | null;
   ignoreUntilTurn?: number | null;
   eventLogRetentionTurns?: number | null;
+  isRegistrationApproved?: boolean;
 };
 
 export type ResourceTotals = {
@@ -89,6 +90,30 @@ export type WsOutMessage =
   | { type: "WORLD_BASE_SYNC"; worldBase: WorldBase; turnId: number }
   | { type: "TURN_RESOLVE_STARTED"; turnId: number; reason: "manual" | "admin" | "auto" }
   | { type: "NEWS_EVENT"; event: EventLogEntry }
+  | {
+      type: "UI_NOTIFY";
+      notification: {
+        id: string;
+        category: "registration" | "system" | "politics" | "economy";
+        createdAt: string;
+        title?: string | null;
+        message?: string | null;
+        action:
+          | {
+              type: "registration-approval";
+              country: {
+                id: string;
+                name: string;
+                color: string;
+                flagUrl?: string | null;
+                crestUrl?: string | null;
+              };
+            }
+          | {
+              type: "message";
+            };
+      };
+    }
   | { type: "ERROR"; code: string; message: string }
   | { type: "PONG" }
   | { type: "PRESENCE"; onlinePlayerIds: string[] }
