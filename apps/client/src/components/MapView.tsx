@@ -251,6 +251,8 @@ export function MapView({
   const [politicalLegendHovered, setPoliticalLegendHovered] = useState(false);
   const [colonizationLegendPinnedOpen, setColonizationLegendPinnedOpen] = useState(false);
   const [colonizationLegendHovered, setColonizationLegendHovered] = useState(false);
+  const [politicalLegendDelayShrink, setPoliticalLegendDelayShrink] = useState(false);
+  const [colonizationLegendDelayShrink, setColonizationLegendDelayShrink] = useState(false);
   const [politicalLegendCountrySearch, setPoliticalLegendCountrySearch] = useState("");
   const [mapModeFadePulse, setMapModeFadePulse] = useState(0);
 
@@ -1275,7 +1277,7 @@ export function MapView({
 
   const legendPanelBaseClass =
     "pointer-events-auto absolute z-30 rounded-xl border border-white/10 bg-[#0b111b] text-xs text-white/80 shadow-2xl backdrop-blur-xl";
-  const legendCompactClass = "w-auto px-2 py-2";
+  const legendCompactClass = "px-2 py-2";
   const legendExpandedClass = "w-72 p-3";
   const mapControlsRhythmClass = "h-11 rounded-xl";
 
@@ -1482,14 +1484,26 @@ export function MapView({
 
       {activeMode === "Колонизация" && (
         <motion.div
-          layout
-          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
+          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 transition-[width,padding] duration-200 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
+            isColonizationLegendExpanded || colonizationLegendDelayShrink ? "md:w-72" : "md:w-[176px]"
+          } ${
             isColonizationLegendExpanded ? legendExpandedClass : legendCompactClass
           }`}
         >
           <button
             type="button"
-            onClick={() => setColonizationLegendPinnedOpen((v) => !v)}
+            onClick={() =>
+              setColonizationLegendPinnedOpen((v) => {
+                const next = !v;
+                if (next) {
+                  setColonizationLegendDelayShrink(false);
+                } else {
+                  setColonizationLegendDelayShrink(true);
+                  window.setTimeout(() => setColonizationLegendDelayShrink(false), 220);
+                }
+                return next;
+              })
+            }
             className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
           >
             <div className="flex items-center gap-2">
@@ -1497,24 +1511,17 @@ export function MapView({
               <span className="font-semibold text-white">Колонизация</span>
             </div>
             <div className="flex items-center gap-1">
-              {!isColonizationLegendExpanded && (
-                <>
-                  <span className="h-2.5 w-2.5 rounded bg-[#b91c1c]" />
-                  <span className="h-2.5 w-2.5 rounded bg-[#22c55e]" />
-                  <span className="h-2.5 w-2.5 rounded bg-[#f59e0b]" />
-                </>
-              )}
               <ChevronDown size={14} className={`transition ${isColonizationLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
             </div>
           </button>
           <AnimatePresence initial={false}>
             {isColonizationLegendExpanded && (
               <motion.div
-                initial={{ opacity: 0, height: 0, y: -4, clipPath: "inset(0 0 100% 0 round 10px)" }}
-                animate={{ opacity: 1, height: "auto", y: 0, clipPath: "inset(0 0 0% 0 round 10px)" }}
-                exit={{ opacity: 0, height: 0, y: -2, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                initial={{ opacity: 0, height: 0, y: -4, marginTop: 0, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                animate={{ opacity: 1, height: "auto", y: 0, marginTop: 8, clipPath: "inset(0 0 0% 0 round 10px)" }}
+                exit={{ opacity: 0, height: 0, y: -2, marginTop: 0, clipPath: "inset(0 0 100% 0 round 10px)" }}
                 transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-                className="mt-2 space-y-1.5 overflow-hidden"
+                className="space-y-1.5 overflow-hidden"
               >
                 <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#b91c1c]" /> Запрещено</div>
                 <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22d3ee]" /> Наш приказ в очереди</div>
@@ -1531,14 +1538,26 @@ export function MapView({
 
       {activeMode === "Политическая карта" && (
         <motion.div
-          layout
-          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
+          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 transition-[width,padding] duration-200 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
+            isPoliticalLegendExpanded || politicalLegendDelayShrink ? "md:w-72" : "md:w-[210px]"
+          } ${
             isPoliticalLegendExpanded ? legendExpandedClass : legendCompactClass
           }`}
         >
           <button
             type="button"
-            onClick={() => setPoliticalLegendPinnedOpen((v) => !v)}
+            onClick={() =>
+              setPoliticalLegendPinnedOpen((v) => {
+                const next = !v;
+                if (next) {
+                  setPoliticalLegendDelayShrink(false);
+                } else {
+                  setPoliticalLegendDelayShrink(true);
+                  window.setTimeout(() => setPoliticalLegendDelayShrink(false), 220);
+                }
+                return next;
+              })
+            }
             className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
           >
             <div className="flex items-center gap-2">
@@ -1546,13 +1565,6 @@ export function MapView({
               <span className="font-semibold text-white">Политическая карта</span>
             </div>
             <div className="flex items-center gap-1">
-              {!isPoliticalLegendExpanded && (
-                <>
-                  <span className="h-2.5 w-2.5 rounded bg-white" />
-                  <span className="h-2.5 w-2.5 rounded bg-slate-400" />
-                  <span className="h-2.5 w-2.5 rounded bg-slate-300" />
-                </>
-              )}
               <ChevronDown size={14} className={`transition ${isPoliticalLegendExpanded ? "rotate-180 text-white" : "text-white/60"}`} />
             </div>
           </button>
@@ -1560,11 +1572,11 @@ export function MapView({
           <AnimatePresence initial={false}>
             {isPoliticalLegendExpanded && (
               <motion.div
-                initial={{ opacity: 0, height: 0, y: -4, clipPath: "inset(0 0 100% 0 round 10px)" }}
-                animate={{ opacity: 1, height: "auto", y: 0, clipPath: "inset(0 0 0% 0 round 10px)" }}
-                exit={{ opacity: 0, height: 0, y: -2, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                initial={{ opacity: 0, height: 0, y: -4, marginTop: 0, clipPath: "inset(0 0 100% 0 round 10px)" }}
+                animate={{ opacity: 1, height: "auto", y: 0, marginTop: 8, clipPath: "inset(0 0 0% 0 round 10px)" }}
+                exit={{ opacity: 0, height: 0, y: -2, marginTop: 0, clipPath: "inset(0 0 100% 0 round 10px)" }}
                 transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-                className="mt-2 overflow-hidden"
+                className="overflow-hidden"
               >
                 <div className="mb-2 rounded-lg border border-white/10 bg-black/25 p-2">
                   <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Показать страну</div>
