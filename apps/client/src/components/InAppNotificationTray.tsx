@@ -46,11 +46,11 @@ function iconForCategory(category: InAppUiNotification["category"]) {
 function colorForCategory(category: InAppUiNotification["category"]) {
   switch (category) {
     case "registration":
-      return "text-amber-300 border-amber-400/70";
+      return "text-rose-300 border-rose-900/80";
     case "politics":
       return "text-sky-300 border-sky-400/70";
     case "economy":
-      return "text-emerald-300 border-emerald-400/70";
+      return "text-emerald-500 border-emerald-400/70";
     default:
       return "text-slate-200 border-slate-400/70";
   }
@@ -59,7 +59,7 @@ function colorForCategory(category: InAppUiNotification["category"]) {
 function glowColorForCategory(category: InAppUiNotification["category"]) {
   switch (category) {
     case "registration":
-      return "rgba(251, 191, 36, 0.55)";
+      return "rgba(127, 29, 29, 0.55)";
     case "politics":
       return "rgba(56, 189, 248, 0.55)";
     case "economy":

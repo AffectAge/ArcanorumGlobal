@@ -390,7 +390,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           <span
                             className={`h-5 w-5 rounded-full transition ${
                               turnTimerEnabled
-                                ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                ? "translate-x-6 bg-emerald-500 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
                                 : "translate-x-1 bg-white/60"
                             }`}
                           />
@@ -461,7 +461,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                             <span
                               className={`h-5 w-5 rounded-full transition ${
                                 showAntarctica
-                                  ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                  ? "translate-x-6 bg-emerald-500 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
                                   : "translate-x-1 bg-white/60"
                               }`}
                             />
@@ -532,7 +532,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           <span
                             className={`h-5 w-5 rounded-full transition ${
                               requireAdminApprovalForRegistration
-                                ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                ? "translate-x-6 bg-emerald-500 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
                                 : "translate-x-1 bg-white/60"
                             }`}
                           />
@@ -585,7 +585,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                                 onChange={(e) => setResourceIconFiles((prev) => ({ ...prev, [key]: e.target.files?.[0] ?? null }))}
                               />
                             </label>
-                            {resourceIconFiles[key] ? <div className="mt-1 truncate text-[10px] text-emerald-300">{resourceIconFiles[key]?.name}</div> : null}
+                            {resourceIconFiles[key] ? <div className="mt-1 truncate text-[10px] text-emerald-500">{resourceIconFiles[key]?.name}</div> : null}
                           </div>
                         ))}
                       </div>

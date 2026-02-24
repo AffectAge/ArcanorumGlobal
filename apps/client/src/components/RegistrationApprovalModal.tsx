@@ -86,7 +86,7 @@ export function RegistrationApprovalModal({ open, pending = false, country, onCl
                     type="button"
                     onClick={onApprove}
                     disabled={pending}
-                    className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-300/55 hover:bg-emerald-400/20 disabled:opacity-60"
+                    className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500/55 hover:bg-emerald-400/20 disabled:opacity-60"
                   >
                     <Check size={14} />
                     {pending ? "Обработка..." : "Да"}

@@ -32,7 +32,7 @@ type Props = {
 
 const categories: Array<{ id: EventCategory; label: string; icon: LucideIcon; colorCls: string }> = [
   { id: "system", label: "Система", icon: Megaphone, colorCls: "text-cyan-300" },
-  { id: "colonization", label: "Колонизация", icon: Flag, colorCls: "text-emerald-300" },
+  { id: "colonization", label: "Колонизация", icon: Flag, colorCls: "text-emerald-500" },
   { id: "politics", label: "Политика", icon: Gavel, colorCls: "text-amber-300" },
   { id: "economy", label: "Экономика", icon: Coins, colorCls: "text-yellow-300" },
   { id: "military", label: "Война", icon: Shield, colorCls: "text-rose-300" },
@@ -296,7 +296,7 @@ export function EventLogPanel({ entries, currentCountryId, onTrimOld, onClear }:
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="glass panel-border relative overflow-hidden rounded-2xl p-3.5"
           >
-            <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-emerald-500/40 to-transparent" />
 
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">

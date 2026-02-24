@@ -92,7 +92,7 @@ export function ClientSettingsModal({ open, showMapControls, sortNotifications, 
                       <span
                         className={`h-5 w-5 rounded-full transition ${
                           draftShowMapControls
-                            ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                            ? "translate-x-6 bg-emerald-500 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
                             : "translate-x-1 bg-white/60"
                         }`}
                       />
@@ -118,7 +118,7 @@ export function ClientSettingsModal({ open, showMapControls, sortNotifications, 
                       <span
                         className={`h-5 w-5 rounded-full transition ${
                           draftSortNotifications
-                            ? "translate-x-6 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                            ? "translate-x-6 bg-emerald-500 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
                             : "translate-x-1 bg-white/60"
                         }`}
                       />

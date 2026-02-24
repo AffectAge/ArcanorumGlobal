@@ -93,7 +93,7 @@ export function ColonizationModal({
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <Dialog.Title className="flex items-center gap-2 text-base font-semibold text-white">
-                <Flag size={18} className="text-emerald-300" />
+                <Flag size={18} className="text-emerald-500" />
                 <span className="truncate">Колонизация: {provinceName ?? provinceId ?? "Провинция"}</span>
               </Dialog.Title>
               {provinceId && <div className="text-xs text-white/50">{provinceId}</div>}
@@ -146,11 +146,11 @@ export function ColonizationModal({
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[420px_1fr]">
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <div className="text-xs text-white/50">Стоимость колонизации</div>
-              <div className="mt-1 flex items-center gap-2 text-lg font-semibold text-emerald-300">
+              <div className="mt-1 flex items-center gap-2 text-lg font-semibold text-emerald-500">
                 {colonizationIconUrl ? (
                   <img src={colonizationIconUrl} alt="" className="h-5 w-5 rounded object-contain" />
                 ) : (
-                  <Flag size={18} className="text-emerald-300" />
+                  <Flag size={18} className="text-emerald-500" />
                 )}
                 <span>{colonizationCost}</span>
               </div>
@@ -176,7 +176,7 @@ export function ColonizationModal({
               {formattedAreaKm2 && <div className="mt-1 text-xs text-white/60">Площадь провинции: {formattedAreaKm2}</div>}
               <div className="mt-1 flex items-center justify-between gap-2 text-xs text-white/60">
                 <span>Ваш прогресс: {myProgress.toFixed(1)} / {colonizationCost}</span>
-                <span className="text-emerald-300">{myProgressPct.toFixed(0)}%</span>
+                <span className="text-emerald-500">{myProgressPct.toFixed(0)}%</span>
               </div>
               <div className="mt-2 h-2 rounded-full bg-white/10">
                 <div className="h-full rounded-full bg-emerald-400/85 transition-all" style={{ width: `${myProgressPct}%` }} />
@@ -194,7 +194,7 @@ export function ColonizationModal({
                         ? "text-rose-300"
                         : colonizationLimit.active > 0
                           ? "text-amber-300"
-                          : "text-emerald-300"
+                          : "text-emerald-500"
                     }
                   >
                     {colonizationLimit.active} / {colonizationLimit.max}
@@ -224,7 +224,7 @@ export function ColonizationModal({
                         )}
                         <span className="truncate">{country?.name ?? countryId}</span>
                         <span className="text-white/50">•</span>
-                        <span className="text-emerald-300">
+                        <span className="text-emerald-500">
                           {points.toFixed(1)} ({pct.toFixed(0)}%)
                         </span>
                       </div>
@@ -263,7 +263,7 @@ export function ColonizationModal({
                           )}
                           <span>{country?.name ?? countryId}</span>
                         </div>
-                        <span className="text-emerald-300">
+                        <span className="text-emerald-500">
                           {points.toFixed(1)} / {colonizationCost} ({pct.toFixed(0)}%)
                         </span>
                       </div>

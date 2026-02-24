@@ -208,10 +208,10 @@ export function TopBar({
         ? "text-rose-300"
         : turnTimerRemainingSec <= 60
           ? "text-amber-300"
-          : "text-emerald-300";
+          : "text-emerald-500";
 
   return (
-    <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-[95] rounded-xl px-4 py-3">
+    <header className="glass panel-border pointer-events-auto absolute left-4 right-4 top-3 z-[112] rounded-xl px-4 py-3">
       <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
         <div className="relative z-30 w-fit" onMouseEnter={scheduleCountryHoverOpen} onMouseLeave={closeCountryHover}>
           <button
@@ -268,8 +268,8 @@ export function TopBar({
             const expense = Math.max(0, Math.floor(resourceExpenseByTurn?.[card.key] ?? 0));
             const net = growth - expense;
             const netColorClass =
-              net > 0 ? "text-emerald-300/90" : net < 0 ? "text-rose-300/90" : "text-white/85";
-            const netDetailColorClass = net > 0 ? "text-emerald-300" : net < 0 ? "text-rose-300" : "text-white";
+              net > 0 ? "text-emerald-500/90" : net < 0 ? "text-rose-300/90" : "text-white/85";
+            const netDetailColorClass = net > 0 ? "text-emerald-500" : net < 0 ? "text-rose-300" : "text-white";
             return (
               <div
                 key={card.key}
@@ -340,7 +340,7 @@ export function TopBar({
                             </div>
                             <div className="flex items-center justify-between gap-3">
                               <span>Прирост за ход</span>
-                              <span className="text-emerald-300">+{formatCompact(growth)}</span>
+                              <span className="text-emerald-500">+{formatCompact(growth)}</span>
                             </div>
                             <div className="flex items-center justify-between gap-3">
                               <span>Расход за ход</span>
@@ -361,7 +361,7 @@ export function TopBar({
                                       ? "text-rose-300"
                                       : colonizationLimit.active > 0
                                         ? "text-amber-300"
-                                        : "text-emerald-300"
+                                        : "text-emerald-500"
                                   }
                                 >
                                   {colonizationLimit.active} / {colonizationLimit.max}

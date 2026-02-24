@@ -42,7 +42,7 @@ function statusText(item: TurnStatusItem): string {
 
 function statusClass(item: TurnStatusItem): string {
   if (item.status === "ready") {
-    return "bg-emerald-500/15 text-emerald-300 border-emerald-400/30";
+    return "bg-emerald-500/15 text-emerald-500 border-emerald-400/30";
   }
 
   if (item.status === "waiting") {

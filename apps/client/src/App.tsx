@@ -875,7 +875,7 @@ export default function App() {
       </AnimatePresence>
 
       {auth && (
-        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="pointer-events-none absolute inset-0 z-[70]">
+        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="pointer-events-none absolute inset-0 z-[111]">
           <TopBar
             countryName={country?.name ?? "Безымянная держава"}
             flagUrl={country?.flagUrl}

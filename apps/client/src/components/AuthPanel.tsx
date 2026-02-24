@@ -449,7 +449,7 @@ export function AuthPanel({ onSuccess }: Props) {
                       <span
                         className={`group inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
                           passwordChecks.length
-                            ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                            ? "border-emerald-400/40 text-emerald-500 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
                             : "border-white/10 text-slate-500"
                         }`}
                         aria-label="Проверка длины пароля"
@@ -467,7 +467,7 @@ export function AuthPanel({ onSuccess }: Props) {
                       <span
                         className={`group inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
                           passwordChecks.complexity
-                            ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                            ? "border-emerald-400/40 text-emerald-500 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
                             : "border-white/10 text-slate-500"
                         }`}
                         aria-label="Проверка сложности пароля"
@@ -580,7 +580,7 @@ export function AuthPanel({ onSuccess }: Props) {
                         <span
                           className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
                             registerPasswordChecks.length
-                              ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                              ? "border-emerald-400/40 text-emerald-500 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
                               : "border-white/10 text-slate-500"
                           }`}
                           aria-label="Проверка длины пароля"
@@ -598,7 +598,7 @@ export function AuthPanel({ onSuccess }: Props) {
                         <span
                           className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-white/5 transition ${
                             registerPasswordChecks.complexity
-                              ? "border-emerald-400/40 text-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
+                              ? "border-emerald-400/40 text-emerald-500 shadow-[0_0_14px_rgba(110,231,183,0.2)]"
                               : "border-white/10 text-slate-500"
                           }`}
                           aria-label="Проверка сложности пароля"

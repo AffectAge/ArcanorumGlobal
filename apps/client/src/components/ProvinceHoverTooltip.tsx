@@ -44,7 +44,7 @@ export function ProvinceHoverTooltip({ open, x, y, provinceName, areaKm2, ownerN
         {colonizers.length > 0 && (
           <div className="mt-2 border-t border-white/10 pt-2">
             <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-white/55">
-              <Flag size={12} className="text-emerald-300" />
+              <Flag size={12} className="text-emerald-500" />
               <span>Колонизация</span>
             </div>
             <div className="space-y-1.5">
@@ -55,7 +55,7 @@ export function ProvinceHoverTooltip({ open, x, y, provinceName, areaKm2, ownerN
                     <span className="truncate text-xs text-white/85">{row.countryName}</span>
                     {row.hasQueuedOrder && <Sparkles size={11} className="text-cyan-300" />}
                   </span>
-                  <span className="text-xs font-semibold text-emerald-300">{row.percent.toFixed(0)}%</span>
+                  <span className="text-xs font-semibold text-emerald-500">{row.percent.toFixed(0)}%</span>
                 </div>
               ))}
             </div>

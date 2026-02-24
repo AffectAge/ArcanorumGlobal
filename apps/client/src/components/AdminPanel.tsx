@@ -818,7 +818,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                               type="button"
                               onClick={() => applyPunishment({ action: "unlock" })}
                               disabled={saving}
-                              className="rounded-lg bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-300 disabled:opacity-60"
+                              className="rounded-lg bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-500 disabled:opacity-60"
                             >
                               Снять блокировку
                             </button>

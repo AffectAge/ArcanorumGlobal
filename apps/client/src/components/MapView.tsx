@@ -2,7 +2,7 @@ import { Dialog, Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, Coins, Crosshair, Edit3, Grid3X3, Lock, LockOpen, LocateFixed, Minus, Move, Plus, Search, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, Coins, Crosshair, Edit3, Grid3X3, Lock, LockOpen, LocateFixed, Map as MapIcon, Minus, Move, Plus, Search, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
@@ -251,8 +251,6 @@ export function MapView({
   const [politicalLegendHovered, setPoliticalLegendHovered] = useState(false);
   const [colonizationLegendPinnedOpen, setColonizationLegendPinnedOpen] = useState(false);
   const [colonizationLegendHovered, setColonizationLegendHovered] = useState(false);
-  const [politicalLegendDelayShrink, setPoliticalLegendDelayShrink] = useState(false);
-  const [colonizationLegendDelayShrink, setColonizationLegendDelayShrink] = useState(false);
   const [politicalLegendCountrySearch, setPoliticalLegendCountrySearch] = useState("");
   const [mapModeFadePulse, setMapModeFadePulse] = useState(0);
 
@@ -1067,13 +1065,13 @@ export function MapView({
         ["boolean", ["feature-state", "colonizeDisabled"], false],
         "#b91c1c",
         ["boolean", ["feature-state", "isOwnedByCurrent"], false],
-        "#16a34a",
+        "#4800FF",
         ["boolean", ["feature-state", "isOwned"], false],
-        "#64748b",
+        "#C14D00",
         ["boolean", ["feature-state", "hasOwnColony"], false],
-        "#22c55e",
+        "#5C84FF",
         ["boolean", ["feature-state", "hasForeignColony"], false],
-        "#f59e0b",
+        "#EF9D6E",
         ["step", ["coalesce", ["feature-state", "colonizeCost"], 100], "#d1fae5", 50, "#86efac", 100, "#4ade80", 200, "#16a34a", 350, "#166534"],
       ]);
       map.setPaintProperty("province-fill", "fill-opacity", [
@@ -1103,11 +1101,11 @@ export function MapView({
       map.setPaintProperty("province-line", "line-color", [
         "case",
         ["boolean", ["feature-state", "hasQueuedOwnColonizeOrder"], false],
-        "#22d3ee",
+        "#CE9EFF",
         ["boolean", ["feature-state", "hasOwnColony"], false],
-        "#22c55e",
+        "#5C84FF",
         ["boolean", ["feature-state", "hasForeignColony"], false],
-        "#f59e0b",
+        "#EF9D6E",
         ["boolean", ["feature-state", "colonizeDisabled"], false],
         "#fca5a5",
         "#d1d5db",
@@ -1277,7 +1275,7 @@ export function MapView({
 
   const legendPanelBaseClass =
     "pointer-events-auto absolute z-30 rounded-xl border border-white/10 bg-[#0b111b] text-xs text-white/80 shadow-2xl backdrop-blur-xl";
-  const legendCompactClass = "px-2 py-2";
+  const legendCompactClass = "w-72 px-2 py-2";
   const legendExpandedClass = "w-72 p-3";
   const mapControlsRhythmClass = "h-11 rounded-xl";
 
@@ -1352,14 +1350,14 @@ export function MapView({
             type="button"
             onClick={() => setShowProvinceBorders((v) => !v)}
             className={`group glass panel-border relative flex ${mapControlsRhythmClass} w-11 items-center justify-center overflow-hidden bg-[#0b111b]/86 text-slate-100 transition-colors duration-100 hover:text-arc-accent ${
-              showProvinceBorders ? "border-[#6ee7b7]/50 text-emerald-300 hover:text-emerald-300" : ""
+              showProvinceBorders ? "border-[#6ee7b7]/50 text-emerald-500 hover:text-emerald-500" : ""
             }`}
             aria-label={showProvinceBorders ? "Скрыть границы провинций" : "Показать границы провинций"}
           >
             <Grid3X3
               size={18}
               className={`relative z-10 transition-colors ${
-                showProvinceBorders ? "text-emerald-300" : ""
+                showProvinceBorders ? "text-emerald-500" : ""
               }`}
             />
           </button>
@@ -1448,7 +1446,7 @@ export function MapView({
                         setProvinceRenameInput((getProvinceDisplayName(selectedProvinceId, selectedProvinceDisplayName) ?? "").slice(0, 64));
                         setProvinceRenameModalOpen(true);
                       }}
-                      className="w-full rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-300/55 hover:bg-emerald-400/15"
+                      className="w-full rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500/55 hover:bg-emerald-400/15"
                     >
                       Переименовать провинцию
                     </button>
@@ -1484,30 +1482,17 @@ export function MapView({
 
       {activeMode === "Колонизация" && (
         <motion.div
-          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 transition-[width,padding] duration-200 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
-            isColonizationLegendExpanded || colonizationLegendDelayShrink ? "md:w-72" : "md:w-[176px]"
-          } ${
+          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
             isColonizationLegendExpanded ? legendExpandedClass : legendCompactClass
           }`}
         >
           <button
             type="button"
-            onClick={() =>
-              setColonizationLegendPinnedOpen((v) => {
-                const next = !v;
-                if (next) {
-                  setColonizationLegendDelayShrink(false);
-                } else {
-                  setColonizationLegendDelayShrink(true);
-                  window.setTimeout(() => setColonizationLegendDelayShrink(false), 220);
-                }
-                return next;
-              })
-            }
+            onClick={() => setColonizationLegendPinnedOpen((v) => !v)}
             className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
           >
             <div className="flex items-center gap-2">
-              <Sparkles size={14} className="text-emerald-300" />
+              <Sparkles size={14} className="text-white" />
               <span className="font-semibold text-white">Колонизация</span>
             </div>
             <div className="flex items-center gap-1">
@@ -1524,11 +1509,11 @@ export function MapView({
                 className="space-y-1.5 overflow-hidden"
               >
                 <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#b91c1c]" /> Запрещено</div>
-                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22d3ee]" /> Наш приказ в очереди</div>
-                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#16a34a]" /> Наши провинции</div>
-                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#64748b]" /> Чужие провинции</div>
-                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#22c55e]" /> Наша активная колония</div>
-                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#f59e0b]" /> Чужая активная колония</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#CE9EFF]" /> Наш приказ в очереди</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#4800FF]" /> Наши провинции</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#C14D00]" /> Чужие провинции</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#5C84FF]" /> Наша активная колония</div>
+                <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[#EF9D6E]" /> Чужая активная колония</div>
                 <div className="pt-1 text-white/60">Свободные провинции по стоимости: светлее = дешевле, темнее = дороже</div>
               </motion.div>
             )}
@@ -1538,30 +1523,17 @@ export function MapView({
 
       {activeMode === "Политическая карта" && (
         <motion.div
-          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 transition-[width,padding] duration-200 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
-            isPoliticalLegendExpanded || politicalLegendDelayShrink ? "md:w-72" : "md:w-[210px]"
-          } ${
+          className={`${legendPanelBaseClass} bottom-20 left-4 right-4 md:bottom-4 md:left-1/2 md:right-auto md:ml-[12.3rem] ${
             isPoliticalLegendExpanded ? legendExpandedClass : legendCompactClass
           }`}
         >
           <button
             type="button"
-            onClick={() =>
-              setPoliticalLegendPinnedOpen((v) => {
-                const next = !v;
-                if (next) {
-                  setPoliticalLegendDelayShrink(false);
-                } else {
-                  setPoliticalLegendDelayShrink(true);
-                  window.setTimeout(() => setPoliticalLegendDelayShrink(false), 220);
-                }
-                return next;
-              })
-            }
+            onClick={() => setPoliticalLegendPinnedOpen((v) => !v)}
             className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left"
           >
             <div className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded bg-white shadow-[0_0_8px_rgba(255,255,255,0.15)]" />
+              <MapIcon size={14} className="text-white" />
               <span className="font-semibold text-white">Политическая карта</span>
             </div>
             <div className="flex items-center gap-1">
@@ -1628,15 +1600,6 @@ export function MapView({
                       </Listbox.Options>
                     </div>
                   </Listbox>
-                </div>
-
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-white" /> Нейтральная провинция</div>
-                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-400" /> Провинция страны (цвет страны)</div>
-                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-slate-300" /> Границы провинций</div>
-                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-sky-300/70" /> Контур/подсветка наведения</div>
-                  <div className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-sky-400/50" /> Внешнее кольцо колонизации</div>
-                  <div className="pt-1 text-white/60">Заливка контролируемых провинций отображается цветом соответствующей страны.</div>
                 </div>
 
                 {countries.length > 0 && (
@@ -1781,7 +1744,7 @@ export function MapView({
                         type="button"
                         onClick={() => void handleRenameOwnedProvince()}
                         disabled={provinceRenamePending || !provinceRenameInput.trim()}
-                        className="rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-300/55 hover:bg-emerald-400/20 disabled:opacity-60"
+                        className="rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500/55 hover:bg-emerald-400/20 disabled:opacity-60"
                       >
                         {provinceRenamePending ? "Сохранение..." : "Сохранить"}
                       </button>
