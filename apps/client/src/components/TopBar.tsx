@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, Bell, type LucideIcon } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
@@ -26,7 +26,6 @@ type Props = {
   onOpenGameSettings?: () => void;
   onOpenCountryCustomization?: () => void;
   onOpenClientSettings?: () => void;
-  onOpenNotificationHistory?: () => void;
   onOpenCivilopedia?: () => void;
   resourceIconUrls?: Partial<Record<(typeof cards)[number]["key"], string | null>>;
   resourceGrowthByTurn?: Partial<Record<(typeof cards)[number]["key"], number>>;
@@ -107,8 +106,8 @@ function TopIconActionButton({ label, onClick, icon: Icon, variant = "default" }
       type="button"
     >
       <Icon size={16} className="shrink-0" />
-      <span className="ml-2 max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-150 group-hover:max-w-[120px] group-hover:opacity-100">
-        {label}
+      <span className="ml-2 inline-flex max-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-150 group-hover:max-w-[150px] group-hover:opacity-100">
+        <span>{label}</span>
       </span>
     </button>
   );
@@ -129,7 +128,6 @@ export function TopBar({
   onOpenGameSettings,
   onOpenCountryCustomization,
   onOpenClientSettings,
-  onOpenNotificationHistory,
   onOpenCivilopedia,
   resourceIconUrls,
   resourceGrowthByTurn,
@@ -381,7 +379,6 @@ export function TopBar({
         </div>
 
         <div className="flex justify-end gap-2">
-          <TopIconActionButton label="История уведомлений" onClick={onOpenNotificationHistory} icon={Bell} />
           <TopIconActionButton label="Хранилище знаний" onClick={onOpenCivilopedia} icon={BookOpen} />
           <TopIconActionButton label="Настройки клиента" onClick={onOpenClientSettings} icon={Sliders} />
 

@@ -132,6 +132,11 @@ export default function App() {
   const resetOverlay = useGameStore((s) => s.resetOverlay);
   const updateCountryResources = useGameStore((s) => s.updateCountryResources);
   const eventLog = useGameStore((s) => s.eventLog);
+
+  const pendingDecisionNotificationCount = useMemo(
+    () => uiNotificationHistory.filter((item) => item.action.type === "registration-approval").length,
+    [uiNotificationHistory],
+  );
   const addEvent = useGameStore((s) => s.addEvent);
   const pruneLogEntries = useGameStore((s) => s.pruneLogEntries);
   const trimOldLogEntries = useGameStore((s) => s.trimOldLogEntries);
@@ -870,6 +875,9 @@ export default function App() {
           viewedIds={viewedUiNotificationIds}
           topOffsetPx={80}
           onClickItem={openUiNotification}
+          historyCount={uiNotificationHistory.length}
+          pendingDecisionCount={pendingDecisionNotificationCount}
+          onOpenHistory={() => setNotificationHistoryOpen(true)}
         />
       )}
 
@@ -956,7 +964,6 @@ export default function App() {
             onOpenGameSettings={() => setGameSettingsOpen(true)}
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
             onOpenClientSettings={() => setClientSettingsOpen(true)}
-            onOpenNotificationHistory={() => setNotificationHistoryOpen(true)}
             onOpenCivilopedia={() => {
               setCivilopediaIntent(null);
               setCivilopediaOpen(true);

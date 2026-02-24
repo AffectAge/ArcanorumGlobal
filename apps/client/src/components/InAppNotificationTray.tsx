@@ -29,6 +29,9 @@ type Props = {
   viewedIds?: ReadonlySet<string>;
   topOffsetPx?: number;
   onClickItem: (item: InAppUiNotification) => void;
+  historyCount?: number;
+  pendingDecisionCount?: number;
+  onOpenHistory?: () => void;
 };
 
 function iconForCategory(category: InAppUiNotification["category"]) {
@@ -93,10 +96,52 @@ function categoryLabel(category: InAppUiNotification["category"]): string {
   }
 }
 
-export function InAppNotificationTray({ items, viewedIds, topOffsetPx = 72, onClickItem }: Props) {
+export function InAppNotificationTray({
+  items,
+  viewedIds,
+  topOffsetPx = 72,
+  onClickItem,
+  historyCount = 0,
+  pendingDecisionCount = 0,
+  onOpenHistory,
+}: Props) {
+  const showHistoryButton = historyCount > 0 && Boolean(onOpenHistory);
   return (
     <div className="pointer-events-none absolute left-4 z-[110]" style={{ top: topOffsetPx }}>
-      <div className="flex max-w-[min(70vw,560px)] flex-row-reverse items-start justify-start gap-2">
+      <div className="flex max-w-[min(78vw,720px)] items-start justify-start gap-2">
+        {showHistoryButton && (
+          <motion.div
+            layout
+            initial={{ opacity: 0, y: 18, x: 8, scale: 0.94 }}
+            animate={{ opacity: 1, y: 0, x: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, x: -8, scale: 0.94 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className="pointer-events-auto"
+          >
+            <button
+              type="button"
+              onClick={onOpenHistory}
+              className={`group relative inline-flex h-10 w-10 items-start justify-start overflow-hidden rounded-xl border bg-[#131a22] px-3 py-[11px] shadow-xl shadow-black/35 transition-[width,height,transform] duration-200 hover:h-[56px] hover:w-[220px] hover:scale-[1.03] ${
+                pendingDecisionCount > 0 ? "text-rose-300 border-rose-900/80" : "text-slate-200 border-slate-400/70"
+              }`}
+              aria-label="Открыть историю уведомлений"
+            >
+              <Bell
+                size={17}
+                className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 transition-all duration-200 group-hover:left-3 group-hover:top-[14px] group-hover:translate-x-0 group-hover:translate-y-0"
+              />
+              <span className="relative z-10 ml-6 min-w-0">
+                <span className="block max-w-0 overflow-hidden whitespace-nowrap text-xs font-medium opacity-0 transition-all duration-200 group-hover:max-w-[170px] group-hover:opacity-100">
+                  История уведомлений
+                </span>
+                <span className="block max-h-0 max-w-[170px] overflow-hidden text-[10px] leading-3 text-white/70 opacity-0 transition-all duration-200 group-hover:mt-0.5 group-hover:max-h-8 group-hover:opacity-100">
+                  Открыть список прошлых уведомлений
+                </span>
+              </span>
+            </button>
+          </motion.div>
+        )}
+        <div className="flex max-w-[min(70vw,560px)] flex-row-reverse items-start justify-start gap-2">
         <AnimatePresence initial={false}>
           {items.map((item) => {
             const Icon = iconForCategory(item.category);
@@ -153,6 +198,7 @@ export function InAppNotificationTray({ items, viewedIds, topOffsetPx = 72, onCl
             );
           })}
         </AnimatePresence>
+        </div>
       </div>
     </div>
   );
