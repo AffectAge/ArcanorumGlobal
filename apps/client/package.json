@@ -16,9 +16,11 @@
     "@headlessui/react": "^2.2.0",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-dialog": "^1.1.6",
+    "@xyflow/react": "^12.10.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "colord": "^2.9.3",
+    "elkjs": "^0.11.0",
     "framer-motion": "^11.15.0",
     "lucide-react": "^0.475.0",
     "maplibre-gl": "4.7.1",
@@ -40,4 +42,3 @@
     "vite": "^6.1.0"
   }
 }
-

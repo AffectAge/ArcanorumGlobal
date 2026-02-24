@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Landmark, Wallet, HandCoins, Hammer, Users, Handshake, Shield, FlaskConical, Eye } from "lucide-react";
+import { Landmark, Wallet, HandCoins, Hammer, Users, Handshake, Shield, Eye } from "lucide-react";
 
 const navItems = [
   { key: "politics", label: "Политика", icon: Landmark },
@@ -9,7 +9,6 @@ const navItems = [
   { key: "population", label: "Население", icon: Users },
   { key: "diplomacy", label: "Дипломатия", icon: Handshake },
   { key: "army", label: "Армия", icon: Shield },
-  { key: "technology", label: "Технологии", icon: FlaskConical },
   { key: "intel", label: "Спецслужбы", icon: Eye },
 ];
 
@@ -21,6 +20,7 @@ export function SideNav() {
         return (
           <motion.button
             key={item.key}
+            type="button"
             whileHover={{ x: 6, scale: 1.02 }}
             transition={{ type: "tween", duration: 0.12 }}
             className="group glass panel-border relative flex h-12 w-12 items-center justify-start overflow-hidden rounded-xl px-3 text-slate-100 transition-[width,color] duration-150 hover:w-[164px] hover:text-arc-accent hover:shadow-neon"
