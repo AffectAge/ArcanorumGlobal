@@ -402,7 +402,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                       <section className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Логотип</div>
                         <div className="flex flex-wrap items-start gap-4">
-                          <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-[#131a22]">
+                          <div className="flex h-[88px] w-[88px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-[#131a22]">
                             {draftLogoUrl ? (
                               <img src={draftLogoUrl} alt="Логотип культуры" className="h-full w-full object-cover" />
                             ) : (
@@ -411,38 +411,40 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               </span>
                             )}
                           </div>
-                          <div className="flex min-w-[220px] flex-1 flex-col gap-2">
-                            <label className="panel-border inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg bg-white/5 px-3 text-sm text-white transition hover:text-arc-accent">
-                              <Upload size={14} />
-                              Загрузить логотип
-                              <input
-                                type="file"
-                                accept="image/png,image/svg+xml,image/webp,image/jpeg"
-                                className="hidden"
-                                onChange={(e) => void uploadLogo(e.target.files?.[0] ?? null)}
-                              />
-                            </label>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                if (!selectedCulture) return;
-                                try {
-                                  setSaving(true);
-                                  const result = await adminDeleteCultureLogo(token, selectedCulture.id);
-                                  setCultures(result.cultures);
-                                  setDraftLogoUrl(result.culture.logoUrl);
-                                  setSavedSnapshot(JSON.stringify(result.culture));
-                                } catch {
-                                  toast.error("Не удалось удалить логотип");
-                                } finally {
-                                  setSaving(false);
-                                }
-                              }}
-                              disabled={!selectedCulture || saving}
-                              className="panel-border inline-flex h-10 items-center justify-center rounded-lg bg-white/5 px-3 text-sm text-white/80 transition hover:text-rose-300"
-                            >
-                              Удалить логотип
-                            </button>
+                          <div className="min-w-[220px] flex-1">
+                            <div className="flex min-h-[88px] flex-col justify-center gap-2">
+                              <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg bg-arc-accent px-3 text-sm font-semibold text-black transition hover:brightness-110">
+                                <Upload size={14} />
+                                Загрузить логотип
+                                <input
+                                  type="file"
+                                  accept="image/png,image/svg+xml,image/webp,image/jpeg"
+                                  className="hidden"
+                                  onChange={(e) => void uploadLogo(e.target.files?.[0] ?? null)}
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!selectedCulture) return;
+                                  try {
+                                    setSaving(true);
+                                    const result = await adminDeleteCultureLogo(token, selectedCulture.id);
+                                    setCultures(result.cultures);
+                                    setDraftLogoUrl(result.culture.logoUrl);
+                                    setSavedSnapshot(JSON.stringify(result.culture));
+                                  } catch {
+                                    toast.error("Не удалось удалить логотип");
+                                  } finally {
+                                    setSaving(false);
+                                  }
+                                }}
+                                disabled={!selectedCulture || saving}
+                                className="panel-border inline-flex h-10 items-center justify-center rounded-lg bg-rose-500/10 px-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Удалить логотип
+                              </button>
+                            </div>
                             <div className="text-xs text-white/50">Максимум 64x64. Рекомендуется PNG или SVG.</div>
                           </div>
                         </div>
