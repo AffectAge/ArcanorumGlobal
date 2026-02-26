@@ -3,8 +3,8 @@ import { LinearGradient } from "@visx/gradient";
 import { Group } from "@visx/group";
 import { scaleBand, scaleLinear } from "@visx/scale";
 import { AreaClosed, LinePath } from "@visx/shape";
-import { motion } from "framer-motion";
-import { BarChart3, Globe2, MapPinned, Users, X } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { BarChart3, Briefcase, Flag, Globe2, Layers3, MapPinned, Shield, Sparkles, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -33,6 +33,15 @@ const BREAKDOWN_LABELS: Record<BreakdownKey, string> = {
   religions: "Религии",
   races: "Расы",
   ideologies: "Идеологии",
+};
+
+const BREAKDOWN_ICONS: Record<BreakdownKey, typeof Layers3> = {
+  strata: Layers3,
+  professions: Briefcase,
+  cultures: Sparkles,
+  religions: Shield,
+  races: Flag,
+  ideologies: BarChart3,
 };
 
 const CHART_SURFACE = "#131a22";
@@ -475,12 +484,16 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
               </aside>
 
               <div className="grid min-h-0 gap-4 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
-                <div className="flex items-center gap-5 border-b border-white/10 px-1">
-                  {[
-                    { id: "summary" as const, label: "Сводка" },
-                    { id: "structure" as const, label: "Структура" },
-                    ...(category === "country" ? ([{ id: "groups" as const, label: "POP-группы" }] as const) : []),
-                  ].map((section) => (
+                <div className="border-b border-white/10 px-1 pb-2">
+                  <div className="flex items-center gap-5">
+                    {[
+                      { id: "summary" as const, label: "Сводка", icon: BarChart3 },
+                      { id: "structure" as const, label: "Структура", icon: Layers3 },
+                      ...(category === "country" ? ([{ id: "groups" as const, label: "POP-группы", icon: Users }] as const) : []),
+                    ].map((section) => (
+                      (() => {
+                        const Icon = section.icon;
+                        return (
                     <button
                       key={section.id}
                       type="button"
@@ -489,9 +502,50 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                         tab === section.id ? "border-b-2 border-arc-accent text-arc-accent" : "border-b-2 border-transparent text-white/60 hover:text-white"
                       }`}
                     >
-                      {section.label}
+                      <span className="inline-flex items-center gap-1.5">
+                        <Icon size={13} />
+                        <span>{section.label}</span>
+                      </span>
                     </button>
+                        );
+                      })()
                   ))}
+                  </div>
+                  <AnimatePresence initial={false}>
+                    {tab === "structure" && category !== "provinces" && (
+                      <motion.div
+                        key="structure-breakdowns"
+                        initial={{ opacity: 0, y: -6, height: 0 }}
+                        animate={{ opacity: 1, y: 0, height: "auto" }}
+                        exit={{ opacity: 0, y: -4, height: 0 }}
+                        transition={{ duration: 0.18, ease: "easeOut" }}
+                        className="overflow-hidden"
+                      >
+                        <div className="mt-2 flex flex-wrap items-center gap-4">
+                          {(Object.keys(BREAKDOWN_LABELS) as BreakdownKey[]).map((key) => (
+                            (() => {
+                              const Icon = BREAKDOWN_ICONS[key];
+                              return (
+                                <button
+                                  key={key}
+                                  type="button"
+                                  onClick={() => setBreakdownKey(key)}
+                                  className={`inline-flex items-center gap-1.5 pb-1 text-xs transition ${
+                                    breakdownKey === key
+                                      ? "border-b-2 border-arc-accent text-arc-accent"
+                                      : "border-b-2 border-transparent text-white/60 hover:text-white"
+                                  }`}
+                                >
+                                  <Icon size={12} />
+                                  <span>{BREAKDOWN_LABELS[key]}</span>
+                                </button>
+                              );
+                            })()
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/20 p-3">
@@ -509,24 +563,6 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                           : "Крупнейшие POP-группы страны"}
                     </div>
                   </div>
-                  {tab === "structure" && category !== "provinces" && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {(Object.keys(BREAKDOWN_LABELS) as BreakdownKey[]).map((key) => (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => setBreakdownKey(key)}
-                          className={`rounded-lg border px-2.5 py-1.5 text-xs transition ${
-                            breakdownKey === key
-                              ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
-                              : "border-white/10 bg-black/20 text-white/70"
-                          }`}
-                        >
-                          {BREAKDOWN_LABELS[key]}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
 
                 <div className="min-h-0">
