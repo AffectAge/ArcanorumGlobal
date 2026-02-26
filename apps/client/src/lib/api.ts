@@ -82,12 +82,14 @@ export type PopulationWorldSummaryResponse = {
   };
   breakdowns: PopulationBreakdowns;
   countries: PopulationCountrySummary[];
+  history: Array<{ turnId: number; totalPopulation: number }>;
 };
 
 export type PopulationCountrySummaryResponse = {
   summary: PopulationCountrySummary & { scope: "country"; popGroupCount: number };
   breakdowns: PopulationBreakdowns;
   provinces: PopulationBreakdownRow[];
+  history: Array<{ turnId: number; totalPopulation: number }>;
   topGroups: PopulationPopGroup[];
 };
 
@@ -549,6 +551,73 @@ export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: n
     ...data,
     countries: data.countries.map((c) => ({ ...c, flagUrl: withAssetBase(c.flagUrl) ?? null })),
   };
+}
+
+export async function adminGeneratePopulationBaseline(
+  token: string,
+  payload: {
+    raceId: string;
+    cultureId: string;
+    religionId: string;
+    professionId: string;
+    ideologyId: string;
+    populationPerProvince: number;
+    lowerSharePercent: number;
+    middleSharePercent: number;
+    upperSharePercent: number;
+    provinceScope: "all" | "ownedOnly";
+    replaceExisting: boolean;
+  },
+): Promise<{ ok: true; provincesAffected: number; popGroupCount: number; totalPopulation: number }> {
+  const response = await fetch(`${API}/admin/population/generate-baseline`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_POPULATION_GENERATE_FAILED");
+  }
+  return response.json();
+}
+
+export type AdminPopulationTuning = {
+  birthRateShiftPermille: number;
+  deathRateShiftPermille: number;
+};
+
+export async function adminFetchPopulationTuning(token: string): Promise<AdminPopulationTuning> {
+  const response = await fetch(`${API}/admin/population/tuning`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_POPULATION_TUNING_FETCH_FAILED");
+  }
+  return response.json();
+}
+
+export async function adminUpdatePopulationTuning(
+  token: string,
+  payload: AdminPopulationTuning,
+): Promise<AdminPopulationTuning> {
+  const response = await fetch(`${API}/admin/population/tuning`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_POPULATION_TUNING_UPDATE_FAILED");
+  }
+  const data = (await response.json()) as { tuning: AdminPopulationTuning };
+  return data.tuning;
 }
 
 export async function fetchPopulationWorldSummary(token: string): Promise<PopulationWorldSummaryResponse> {

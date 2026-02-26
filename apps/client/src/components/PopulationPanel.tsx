@@ -1,6 +1,8 @@
 import { Dialog } from "@headlessui/react";
+import { LinearGradient } from "@visx/gradient";
 import { Group } from "@visx/group";
 import { scaleBand, scaleLinear } from "@visx/scale";
+import { AreaClosed, LinePath } from "@visx/shape";
 import { motion } from "framer-motion";
 import { BarChart3, Globe2, MapPinned, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -33,6 +35,12 @@ const BREAKDOWN_LABELS: Record<BreakdownKey, string> = {
   ideologies: "Идеологии",
 };
 
+const CHART_SURFACE = "#131a22";
+const CHART_TRACK = "rgba(255,255,255,0.06)";
+const CHART_GRID = "rgba(255,255,255,0.05)";
+const CHART_TEXT_DIM = "rgba(255,255,255,0.62)";
+const CHART_TEXT = "rgba(255,255,255,0.84)";
+
 function fmtInt(value: number): string {
   return new Intl.NumberFormat("ru-RU").format(Math.round(value));
 }
@@ -50,9 +58,9 @@ function MetricBarsChart({
 }: {
   values: Array<{ label: string; valuePermille: number; color: string }>;
 }) {
-  const width = 420;
+  const width = 360;
   const height = 170;
-  const margin = { top: 14, right: 12, bottom: 16, left: 92 };
+  const margin = { top: 14, right: 10, bottom: 16, left: 78 };
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
   const yScale = scaleBand<string>({
@@ -66,27 +74,35 @@ function MetricBarsChart({
   });
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-[170px] w-full">
-      <Group left={margin.left} top={margin.top}>
-        {values.map((row) => {
-          const y = yScale(row.label) ?? 0;
-          const h = yScale.bandwidth();
-          const w = xScale(Math.max(0, Math.min(1000, row.valuePermille)));
-          return (
-            <g key={row.label}>
-              <text x={-10} y={y + h / 2 + 4} textAnchor="end" fill="rgba(255,255,255,.65)" fontSize="11">
-                {row.label}
-              </text>
-              <rect x={0} y={y} width={innerW} height={h} rx={6} fill="rgba(255,255,255,.05)" />
-              <rect x={0} y={y} width={w} height={h} rx={6} fill={row.color} fillOpacity={0.9} />
-              <text x={Math.min(innerW - 4, w + 6)} y={y + h / 2 + 4} fill="rgba(255,255,255,.85)" fontSize="11">
-                {fmtPercentPermille(row.valuePermille)}
-              </text>
-            </g>
-          );
-        })}
-      </Group>
-    </svg>
+    <div className="arc-scrollbar w-full overflow-x-auto overflow-y-hidden">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-[170px] min-w-[360px] w-full max-w-none">
+        <rect x={0.5} y={0.5} width={width - 1} height={height - 1} rx={12} fill={CHART_SURFACE} stroke="rgba(255,255,255,0.06)" />
+        <Group left={margin.left} top={margin.top}>
+          {values.map((row) => {
+            const y = yScale(row.label) ?? 0;
+            const h = yScale.bandwidth();
+            const w = xScale(Math.max(0, Math.min(1000, row.valuePermille)));
+            return (
+              <g key={row.label}>
+                <text x={-8} y={y + h / 2 + 4} textAnchor="end" fill={CHART_TEXT_DIM} fontSize="10">
+                  {row.label}
+                </text>
+                <rect x={0} y={y} width={innerW} height={h} rx={6} fill={CHART_TRACK} />
+                <rect x={0} y={y} width={w} height={h} rx={6} fill={row.color} fillOpacity={0.8} />
+                <text
+                  x={Math.min(innerW - 4, w + 6)}
+                  y={y + h / 2 + 4}
+                  fill={CHART_TEXT}
+                  fontSize="10"
+                >
+                  {fmtPercentPermille(row.valuePermille)}
+                </text>
+              </g>
+            );
+          })}
+        </Group>
+      </svg>
+    </div>
   );
 }
 
@@ -98,9 +114,9 @@ function BreakdownBarsChart({
   color?: string;
 }) {
   const top = rows.slice(0, 6);
-  const width = 520;
+  const width = 420;
   const height = 240;
-  const margin = { top: 8, right: 14, bottom: 10, left: 170 };
+  const margin = { top: 8, right: 10, bottom: 10, left: 130 };
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
   const yScale = scaleBand<string>({
@@ -111,27 +127,116 @@ function BreakdownBarsChart({
   const xScale = scaleLinear<number>({ domain: [0, 1000], range: [0, innerW] });
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-[240px] w-full">
-      <Group left={margin.left} top={margin.top}>
-        {top.map((row) => {
-          const y = yScale(row.id) ?? 0;
-          const h = yScale.bandwidth();
-          const w = xScale(row.sharePermille);
-          return (
-            <g key={row.id}>
-              <text x={-10} y={y + h / 2 + 4} textAnchor="end" fill="rgba(255,255,255,.72)" fontSize="11">
-                {row.label.length > 22 ? `${row.label.slice(0, 22)}…` : row.label}
-              </text>
-              <rect x={0} y={y} width={innerW} height={h} rx={6} fill="rgba(255,255,255,.04)" />
-              <rect x={0} y={y} width={w} height={h} rx={6} fill={color} fillOpacity={0.85} />
-              <text x={innerW + 6} y={y + h / 2 + 4} fill="rgba(255,255,255,.72)" fontSize="11">
-                {fmtPercentPermille(row.sharePermille)}
-              </text>
-            </g>
-          );
-        })}
-      </Group>
-    </svg>
+    <div className="arc-scrollbar w-full overflow-x-auto overflow-y-hidden">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-[240px] min-w-[420px] w-full max-w-none">
+        <rect x={0.5} y={0.5} width={width - 1} height={height - 1} rx={12} fill={CHART_SURFACE} stroke="rgba(255,255,255,0.06)" />
+        <Group left={margin.left} top={margin.top}>
+          {top.map((row) => {
+            const y = yScale(row.id) ?? 0;
+            const h = yScale.bandwidth();
+            const w = xScale(row.sharePermille);
+            return (
+              <g key={row.id}>
+                <text x={-8} y={y + h / 2 + 4} textAnchor="end" fill={CHART_TEXT_DIM} fontSize="10">
+                  {row.label.length > 16 ? `${row.label.slice(0, 16)}…` : row.label}
+                </text>
+                <rect x={0} y={y} width={innerW} height={h} rx={6} fill={CHART_TRACK} />
+                <rect x={0} y={y} width={w} height={h} rx={6} fill={color} fillOpacity={0.8} />
+                <text x={innerW + 4} y={y + h / 2 + 4} fill={CHART_TEXT_DIM} fontSize="10">
+                  {fmtPercentPermille(row.sharePermille)}
+                </text>
+              </g>
+            );
+          })}
+        </Group>
+      </svg>
+    </div>
+  );
+}
+
+function PopulationHistoryAreaChart({
+  rows,
+  color,
+}: {
+  rows: Array<{ turnId: number; totalPopulation: number }>;
+  color: string;
+}) {
+  const data = rows.slice(-100);
+  const width = 520;
+  const height = 220;
+  const margin = { top: 12, right: 10, bottom: 28, left: 10 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+  const minTurn = data[0]?.turnId ?? 0;
+  const maxTurn = data[data.length - 1]?.turnId ?? 1;
+  const maxPopulation = Math.max(1, ...data.map((d) => d.totalPopulation));
+  const xScale = scaleLinear<number>({
+    domain: [minTurn, Math.max(minTurn + 1, maxTurn)],
+    range: [0, innerW],
+  });
+  const yScale = scaleLinear<number>({
+    domain: [0, maxPopulation],
+    range: [innerH, 0],
+    nice: true,
+  });
+
+  if (data.length < 2) {
+    return <div className="flex h-[220px] items-center justify-center text-xs text-white/50">Недостаточно ходов для графика</div>;
+  }
+
+  return (
+    <div className="arc-scrollbar w-full overflow-x-auto overflow-y-hidden">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-[220px] min-w-[520px] w-full max-w-none">
+        <defs>
+          <LinearGradient id="pop-growth-fill" from={color} to={color} fromOpacity={0.35} toOpacity={0.02} />
+        </defs>
+        <rect x={0.5} y={0.5} width={width - 1} height={height - 1} rx={12} fill={CHART_SURFACE} stroke="rgba(255,255,255,0.06)" />
+        <Group left={margin.left} top={margin.top}>
+          {[0.25, 0.5, 0.75, 1].map((k) => {
+            const y = yScale(maxPopulation * k);
+            return <line key={k} x1={0} x2={innerW} y1={y} y2={y} stroke={CHART_GRID} strokeWidth={1} />;
+          })}
+          <line x1={0} x2={innerW} y1={innerH} y2={innerH} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+          <AreaClosed<{ turnId: number; totalPopulation: number }>
+            data={data}
+            x={(d) => xScale(d.turnId)}
+            y={(d) => yScale(d.totalPopulation)}
+            yScale={yScale}
+            stroke="transparent"
+            fill="url(#pop-growth-fill)"
+          />
+          <LinePath<{ turnId: number; totalPopulation: number }>
+            data={data}
+            x={(d) => xScale(d.turnId)}
+            y={(d) => yScale(d.totalPopulation)}
+            stroke={color}
+            strokeWidth={2.25}
+          />
+          {data.map((d, idx) =>
+            idx === data.length - 1 ? (
+              <circle
+                key={d.turnId}
+                cx={xScale(d.turnId)}
+                cy={yScale(d.totalPopulation)}
+                r={3.5}
+                fill={color}
+                stroke="#0b111b"
+                strokeWidth={1.5}
+              />
+            ) : null,
+          )}
+          <text x={0} y={innerH + 20} fill="rgba(255,255,255,.5)" fontSize="10">
+            Ход {minTurn}
+          </text>
+          <text x={innerW} y={innerH + 20} textAnchor="end" fill="rgba(255,255,255,.5)" fontSize="10">
+            Ход {maxTurn}
+          </text>
+          <text x={innerW} y={10} textAnchor="end" fill={CHART_TEXT_DIM} fontSize="10">
+            {fmtInt(maxPopulation)}
+          </text>
+        </Group>
+      </svg>
+    </div>
   );
 }
 
@@ -139,12 +244,14 @@ function SummaryCards({
   title,
   summary,
   strataRows,
+  historyRows,
 }: {
   title: string;
   summary:
     | PopulationWorldSummaryResponse["summary"]
     | PopulationCountrySummaryResponse["summary"];
   strataRows?: PopulationBreakdownRow[];
+  historyRows?: Array<{ turnId: number; totalPopulation: number }>;
 }) {
   const cards = [
     { label: "Население", value: fmtInt(summary.totalPopulation), tone: "text-white" },
@@ -172,25 +279,35 @@ function SummaryCards({
         ))}
       </div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+        <div className="arc-scrollbar overflow-x-auto overflow-y-hidden rounded-xl border border-white/10 bg-black/20 p-3">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Показатели</div>
           <MetricBarsChart
             values={[
               { label: "Лояльность", valuePermille: summary.avgLoyalty, color: "#34d399" },
               { label: "Радикализм", valuePermille: summary.avgRadicalism, color: "#fb7185" },
-              { label: "Занятость", valuePermille: 1000 - summary.unemploymentPermille, color: "#60a5fa" },
-              { label: "Миграция", valuePermille: summary.avgMigrationDesire, color: "#fbbf24" },
+              { label: "Занятость", valuePermille: 1000 - summary.unemploymentPermille, color: "#22d3ee" },
+              { label: "Миграция", valuePermille: summary.avgMigrationDesire, color: "#f59e0b" },
             ]}
           />
         </div>
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+        <div className="arc-scrollbar overflow-x-auto overflow-y-hidden rounded-xl border border-white/10 bg-black/20 p-3">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Страты</div>
           {strataRows && strataRows.length > 0 ? (
-            <BreakdownBarsChart rows={strataRows} color="#38bdf8" />
+            <BreakdownBarsChart rows={strataRows} color="#22d3ee" />
           ) : (
             <div className="flex h-[240px] items-center justify-center text-xs text-white/50">Нет данных</div>
           )}
         </div>
+      </div>
+      <div className="arc-scrollbar overflow-x-auto overflow-y-hidden rounded-xl border border-white/10 bg-black/20 p-3">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Рост населения (последние 100 ходов)
+        </div>
+        {historyRows && historyRows.length > 1 ? (
+          <PopulationHistoryAreaChart rows={historyRows} color="#2dd4bf" />
+        ) : (
+          <div className="flex h-[220px] items-center justify-center text-xs text-white/50">История населения ещё не накоплена</div>
+        )}
       </div>
     </div>
   );
@@ -418,11 +535,14 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                       Загрузка статистики...
                     </div>
                   ) : tab === "summary" ? (
-                    <SummaryCards
-                      title={category === "country" ? "Моя страна" : "Мир"}
-                      summary={activeData.summary}
-                      strataRows={activeData.breakdowns?.strata}
-                    />
+                    <div className="arc-scrollbar h-full overflow-auto pr-1">
+                      <SummaryCards
+                        title={category === "country" ? "Моя страна" : "Мир"}
+                        summary={activeData.summary}
+                        strataRows={activeData.breakdowns?.strata}
+                        historyRows={activeData.history}
+                      />
+                    </div>
                   ) : tab === "structure" && category !== "provinces" ? (
                     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
                       <section className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-3">
@@ -436,7 +556,7 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                               type="button"
                               onClick={() => setSelectedRowId(row.id)}
                               className={`w-full rounded-lg border px-3 py-2 text-left transition ${
-                                selectedProvinceRow?.id === row.id
+                                selectedRow?.id === row.id
                                   ? "border-arc-accent/30 bg-arc-accent/10"
                                   : "border-white/10 bg-black/20 hover:border-white/15"
                               }`}
@@ -474,11 +594,11 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                                 </div>
                               ))}
                             </div>
-                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="arc-scrollbar overflow-x-auto overflow-y-hidden rounded-xl border border-white/10 bg-[#131a22] p-3">
                               <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                                 Топ {BREAKDOWN_LABELS[breakdownKey]}
                               </div>
-                              <BreakdownBarsChart rows={activeRows} color="#22d3ee" />
+                              <BreakdownBarsChart rows={activeRows} color="#2dd4bf" />
                             </div>
                           </div>
                         ) : (
@@ -536,11 +656,11 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                                     </div>
                                   ))}
                                 </div>
-                                <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                                <div className="arc-scrollbar overflow-x-auto overflow-y-hidden rounded-xl border border-white/10 bg-[#131a22] p-3">
                                   <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                                     Топ провинций по населению
                                   </div>
-                                  <BreakdownBarsChart rows={provinceRows} color="#a78bfa" />
+                                  <BreakdownBarsChart rows={provinceRows} color="#22d3ee" />
                                 </div>
                               </div>
                             );

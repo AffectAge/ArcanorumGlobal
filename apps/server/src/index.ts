@@ -311,6 +311,10 @@ type GameSettings = {
     enabled: boolean;
     secondsPerTurn: number;
   };
+  population: {
+    birthRateShiftPermille: number;
+    deathRateShiftPermille: number;
+  };
   map: {
     showAntarctica: boolean;
     backgroundImageUrl: string | null;
@@ -490,10 +494,43 @@ function summarizePopulationByCountry(
   return result;
 }
 
-function makePopulationState(popGroups: PopGroup[], provinceOwner: Record<string, string>): PopulationState {
+function appendPopulationHistorySnapshot(
+  history: PopulationState["history"],
+  popGroups: PopGroup[],
+  provinceOwner: Record<string, string>,
+  turnIdForSnapshot: number,
+): PopulationState["history"] {
+  if (turnIdForSnapshot <= 0) return history;
+  const worldTotalPopulation = popGroups.reduce((sum, g) => sum + g.size, 0);
+  const countryTotals: Record<string, number> = {};
+  for (const g of popGroups) {
+    const ownerId = provinceOwner[g.provinceId];
+    if (!ownerId) continue;
+    countryTotals[ownerId] = (countryTotals[ownerId] ?? 0) + g.size;
+  }
+  const next = [...history];
+  const idx = next.findIndex((h) => h.turnId === turnIdForSnapshot);
+  const snapshot = { turnId: turnIdForSnapshot, worldTotalPopulation, countryTotals };
+  if (idx >= 0) next[idx] = snapshot;
+  else next.push(snapshot);
+  next.sort((a, b) => a.turnId - b.turnId);
+  return next.slice(-100);
+}
+
+function makePopulationState(
+  popGroups: PopGroup[],
+  provinceOwner: Record<string, string>,
+  opts?: { history?: PopulationState["history"]; turnId?: number },
+): PopulationState {
   const provinceSummaries = summarizePopulationByProvince(popGroups);
   const countrySummaries = summarizePopulationByCountry(popGroups, provinceOwner);
-  return { popGroups, provinceSummaries, countrySummaries };
+  const history = appendPopulationHistorySnapshot(
+    Array.isArray(opts?.history) ? opts!.history : [],
+    popGroups,
+    provinceOwner,
+    typeof opts?.turnId === "number" ? opts.turnId : 0,
+  );
+  return { popGroups, provinceSummaries, countrySummaries, history };
 }
 
 function normalizePopStrata(value: unknown): PopStrata {
@@ -507,10 +544,11 @@ function normalizePopulationState(
   currentTurnId: number,
 ): PopulationState {
   if (!input || typeof input !== "object") {
-    return makePopulationState(defaultPopGroups(provinceOwner, currentTurnId), provinceOwner);
+    return makePopulationState(defaultPopGroups(provinceOwner, currentTurnId), provinceOwner, { turnId: currentTurnId });
   }
-  const state = input as Partial<{ popGroups?: unknown; provinceSummaries?: unknown; countrySummaries?: unknown }>;
+  const state = input as Partial<{ popGroups?: unknown; provinceSummaries?: unknown; countrySummaries?: unknown; history?: unknown }>;
   const rawGroups = Array.isArray(state.popGroups) ? state.popGroups : [];
+  const rawHistory = Array.isArray(state.history) ? state.history : [];
   const groups: PopGroup[] = [];
   for (const raw of rawGroups) {
     if (!raw || typeof raw !== "object") continue;
@@ -539,9 +577,31 @@ function normalizePopulationState(
     });
   }
   if (groups.length === 0) {
-    return makePopulationState(defaultPopGroups(provinceOwner, currentTurnId), provinceOwner);
+    return makePopulationState(defaultPopGroups(provinceOwner, currentTurnId), provinceOwner, { turnId: currentTurnId });
   }
-  return makePopulationState(groups, provinceOwner);
+  const history = rawHistory
+    .map((raw) => {
+      if (!raw || typeof raw !== "object") return null;
+      const row = raw as Partial<{ turnId: unknown; worldTotalPopulation: unknown; countryTotals: unknown }>;
+      if (typeof row.turnId !== "number" || !Number.isFinite(row.turnId)) return null;
+      const countryTotalsRaw = row.countryTotals && typeof row.countryTotals === "object" ? (row.countryTotals as Record<string, unknown>) : {};
+      const countryTotals: Record<string, number> = {};
+      for (const [k, v] of Object.entries(countryTotalsRaw)) {
+        if (typeof v !== "number" || !Number.isFinite(v)) continue;
+        countryTotals[k] = Math.max(0, Math.floor(v));
+      }
+      return {
+        turnId: Math.max(1, Math.floor(row.turnId)),
+        worldTotalPopulation:
+          typeof row.worldTotalPopulation === "number" && Number.isFinite(row.worldTotalPopulation)
+            ? Math.max(0, Math.floor(row.worldTotalPopulation))
+            : 0,
+        countryTotals,
+      };
+    })
+    .filter((v): v is PopulationState["history"][number] => Boolean(v))
+    .slice(-100);
+  return makePopulationState(groups, provinceOwner, { history, turnId: currentTurnId });
 }
 
 function defaultPopGroups(provinceOwner: Record<string, string>, _currentTurnId: number): PopGroup[] {
@@ -763,18 +823,25 @@ function sanitizePopulationContentReferences(base: WorldBase): boolean {
   });
 
   if (changed) {
-    base.population = makePopulationState(mergePopGroups(sanitized), base.provinceOwner);
+    base.population = makePopulationState(mergePopGroups(sanitized), base.provinceOwner, {
+      history: base.population.history,
+      turnId: base.turnId,
+    });
   }
   return changed;
 }
 
 function applyPopulationTurnStep(base: WorldBase): void {
   sanitizePopulationContentReferences(base);
+  const birthShiftPermille = clampInt(gameSettings.population.birthRateShiftPermille ?? 0, -200, 200);
+  const deathShiftPermille = clampInt(gameSettings.population.deathRateShiftPermille ?? 0, -200, 200);
   const nextGroups: PopGroup[] = [];
   for (const pop of base.population.popGroups) {
     if (pop.size <= 0) continue;
-    const births = Math.floor((pop.size * Math.max(0, pop.birthRatePermille)) / 1000);
-    const deaths = Math.floor((pop.size * Math.max(0, pop.deathRatePermille)) / 1000);
+    const effectiveBirthRatePermille = clampInt(pop.birthRatePermille + birthShiftPermille, 0, 200);
+    const effectiveDeathRatePermille = clampInt(pop.deathRatePermille + deathShiftPermille, 0, 200);
+    const births = Math.floor((pop.size * effectiveBirthRatePermille) / 1000);
+    const deaths = Math.floor((pop.size * effectiveDeathRatePermille) / 1000);
     const nextSize = Math.max(0, pop.size + births - deaths);
     if (nextSize <= 0) continue;
 
@@ -806,7 +873,10 @@ function applyPopulationTurnStep(base: WorldBase): void {
   }
 
   const merged = mergePopGroups(nextGroups);
-  base.population = makePopulationState(merged, base.provinceOwner);
+  base.population = makePopulationState(merged, base.provinceOwner, {
+    history: base.population.history,
+    turnId: base.turnId + 1,
+  });
 }
 
 type PopulationBreakdownRow = {
@@ -904,6 +974,10 @@ function buildPopulationBreakdowns(groups: PopGroup[]): PopulationBreakdowns {
     professions: aggregatePopulationBreakdown(groups, (g) => g.professionId, (id) => names.professions.get(id) ?? id),
     ideologies: aggregatePopulationBreakdown(groups, (g) => g.ideologyId, (id) => names.ideologies.get(id) ?? id),
   };
+}
+
+function getAllProvinceIdsFromAdm1(): string[] {
+  return adm1ProvinceIndex.map((province) => province.id);
 }
 
 function defaultCivilopediaEntries(): GameSettings["civilopedia"]["entries"] {
@@ -1127,6 +1201,10 @@ const defaultGameSettings = (): GameSettings => ({
     enabled: true,
     secondsPerTurn: 86_400,
   },
+  population: {
+    birthRateShiftPermille: 0,
+    deathRateShiftPermille: 0,
+  },
   map: {
     showAntarctica: false,
     backgroundImageUrl: null,
@@ -1156,9 +1234,11 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
-    population: { popGroups: [], provinceSummaries: {}, countrySummaries: {} },
+    population: { popGroups: [], provinceSummaries: {}, countrySummaries: {}, history: [] },
   };
-  base.population = makePopulationState(defaultPopGroups(base.provinceOwner, currentTurnId), base.provinceOwner);
+  base.population = makePopulationState(defaultPopGroups(base.provinceOwner, currentTurnId), base.provinceOwner, {
+    turnId: currentTurnId,
+  });
   return base;
 }
 
@@ -1289,6 +1369,24 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof (next as Partial<{ turnTimer?: { secondsPerTurn?: unknown } }>).turnTimer?.secondsPerTurn === "number"
             ? Math.max(10, Math.floor((next as Partial<{ turnTimer?: { secondsPerTurn?: number } }>).turnTimer?.secondsPerTurn ?? defaults.turnTimer.secondsPerTurn))
             : defaults.turnTimer.secondsPerTurn,
+      },
+      population: {
+        birthRateShiftPermille:
+          typeof (next as Partial<{ population?: { birthRateShiftPermille?: unknown } }>).population?.birthRateShiftPermille === "number"
+            ? clampInt(
+                Number((next as Partial<{ population?: { birthRateShiftPermille?: number } }>).population?.birthRateShiftPermille ?? 0),
+                -200,
+                200,
+              )
+            : defaults.population.birthRateShiftPermille,
+        deathRateShiftPermille:
+          typeof (next as Partial<{ population?: { deathRateShiftPermille?: unknown } }>).population?.deathRateShiftPermille === "number"
+            ? clampInt(
+                Number((next as Partial<{ population?: { deathRateShiftPermille?: number } }>).population?.deathRateShiftPermille ?? 0),
+                -200,
+                200,
+              )
+            : defaults.population.deathRateShiftPermille,
       },
       map: {
         showAntarctica:
@@ -2297,6 +2395,12 @@ const gameSettingsSchema = z.object({
       secondsPerTurn: z.coerce.number().int().min(10).max(2_592_000).optional(),
     })
     .optional(),
+  population: z
+    .object({
+      birthRateShiftPermille: z.coerce.number().int().min(-200).max(200).optional(),
+      deathRateShiftPermille: z.coerce.number().int().min(-200).max(200).optional(),
+    })
+    .optional(),
   map: z
     .object({
       showAntarctica: z.boolean().optional(),
@@ -2332,6 +2436,43 @@ app.get("/admin/civilopedia", async (req, res) => {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
   return res.json({ civilopedia: gameSettings.civilopedia });
+});
+
+app.get("/admin/population/tuning", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  return res.json({
+    birthRateShiftPermille: gameSettings.population.birthRateShiftPermille,
+    deathRateShiftPermille: gameSettings.population.deathRateShiftPermille,
+  });
+});
+
+const populationTuningSchema = z.object({
+  birthRateShiftPermille: z.coerce.number().int().min(-200).max(200),
+  deathRateShiftPermille: z.coerce.number().int().min(-200).max(200),
+});
+
+app.patch("/admin/population/tuning", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsed = populationTuningSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_BODY", issues: parsed.error.flatten() });
+  }
+  gameSettings.population.birthRateShiftPermille = clampInt(parsed.data.birthRateShiftPermille, -200, 200);
+  gameSettings.population.deathRateShiftPermille = clampInt(parsed.data.deathRateShiftPermille, -200, 200);
+  savePersistentState();
+  return res.json({
+    ok: true,
+    tuning: {
+      birthRateShiftPermille: gameSettings.population.birthRateShiftPermille,
+      deathRateShiftPermille: gameSettings.population.deathRateShiftPermille,
+    },
+  });
 });
 
 const civilopediaUpdateSchema = z.object({
@@ -2535,6 +2676,19 @@ const culturePayloadSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().trim().max(5000).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+});
+const populationBaselineGenerateSchema = z.object({
+  raceId: z.string().trim().min(1).max(200),
+  cultureId: z.string().trim().min(1).max(200),
+  religionId: z.string().trim().min(1).max(200),
+  professionId: z.string().trim().min(1).max(200),
+  ideologyId: z.string().trim().min(1).max(200),
+  populationPerProvince: z.coerce.number().int().min(1).max(100_000_000),
+  lowerSharePercent: z.coerce.number().int().min(0).max(100).default(78),
+  middleSharePercent: z.coerce.number().int().min(0).max(100).default(18),
+  upperSharePercent: z.coerce.number().int().min(0).max(100).default(4),
+  provinceScope: z.enum(["all", "ownedOnly"]).default("all"),
+  replaceExisting: z.boolean().default(true),
 });
 
 const contentEntryKindSchema = z.enum(["cultures", "races", "religions", "professions", "ideologies"]);
@@ -2982,6 +3136,10 @@ app.get("/population/summary/world", async (req, res) => {
     summary,
     breakdowns: buildPopulationBreakdowns(groups),
     countries,
+    history: worldBase.population.history.map((h) => ({
+      turnId: h.turnId,
+      totalPopulation: h.worldTotalPopulation,
+    })),
   });
 });
 
@@ -3013,7 +3171,92 @@ app.get("/population/summary/country/:countryId", async (req, res) => {
     summary: { ...summary, scope: "country" as const, popGroupCount: groups.length },
     breakdowns: buildPopulationBreakdowns(groups),
     provinces: aggregatePopulationBreakdown(groups, (g) => g.provinceId, (id) => id),
+    history: worldBase.population.history.map((h) => ({
+      turnId: h.turnId,
+      totalPopulation: h.countryTotals[countryId] ?? 0,
+    })),
     topGroups,
+  });
+});
+
+app.post("/admin/population/generate-baseline", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsed = populationBaselineGenerateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const data = parsed.data;
+  const shareSum = data.lowerSharePercent + data.middleSharePercent + data.upperSharePercent;
+  if (shareSum <= 0) {
+    return res.status(400).json({ error: "INVALID_STRATA_SHARES" });
+  }
+
+  const races = new Set(gameSettings.content.races.map((v) => v.id));
+  const cultures = new Set(gameSettings.content.cultures.map((v) => v.id));
+  const religions = new Set(gameSettings.content.religions.map((v) => v.id));
+  const professions = new Set(gameSettings.content.professions.map((v) => v.id));
+  const ideologies = new Set(gameSettings.content.ideologies.map((v) => v.id));
+  if (!races.has(data.raceId)) return res.status(400).json({ error: "INVALID_RACE_ID" });
+  if (!cultures.has(data.cultureId)) return res.status(400).json({ error: "INVALID_CULTURE_ID" });
+  if (!religions.has(data.religionId)) return res.status(400).json({ error: "INVALID_RELIGION_ID" });
+  if (!professions.has(data.professionId)) return res.status(400).json({ error: "INVALID_PROFESSION_ID" });
+  if (!ideologies.has(data.ideologyId)) return res.status(400).json({ error: "INVALID_IDEOLOGY_ID" });
+
+  const allProvinceIds = getAllProvinceIdsFromAdm1();
+  const targetProvinceIds = allProvinceIds.filter((provinceId) =>
+    data.provinceScope === "ownedOnly" ? Boolean(worldBase.provinceOwner[provinceId]) : true,
+  );
+
+  const nextGroups: PopGroup[] = data.replaceExisting
+    ? worldBase.population.popGroups.filter((g) => !targetProvinceIds.includes(g.provinceId))
+    : [...worldBase.population.popGroups];
+
+  const normalizedPopulationPerProvince = Math.max(1, data.populationPerProvince);
+  for (const provinceId of targetProvinceIds) {
+    const lowerSize = Math.floor((normalizedPopulationPerProvince * data.lowerSharePercent) / shareSum);
+    const middleSize = Math.floor((normalizedPopulationPerProvince * data.middleSharePercent) / shareSum);
+    const upperSize = Math.max(0, normalizedPopulationPerProvince - lowerSize - middleSize);
+    const rows: Array<{ strata: PopStrata; size: number; wealthX100: number; employment: number; birthRatePermille: number; deathRatePermille: number }> = [
+      { strata: "lower", size: lowerSize, wealthX100: 700, employment: 820, birthRatePermille: 19, deathRatePermille: 12 },
+      { strata: "middle", size: middleSize, wealthX100: 1500, employment: 900, birthRatePermille: 15, deathRatePermille: 10 },
+      { strata: "upper", size: upperSize, wealthX100: 3800, employment: 950, birthRatePermille: 11, deathRatePermille: 9 },
+    ];
+    for (const row of rows) {
+      if (row.size <= 0) continue;
+      nextGroups.push({
+        id: randomUUID(),
+        provinceId,
+        raceId: data.raceId,
+        cultureId: data.cultureId,
+        religionId: data.religionId,
+        professionId: data.professionId,
+        ideologyId: data.ideologyId,
+        strata: row.strata,
+        size: row.size,
+        wealthX100: row.wealthX100,
+        loyalty: 550,
+        radicalism: 120,
+        employment: row.employment,
+        migrationDesire: 90,
+        birthRatePermille: row.birthRatePermille,
+        deathRatePermille: row.deathRatePermille,
+      });
+    }
+  }
+
+  worldBase.population = makePopulationState(mergePopGroups(nextGroups), worldBase.provinceOwner, {
+    history: worldBase.population.history,
+    turnId: worldBase.turnId,
+  });
+  savePersistentState();
+  return res.json({
+    ok: true,
+    provincesAffected: targetProvinceIds.length,
+    popGroupCount: worldBase.population.popGroups.length,
+    totalPopulation: Object.values(worldBase.population.countrySummaries).reduce((sum, c) => sum + c.totalPopulation, 0),
   });
 });
 
@@ -3126,6 +3369,16 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
     if (turnTimerConfigChanged) {
       resetTurnTimerAnchor();
+    }
+  }
+
+  const nextPopulation = parsed.data.population;
+  if (nextPopulation) {
+    if (typeof nextPopulation.birthRateShiftPermille === "number") {
+      gameSettings.population.birthRateShiftPermille = clampInt(nextPopulation.birthRateShiftPermille, -200, 200);
+    }
+    if (typeof nextPopulation.deathRateShiftPermille === "number") {
+      gameSettings.population.deathRateShiftPermille = clampInt(nextPopulation.deathRateShiftPermille, -200, 200);
     }
   }
 

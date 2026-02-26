@@ -107,6 +107,11 @@ export type PopulationState = {
   popGroups: PopGroup[];
   provinceSummaries: Record<string, ProvincePopulationSummary>;
   countrySummaries: Record<string, CountryPopulationSummary>;
+  history: Array<{
+    turnId: number;
+    worldTotalPopulation: number;
+    countryTotals: Record<string, number>;
+  }>;
 };
 
 export type WorldBase = {
