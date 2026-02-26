@@ -5,3 +5,4 @@ node_modules
 *.log
 apps/server/prisma/dev.db
 apps/server/prisma/dev.db
+apps/server/prisma/dev.db
