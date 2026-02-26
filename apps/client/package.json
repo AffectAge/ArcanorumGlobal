@@ -16,6 +16,7 @@
     "@headlessui/react": "^2.2.0",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-dialog": "^1.1.6",
+    "@visx/visx": "^3.12.0",
     "@xyflow/react": "^12.10.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

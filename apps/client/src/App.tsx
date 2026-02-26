@@ -18,6 +18,7 @@ import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
+import { PopulationPanel } from "./components/PopulationPanel";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -65,6 +66,7 @@ export default function App() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [contentPanelOpen, setContentPanelOpen] = useState(false);
+  const [populationPanelOpen, setPopulationPanelOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
@@ -994,7 +996,7 @@ export default function App() {
             countryDetails={currentCountryDetails}
             turnTimer={turnTimerUi}
           />
-          <SideNav />
+          <SideNav onOpenPopulation={() => setPopulationPanelOpen(true)} />
           <EventLogPanel
             entries={eventLog}
             currentCountryId={auth.countryId}
@@ -1011,6 +1013,15 @@ export default function App() {
           open={contentPanelOpen}
           token={auth.token}
           onClose={() => setContentPanelOpen(false)}
+        />
+      )}
+
+      {auth?.token && (
+        <PopulationPanel
+          open={populationPanelOpen}
+          token={auth.token}
+          countryId={auth.countryId}
+          onClose={() => setPopulationPanelOpen(false)}
         />
       )}
 

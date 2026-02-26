@@ -17,6 +17,80 @@ export type ContentCulture = {
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind = "cultures" | "races" | "religions" | "professions" | "ideologies";
 
+export type PopulationBreakdownRow = {
+  id: string;
+  label: string;
+  size: number;
+  sharePermille: number;
+  avgWealthX100: number;
+  avgLoyalty: number;
+  avgRadicalism: number;
+  avgEmployment: number;
+  avgMigrationDesire: number;
+};
+
+export type PopulationBreakdowns = {
+  strata: PopulationBreakdownRow[];
+  races: PopulationBreakdownRow[];
+  cultures: PopulationBreakdownRow[];
+  religions: PopulationBreakdownRow[];
+  professions: PopulationBreakdownRow[];
+  ideologies: PopulationBreakdownRow[];
+};
+
+export type PopulationCountrySummary = {
+  countryId: string;
+  totalPopulation: number;
+  employedPopulation: number;
+  unemploymentPermille: number;
+  avgWealthX100: number;
+  avgLoyalty: number;
+  avgRadicalism: number;
+  avgMigrationDesire: number;
+};
+
+export type PopulationPopGroup = {
+  id: string;
+  provinceId: string;
+  raceId: string;
+  cultureId: string;
+  religionId: string;
+  professionId: string;
+  ideologyId: string;
+  strata: "lower" | "middle" | "upper";
+  size: number;
+  wealthX100: number;
+  loyalty: number;
+  radicalism: number;
+  employment: number;
+  migrationDesire: number;
+  birthRatePermille: number;
+  deathRatePermille: number;
+};
+
+export type PopulationWorldSummaryResponse = {
+  summary: {
+    scope: "world";
+    totalPopulation: number;
+    employedPopulation: number;
+    unemploymentPermille: number;
+    avgWealthX100: number;
+    avgLoyalty: number;
+    avgRadicalism: number;
+    avgMigrationDesire: number;
+    popGroupCount: number;
+  };
+  breakdowns: PopulationBreakdowns;
+  countries: PopulationCountrySummary[];
+};
+
+export type PopulationCountrySummaryResponse = {
+  summary: PopulationCountrySummary & { scope: "country"; popGroupCount: number };
+  breakdowns: PopulationBreakdowns;
+  provinces: PopulationBreakdownRow[];
+  topGroups: PopulationPopGroup[];
+};
+
 
 function withAssetBase(url?: string | null): string | null | undefined {
   if (!url) {
@@ -475,6 +549,31 @@ export async function fetchTurnStatus(): Promise<{ turnId: number; readyCount: n
     ...data,
     countries: data.countries.map((c) => ({ ...c, flagUrl: withAssetBase(c.flagUrl) ?? null })),
   };
+}
+
+export async function fetchPopulationWorldSummary(token: string): Promise<PopulationWorldSummaryResponse> {
+  const response = await fetch(`${API}/population/summary/world`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "POPULATION_WORLD_FAILED");
+  }
+  return response.json();
+}
+
+export async function fetchPopulationCountrySummary(
+  token: string,
+  countryId: string,
+): Promise<PopulationCountrySummaryResponse> {
+  const response = await fetch(`${API}/population/summary/country/${encodeURIComponent(countryId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "POPULATION_COUNTRY_FAILED");
+  }
+  return response.json();
 }
 
 export async function fetchPendingUiNotifications(token: string): Promise<UiNotificationItem[]> {

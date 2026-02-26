@@ -60,6 +60,55 @@ export type OrderDelta = {
   order: Omit<Order, "id" | "createdAt">;
 };
 
+export type PopStrata = "lower" | "middle" | "upper";
+
+export type PopGroup = {
+  id: string;
+  provinceId: string;
+  raceId: string;
+  cultureId: string;
+  religionId: string;
+  professionId: string;
+  ideologyId: string;
+  strata: PopStrata;
+  size: number;
+  wealthX100: number;
+  loyalty: number; // 0..1000
+  radicalism: number; // 0..1000
+  employment: number; // 0..1000
+  migrationDesire: number; // 0..1000
+  birthRatePermille: number;
+  deathRatePermille: number;
+};
+
+export type ProvincePopulationSummary = {
+  provinceId: string;
+  totalPopulation: number;
+  employedPopulation: number;
+  unemploymentPermille: number;
+  avgWealthX100: number;
+  avgLoyalty: number;
+  avgRadicalism: number;
+  avgMigrationDesire: number;
+};
+
+export type CountryPopulationSummary = {
+  countryId: string;
+  totalPopulation: number;
+  employedPopulation: number;
+  unemploymentPermille: number;
+  avgWealthX100: number;
+  avgLoyalty: number;
+  avgRadicalism: number;
+  avgMigrationDesire: number;
+};
+
+export type PopulationState = {
+  popGroups: PopGroup[];
+  provinceSummaries: Record<string, ProvincePopulationSummary>;
+  countrySummaries: Record<string, CountryPopulationSummary>;
+};
+
 export type WorldBase = {
   turnId: number;
   resourcesByCountry: Record<string, ResourceTotals>;
@@ -67,6 +116,7 @@ export type WorldBase = {
   provinceNameById: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
+  population: PopulationState;
 };
 
 export type WorldPatch = {

@@ -12,7 +12,11 @@ const navItems = [
   { key: "intel", label: "Спецслужбы", icon: Eye },
 ];
 
-export function SideNav() {
+type Props = {
+  onOpenPopulation?: () => void;
+};
+
+export function SideNav({ onOpenPopulation }: Props) {
   return (
     <aside className="pointer-events-auto absolute left-4 top-36 z-40 hidden flex-col gap-2 xl:flex">
       {navItems.map((item) => {
@@ -21,6 +25,7 @@ export function SideNav() {
           <motion.button
             key={item.key}
             type="button"
+            onClick={item.key === "population" ? onOpenPopulation : undefined}
             whileHover={{ x: 6, scale: 1.02 }}
             transition={{ type: "tween", duration: 0.12 }}
             className="group glass panel-border relative flex h-10 w-10 items-center justify-start overflow-hidden rounded-xl px-3 text-slate-100 transition-[width,color] duration-150 hover:w-[164px] hover:text-arc-accent hover:shadow-neon"
