@@ -2,7 +2,7 @@ import { Dialog } from "@headlessui/react";
 import { LinearGradient } from "@visx/gradient";
 import { Group } from "@visx/group";
 import { scaleBand, scaleLinear } from "@visx/scale";
-import { AreaClosed, LinePath } from "@visx/shape";
+import { AreaClosed, LinePath, Pie } from "@visx/shape";
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChart3, Briefcase, Flag, Globe2, Layers3, MapPinned, Shield, Sparkles, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -49,6 +49,7 @@ const CHART_TRACK = "rgba(255,255,255,0.06)";
 const CHART_GRID = "rgba(255,255,255,0.05)";
 const CHART_TEXT_DIM = "rgba(255,255,255,0.62)";
 const CHART_TEXT = "rgba(255,255,255,0.84)";
+const MAX_BREAKDOWN_CHART_ITEMS = 10;
 
 function fmtInt(value: number): string {
   return new Intl.NumberFormat("ru-RU").format(Math.round(value));
@@ -60,6 +61,115 @@ function fmtPercentPermille(value: number): string {
 
 function fmtMoneyX100(value: number): string {
   return (value / 100).toFixed(2);
+}
+
+function breakdownOtherLabel(kindLabel?: string): string {
+  if (!kindLabel) return "Другие";
+  const lower = kindLabel.toLowerCase();
+  return `Другие ${lower}`;
+}
+
+function prepareBreakdownChartRows(rows: PopulationBreakdownRow[], options?: { maxItems?: number; otherLabel?: string }): PopulationBreakdownRow[] {
+  const maxItems = options?.maxItems ?? MAX_BREAKDOWN_CHART_ITEMS;
+  if (rows.length <= maxItems) return rows;
+  const head = rows.slice(0, maxItems);
+  const tail = rows.slice(maxItems);
+  if (tail.length === 0) return head;
+  const totalTail = tail.reduce(
+    (acc, row) => {
+      acc.size += row.size;
+      acc.sharePermille += row.sharePermille;
+      acc.wealthWeighted += row.avgWealthX100 * row.size;
+      acc.loyaltyWeighted += row.avgLoyalty * row.size;
+      acc.radicalismWeighted += row.avgRadicalism * row.size;
+      acc.employmentWeighted += row.avgEmployment * row.size;
+      acc.migrationWeighted += row.avgMigrationDesire * row.size;
+      return acc;
+    },
+    {
+      size: 0,
+      sharePermille: 0,
+      wealthWeighted: 0,
+      loyaltyWeighted: 0,
+      radicalismWeighted: 0,
+      employmentWeighted: 0,
+      migrationWeighted: 0,
+    },
+  );
+  if (totalTail.size <= 0) return head;
+  const otherRow: PopulationBreakdownRow = {
+    id: "__others__",
+    label: options?.otherLabel ?? "Другие",
+    color: "#64748b",
+    logoUrl: null,
+    malePortraitUrl: null,
+    femalePortraitUrl: null,
+    size: totalTail.size,
+    sharePermille: Math.min(1000, totalTail.sharePermille),
+    avgWealthX100: Math.round(totalTail.wealthWeighted / totalTail.size),
+    avgLoyalty: Math.round(totalTail.loyaltyWeighted / totalTail.size),
+    avgRadicalism: Math.round(totalTail.radicalismWeighted / totalTail.size),
+    avgEmployment: Math.round(totalTail.employmentWeighted / totalTail.size),
+    avgMigrationDesire: Math.round(totalTail.migrationWeighted / totalTail.size),
+  };
+  return [...head, otherRow];
+}
+
+function BreakdownRowMedia({
+  row,
+  kind,
+  size = 18,
+}: {
+  row: PopulationBreakdownRow;
+  kind: BreakdownKey;
+  size?: number;
+}) {
+  const fallbackColor = row.color && /^#[0-9A-Fa-f]{6}$/.test(row.color) ? row.color : "#334155";
+  const radius = Math.max(6, Math.round(size / 2));
+  if (kind === "races" && (row.malePortraitUrl || row.femalePortraitUrl)) {
+    const portraitSize = Math.max(14, Math.round(size * 1.05));
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1" aria-hidden="true">
+        {[row.malePortraitUrl, row.femalePortraitUrl].map((url, idx) => (
+          <span
+            key={`${row.id}-${idx}`}
+            className="inline-flex items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/20"
+            style={{ width: portraitSize, height: portraitSize }}
+          >
+            {url ? (
+              <img src={url} alt="" className="h-full w-full object-contain" />
+            ) : (
+              <span
+                className="inline-flex h-full w-full items-center justify-center text-[9px] font-semibold"
+                style={{ backgroundColor: `${fallbackColor}22`, color: fallbackColor }}
+              >
+                {idx === 0 ? "M" : "F"}
+              </span>
+            )}
+          </span>
+        ))}
+      </span>
+    );
+  }
+  if (row.logoUrl) {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/20"
+        style={{ width: size, height: size, borderRadius: radius - 2 }}
+      >
+        <img src={row.logoUrl} alt="" className="h-full w-full object-contain" />
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center rounded-md border border-white/10"
+      style={{ width: size, height: size, backgroundColor: `${fallbackColor}22`, color: fallbackColor, borderRadius: radius - 2 }}
+      aria-hidden="true"
+    >
+      <span className="text-[10px] font-semibold leading-none">{row.label.slice(0, 1).toUpperCase()}</span>
+    </span>
+  );
 }
 
 function MetricBarsChart({
@@ -117,12 +227,14 @@ function MetricBarsChart({
 
 function BreakdownBarsChart({
   rows,
+  otherLabel,
   color = "#6ee7b7",
 }: {
   rows: PopulationBreakdownRow[];
+  otherLabel?: string;
   color?: string;
 }) {
-  const top = rows.slice(0, 6);
+  const top = prepareBreakdownChartRows(rows, { otherLabel });
   const width = 420;
   const height = 240;
   const margin = { top: 8, right: 10, bottom: 10, left: 130 };
@@ -159,6 +271,112 @@ function BreakdownBarsChart({
           })}
         </Group>
       </svg>
+    </div>
+  );
+}
+
+function BreakdownPieChart({
+  rows,
+  otherLabel,
+  selectedId,
+  onSelect,
+  colors = ["#22d3ee", "#34d399", "#f59e0b", "#fb7185", "#60a5fa", "#a78bfa"],
+}: {
+  rows: PopulationBreakdownRow[];
+  otherLabel?: string;
+  selectedId?: string | null;
+  onSelect?: (id: string) => void;
+  colors?: string[];
+}) {
+  const top = prepareBreakdownChartRows(rows, { otherLabel }).filter((r) => r.sharePermille > 0);
+  const width = 260;
+  const height = 240;
+  const cx = width / 2;
+  const cy = height / 2;
+  const outerRadius = 70;
+  const innerRadius = 44;
+
+  if (top.length === 0) {
+    return <div className="flex h-[240px] items-center justify-center text-xs text-white/50">Нет данных</div>;
+  }
+
+  return (
+    <div className="arc-scrollbar w-full overflow-x-auto overflow-y-hidden">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-[240px] min-w-[240px] w-full max-w-none">
+        <rect x={0.5} y={0.5} width={width - 1} height={height - 1} rx={12} fill={CHART_SURFACE} stroke="rgba(255,255,255,0.06)" />
+        <Group top={cy} left={cx}>
+          <Pie<PopulationBreakdownRow>
+            data={top}
+            pieValue={(d) => d.sharePermille}
+            outerRadius={outerRadius}
+            innerRadius={innerRadius}
+            padAngle={0.02}
+          >
+            {(pie) =>
+              pie.arcs.map((arc, i) => {
+                const path = pie.path(arc);
+                const centroid = pie.path.centroid(arc);
+                const row = arc.data;
+                const isSelected = selectedId === row.id;
+                const fill = row.color && /^#[0-9A-Fa-f]{6}$/.test(row.color) ? row.color : colors[i % colors.length];
+                const angleMid = (arc.startAngle + arc.endAngle) / 2;
+                const explode = isSelected ? 6 : 0;
+                const tx = Math.cos(angleMid - Math.PI / 2) * explode;
+                const ty = Math.sin(angleMid - Math.PI / 2) * explode;
+                return (
+                  <g
+                    key={`${row.id}-${i}`}
+                    transform={`translate(${tx}, ${ty})`}
+                    className={onSelect ? "cursor-pointer" : undefined}
+                    onClick={() => onSelect?.(row.id)}
+                  >
+                    <path
+                      d={path ?? ""}
+                      fill={fill}
+                      fillOpacity={isSelected ? 0.95 : 0.82}
+                      stroke={isSelected ? "rgba(255,255,255,0.9)" : "#0b111b"}
+                      strokeWidth={isSelected ? 2 : 1.25}
+                    />
+                    {arc.endAngle - arc.startAngle > 0.45 && (
+                      <text x={centroid[0]} y={centroid[1] + 3} textAnchor="middle" fontSize="9" fill={CHART_TEXT}>
+                        {Math.round(row.sharePermille / 10)}%
+                      </text>
+                    )}
+                  </g>
+                );
+              })
+            }
+          </Pie>
+          <text y={-4} textAnchor="middle" fontSize="10" fill={CHART_TEXT_DIM}>
+            Топ {top.length}
+          </text>
+          <text y={12} textAnchor="middle" fontSize="11" fill={CHART_TEXT}>
+            {fmtInt(top.reduce((s, r) => s + r.size, 0))}
+          </text>
+        </Group>
+      </svg>
+      <div className="mt-2 grid grid-cols-1 gap-1.5 text-[11px]">
+        {top.map((row, i) => {
+          const fill = row.color && /^#[0-9A-Fa-f]{6}$/.test(row.color) ? row.color : colors[i % colors.length];
+          const isSelected = selectedId === row.id;
+          return (
+            <button
+              key={`legend-${row.id}`}
+              type="button"
+              onClick={() => onSelect?.(row.id)}
+              className={`flex w-full items-center justify-between gap-2 rounded-md border px-2 py-1 text-left transition ${
+                isSelected ? "border-arc-accent/30 bg-arc-accent/10 text-white" : "border-white/10 bg-black/15 text-white/75"
+              } ${onSelect ? "cursor-pointer" : "cursor-default"}`}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: fill }} />
+                <span className="truncate">{row.label}</span>
+              </span>
+              <span className="shrink-0 tabular-nums text-white/60">{fmtPercentPermille(row.sharePermille)}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -302,7 +520,10 @@ function SummaryCards({
         <div className="arc-scrollbar overflow-x-auto overflow-y-hidden rounded-xl border border-white/10 bg-black/20 p-3">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Страты</div>
           {strataRows && strataRows.length > 0 ? (
-            <BreakdownBarsChart rows={strataRows} color="#22d3ee" />
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_240px]">
+              <BreakdownBarsChart rows={strataRows} color="#22d3ee" otherLabel="Другие страты" />
+              <BreakdownPieChart rows={strataRows} otherLabel="Другие страты" />
+            </div>
           ) : (
             <div className="flex h-[240px] items-center justify-center text-xs text-white/50">Нет данных</div>
           )}
@@ -489,7 +710,6 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                     {[
                       { id: "summary" as const, label: "Сводка", icon: BarChart3 },
                       { id: "structure" as const, label: "Структура", icon: Layers3 },
-                      ...(category === "country" ? ([{ id: "groups" as const, label: "POP-группы", icon: Users }] as const) : []),
                     ].map((section) => (
                       (() => {
                         const Icon = section.icon;
@@ -598,7 +818,10 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                               }`}
                             >
                               <div className="flex items-center justify-between gap-2">
-                                <div className="truncate text-sm text-white">{row.label}</div>
+                                <div className="flex min-w-0 items-center gap-2">
+                                  {breakdownKey !== "strata" && <BreakdownRowMedia row={row} kind={breakdownKey} />}
+                                  <div className="truncate text-sm text-white">{row.label}</div>
+                                </div>
                                 <div className="text-xs tabular-nums text-white/60">{fmtPercentPermille(row.sharePermille)}</div>
                               </div>
                               <div className="mt-1 text-[11px] text-white/50">Население: {fmtInt(row.size)}</div>
@@ -610,7 +833,10 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                         {selectedRow ? (
                           <div className="space-y-4">
                             <div>
-                              <div className="text-sm font-semibold text-white">{selectedRow.label}</div>
+                              <div className="flex items-center gap-2">
+                                {breakdownKey !== "strata" && <BreakdownRowMedia row={selectedRow} kind={breakdownKey} size={22} />}
+                                <div className="text-sm font-semibold text-white">{selectedRow.label}</div>
+                              </div>
                               <div className="mt-1 text-xs text-white/55">
                                 {BREAKDOWN_LABELS[breakdownKey]} • Доля: {fmtPercentPermille(selectedRow.sharePermille)}
                               </div>
@@ -634,7 +860,15 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                               <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                                 Топ {BREAKDOWN_LABELS[breakdownKey]}
                               </div>
-                              <BreakdownBarsChart rows={activeRows} color="#2dd4bf" />
+                              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_240px]">
+                                <BreakdownBarsChart rows={activeRows} color="#2dd4bf" otherLabel={breakdownOtherLabel(BREAKDOWN_LABELS[breakdownKey])} />
+                                <BreakdownPieChart
+                                  rows={activeRows}
+                                  otherLabel={breakdownOtherLabel(BREAKDOWN_LABELS[breakdownKey])}
+                                  selectedId={selectedRow?.id ?? null}
+                                  onSelect={setSelectedRowId}
+                                />
+                              </div>
                             </div>
                           </div>
                         ) : (
@@ -696,7 +930,7 @@ export function PopulationPanel({ open, token, countryId, onClose }: Props) {
                                   <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                                     Топ провинций по населению
                                   </div>
-                                  <BreakdownBarsChart rows={provinceRows} color="#22d3ee" />
+                                  <BreakdownBarsChart rows={provinceRows} color="#22d3ee" otherLabel="Другие провинции" />
                                 </div>
                               </div>
                             );

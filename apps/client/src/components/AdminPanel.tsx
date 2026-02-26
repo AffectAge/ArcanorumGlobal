@@ -41,6 +41,7 @@ const categories = [
 export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCountryUpdated, initialProvinceId }: Props) {
   const [activeCategory, setActiveCategory] = useState<(typeof categories)[number]["id"]>("countries");
   const [countrySection, setCountrySection] = useState<"general" | "punishments">("general");
+  const [populationSection, setPopulationSection] = useState<"tuning" | "generation">("tuning");
   const [countries, setCountries] = useState<Country[]>([]);
   const [provinces, setProvinces] = useState<AdminProvinceItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -84,6 +85,13 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [popReplaceExisting, setPopReplaceExisting] = useState(true);
   const [popBirthRateShiftPermille, setPopBirthRateShiftPermille] = useState(0);
   const [popDeathRateShiftPermille, setPopDeathRateShiftPermille] = useState(0);
+  const [popMergeBucketWealthX100, setPopMergeBucketWealthX100] = useState(1000);
+  const [popMergeBucketLoyalty, setPopMergeBucketLoyalty] = useState(100);
+  const [popMergeBucketRadicalism, setPopMergeBucketRadicalism] = useState(100);
+  const [popMergeBucketEmployment, setPopMergeBucketEmployment] = useState(100);
+  const [popMergeBucketMigrationDesire, setPopMergeBucketMigrationDesire] = useState(100);
+  const [popMergeBucketBirthRatePermille, setPopMergeBucketBirthRatePermille] = useState(5);
+  const [popMergeBucketDeathRatePermille, setPopMergeBucketDeathRatePermille] = useState(5);
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
   const selectedProvince = useMemo(() => provinces.find((p) => p.id === selectedProvinceId) ?? null, [provinces, selectedProvinceId]);
@@ -165,6 +173,13 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
         setPopIdeologyId((prev) => prev || ideologies[0]?.id || "");
         setPopBirthRateShiftPermille(populationTuning.birthRateShiftPermille);
         setPopDeathRateShiftPermille(populationTuning.deathRateShiftPermille);
+        setPopMergeBucketWealthX100(populationTuning.mergeBuckets?.wealthX100 ?? 1000);
+        setPopMergeBucketLoyalty(populationTuning.mergeBuckets?.loyalty ?? 100);
+        setPopMergeBucketRadicalism(populationTuning.mergeBuckets?.radicalism ?? 100);
+        setPopMergeBucketEmployment(populationTuning.mergeBuckets?.employment ?? 100);
+        setPopMergeBucketMigrationDesire(populationTuning.mergeBuckets?.migrationDesire ?? 100);
+        setPopMergeBucketBirthRatePermille(populationTuning.mergeBuckets?.birthRatePermille ?? 5);
+        setPopMergeBucketDeathRatePermille(populationTuning.mergeBuckets?.deathRatePermille ?? 5);
         if (!selectedCountryId && countryList.length > 0) {
           setSelectedCountryId(countryList[0].id);
         }
@@ -385,9 +400,25 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       const tuning = await adminUpdatePopulationTuning(token, {
         birthRateShiftPermille: Math.max(-200, Math.min(200, Math.floor(popBirthRateShiftPermille || 0))),
         deathRateShiftPermille: Math.max(-200, Math.min(200, Math.floor(popDeathRateShiftPermille || 0))),
+        mergeBuckets: {
+          wealthX100: Math.max(1, Math.floor(popMergeBucketWealthX100 || 1)),
+          loyalty: Math.max(1, Math.floor(popMergeBucketLoyalty || 1)),
+          radicalism: Math.max(1, Math.floor(popMergeBucketRadicalism || 1)),
+          employment: Math.max(1, Math.floor(popMergeBucketEmployment || 1)),
+          migrationDesire: Math.max(1, Math.floor(popMergeBucketMigrationDesire || 1)),
+          birthRatePermille: Math.max(1, Math.floor(popMergeBucketBirthRatePermille || 1)),
+          deathRatePermille: Math.max(1, Math.floor(popMergeBucketDeathRatePermille || 1)),
+        },
       });
       setPopBirthRateShiftPermille(tuning.birthRateShiftPermille);
       setPopDeathRateShiftPermille(tuning.deathRateShiftPermille);
+      setPopMergeBucketWealthX100(tuning.mergeBuckets.wealthX100);
+      setPopMergeBucketLoyalty(tuning.mergeBuckets.loyalty);
+      setPopMergeBucketRadicalism(tuning.mergeBuckets.radicalism);
+      setPopMergeBucketEmployment(tuning.mergeBuckets.employment);
+      setPopMergeBucketMigrationDesire(tuning.mergeBuckets.migrationDesire);
+      setPopMergeBucketBirthRatePermille(tuning.mergeBuckets.birthRatePermille);
+      setPopMergeBucketDeathRatePermille(tuning.mergeBuckets.deathRatePermille);
       toast.success("Заглушка демографии сохранена");
     } catch {
       toast.error("Не удалось сохранить заглушку демографии");
@@ -522,6 +553,36 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                       }`}
                     >
                       Наказания
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeCategory === "population" && (
+                <div className="panel-border rounded-xl bg-black/25 p-3">
+                  <div className="mb-2 px-1 text-[11px] uppercase tracking-wide text-white/45">Раздел населения</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPopulationSection("tuning")}
+                      className={`inline-flex items-center border-b px-1 py-1.5 text-xs font-medium transition ${
+                        populationSection === "tuning"
+                          ? "border-arc-accent text-arc-accent"
+                          : "border-transparent text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      Демография и merge
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPopulationSection("generation")}
+                      className={`inline-flex items-center border-b px-1 py-1.5 text-xs font-medium transition ${
+                        populationSection === "generation"
+                          ? "border-emerald-300 text-emerald-300"
+                          : "border-transparent text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      Генерация базового населения
                     </button>
                   </div>
                 </div>
@@ -696,6 +757,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
 
                   {activeCategory === "population" && (
                     <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-4">
+                      {populationSection === "tuning" && (
                       <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
                         <div className="flex items-center gap-2 text-sm text-slate-200">
                           <Users size={16} className="text-arc-accent" />
@@ -728,6 +790,42 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                             />
                           </div>
                         </div>
+                        <div className="rounded-lg border border-white/10 bg-black/15 p-3">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-300">Точная настройка merge-бакетов POP</div>
+                          <div className="mb-3 text-[11px] text-slate-400">
+                            Чем больше шаг, тем сильнее сжатие POP-групп и ниже нагрузка на сервер.
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">wealthX100</label>
+                              <input type="number" min={1} value={popMergeBucketWealthX100} onChange={(e) => setPopMergeBucketWealthX100(Math.max(1, Number(e.target.value) || 1))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100" />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">loyalty</label>
+                              <input type="number" min={1} max={1000} value={popMergeBucketLoyalty} onChange={(e) => setPopMergeBucketLoyalty(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100" />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">radicalism</label>
+                              <input type="number" min={1} max={1000} value={popMergeBucketRadicalism} onChange={(e) => setPopMergeBucketRadicalism(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100" />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">employment</label>
+                              <input type="number" min={1} max={1000} value={popMergeBucketEmployment} onChange={(e) => setPopMergeBucketEmployment(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100" />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">migrationDesire</label>
+                              <input type="number" min={1} max={1000} value={popMergeBucketMigrationDesire} onChange={(e) => setPopMergeBucketMigrationDesire(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100" />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">birthRatePermille</label>
+                              <input type="number" min={1} max={200} value={popMergeBucketBirthRatePermille} onChange={(e) => setPopMergeBucketBirthRatePermille(Math.max(1, Math.min(200, Number(e.target.value) || 1)))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100" />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">deathRatePermille</label>
+                              <input type="number" min={1} max={200} value={popMergeBucketDeathRatePermille} onChange={(e) => setPopMergeBucketDeathRatePermille(Math.max(1, Math.min(200, Number(e.target.value) || 1)))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100" />
+                            </div>
+                          </div>
+                        </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <button
                             type="button"
@@ -746,7 +844,10 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                           </div>
                         </div>
                       </div>
+                      )}
 
+                      {populationSection === "generation" && (
+                      <>
                       <div className="flex items-center gap-2 text-sm text-slate-200">
                         <Users size={16} className="text-arc-accent" />
                         Генерация базового населения мира
@@ -886,6 +987,8 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                           Сгенерировать базовое население
                         </button>
                       </div>
+                      </>
+                      )}
                     </div>
                   )}
 

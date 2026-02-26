@@ -20,6 +20,10 @@ export type ContentEntryKind = "cultures" | "races" | "religions" | "professions
 export type PopulationBreakdownRow = {
   id: string;
   label: string;
+  logoUrl?: string | null;
+  color?: string | null;
+  malePortraitUrl?: string | null;
+  femalePortraitUrl?: string | null;
   size: number;
   sharePermille: number;
   avgWealthX100: number;
@@ -90,7 +94,7 @@ export type PopulationCountrySummaryResponse = {
   breakdowns: PopulationBreakdowns;
   provinces: PopulationBreakdownRow[];
   history: Array<{ turnId: number; totalPopulation: number }>;
-  topGroups: PopulationPopGroup[];
+  topGroups?: PopulationPopGroup[];
 };
 
 
@@ -129,6 +133,26 @@ function normalizeContentCulture(culture: ContentCulture): ContentCulture {
 
 function normalizeContentEntry(entry: ContentEntry): ContentEntry {
   return normalizeContentCulture(entry);
+}
+
+function normalizePopulationBreakdownRow(row: PopulationBreakdownRow): PopulationBreakdownRow {
+  return {
+    ...row,
+    logoUrl: withAssetBase(row.logoUrl) ?? null,
+    malePortraitUrl: withAssetBase(row.malePortraitUrl) ?? null,
+    femalePortraitUrl: withAssetBase(row.femalePortraitUrl) ?? null,
+  };
+}
+
+function normalizePopulationBreakdowns(breakdowns: PopulationBreakdowns): PopulationBreakdowns {
+  return {
+    strata: breakdowns.strata.map(normalizePopulationBreakdownRow),
+    races: breakdowns.races.map(normalizePopulationBreakdownRow),
+    cultures: breakdowns.cultures.map(normalizePopulationBreakdownRow),
+    religions: breakdowns.religions.map(normalizePopulationBreakdownRow),
+    professions: breakdowns.professions.map(normalizePopulationBreakdownRow),
+    ideologies: breakdowns.ideologies.map(normalizePopulationBreakdownRow),
+  };
 }
 
 export async function fetchServerStatus(): Promise<{ status: ServerStatus; turnId: number }> {
@@ -587,6 +611,15 @@ export async function adminGeneratePopulationBaseline(
 export type AdminPopulationTuning = {
   birthRateShiftPermille: number;
   deathRateShiftPermille: number;
+  mergeBuckets: {
+    wealthX100: number;
+    loyalty: number;
+    radicalism: number;
+    employment: number;
+    migrationDesire: number;
+    birthRatePermille: number;
+    deathRatePermille: number;
+  };
 };
 
 export async function adminFetchPopulationTuning(token: string): Promise<AdminPopulationTuning> {
@@ -628,7 +661,11 @@ export async function fetchPopulationWorldSummary(token: string): Promise<Popula
     const err = await response.json();
     throw new Error(err.error ?? "POPULATION_WORLD_FAILED");
   }
-  return response.json();
+  const data = (await response.json()) as PopulationWorldSummaryResponse;
+  return {
+    ...data,
+    breakdowns: normalizePopulationBreakdowns(data.breakdowns),
+  };
 }
 
 export async function fetchPopulationCountrySummary(
@@ -642,7 +679,12 @@ export async function fetchPopulationCountrySummary(
     const err = await response.json();
     throw new Error(err.error ?? "POPULATION_COUNTRY_FAILED");
   }
-  return response.json();
+  const data = (await response.json()) as PopulationCountrySummaryResponse;
+  return {
+    ...data,
+    breakdowns: normalizePopulationBreakdowns(data.breakdowns),
+    provinces: data.provinces.map(normalizePopulationBreakdownRow),
+  };
 }
 
 export async function fetchPendingUiNotifications(token: string): Promise<UiNotificationItem[]> {

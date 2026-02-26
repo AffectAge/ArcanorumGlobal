@@ -314,6 +314,15 @@ type GameSettings = {
   population: {
     birthRateShiftPermille: number;
     deathRateShiftPermille: number;
+    mergeBuckets: {
+      wealthX100: number;
+      loyalty: number;
+      radicalism: number;
+      employment: number;
+      migrationDesire: number;
+      birthRatePermille: number;
+      deathRatePermille: number;
+    };
   };
   map: {
     showAntarctica: boolean;
@@ -369,15 +378,16 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
 }
 
 const POP_CLAMP_MAX = 1000;
-const POP_BUCKETS = {
-  wealthX100: 500, // 5.00
-  loyalty: 50,
-  radicalism: 50,
-  employment: 50,
-  migrationDesire: 50,
-  birthRatePermille: 2,
-  deathRatePermille: 2,
+const DEFAULT_POP_BUCKETS = {
+  wealthX100: 1000, // 10.00
+  loyalty: 100,
+  radicalism: 100,
+  employment: 100,
+  migrationDesire: 100,
+  birthRatePermille: 5,
+  deathRatePermille: 5,
 } as const;
+const MIN_POP_GROUP_SIZE_FOR_MICRO_MERGE = 50;
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -387,6 +397,71 @@ function clampInt(value: number, min: number, max: number): number {
 function weightedAvg(sumWeighted: number, totalWeight: number): number {
   if (totalWeight <= 0) return 0;
   return Math.round(sumWeighted / totalWeight);
+}
+
+function normalizePopulationMergeBuckets(input: unknown): GameSettings["population"]["mergeBuckets"] {
+  const src = input && typeof input === "object" ? (input as Partial<GameSettings["population"]["mergeBuckets"]>) : {};
+  return {
+    wealthX100: clampInt(Number(src.wealthX100 ?? DEFAULT_POP_BUCKETS.wealthX100), 1, 100_000),
+    loyalty: clampInt(Number(src.loyalty ?? DEFAULT_POP_BUCKETS.loyalty), 1, 1000),
+    radicalism: clampInt(Number(src.radicalism ?? DEFAULT_POP_BUCKETS.radicalism), 1, 1000),
+    employment: clampInt(Number(src.employment ?? DEFAULT_POP_BUCKETS.employment), 1, 1000),
+    migrationDesire: clampInt(Number(src.migrationDesire ?? DEFAULT_POP_BUCKETS.migrationDesire), 1, 1000),
+    birthRatePermille: clampInt(Number(src.birthRatePermille ?? DEFAULT_POP_BUCKETS.birthRatePermille), 1, 200),
+    deathRatePermille: clampInt(Number(src.deathRatePermille ?? DEFAULT_POP_BUCKETS.deathRatePermille), 1, 200),
+  };
+}
+
+function populationContentFingerprint(): string {
+  const pick = (kind: keyof GameSettings["content"]) =>
+    gameSettings.content[kind]
+      .map((row) => `${row.id}:${row.name}:${row.logoUrl ?? ""}:${row.malePortraitUrl ?? ""}:${row.femalePortraitUrl ?? ""}`)
+      .join(",");
+  return [
+    `r:${pick("races")}`,
+    `c:${pick("cultures")}`,
+    `rel:${pick("religions")}`,
+    `p:${pick("professions")}`,
+    `i:${pick("ideologies")}`,
+  ].join("|");
+}
+
+function provinceOwnerFingerprint(owner: Record<string, string>): string {
+  return Object.entries(owner)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([provinceId, countryId]) => `${provinceId}:${countryId}`)
+    .join("|");
+}
+
+function comparePopGroupsForTop(a: PopGroup, b: PopGroup): number {
+  return b.size - a.size || b.radicalism - a.radicalism || a.id.localeCompare(b.id);
+}
+
+function isPopGroupBetterForTop(a: PopGroup, b: PopGroup): boolean {
+  if (a.size !== b.size) return a.size > b.size;
+  if (a.radicalism !== b.radicalism) return a.radicalism > b.radicalism;
+  return a.id < b.id;
+}
+
+function pickTopPopGroups(groups: PopGroup[], limit: number): PopGroup[] {
+  if (limit <= 0 || groups.length === 0) return [];
+  const top: PopGroup[] = [];
+  for (const g of groups) {
+    if (top.length < limit) {
+      top.push(g);
+      continue;
+    }
+    let worstIndex = 0;
+    for (let i = 1; i < top.length; i += 1) {
+      if (isPopGroupBetterForTop(top[worstIndex], top[i])) {
+        worstIndex = i;
+      }
+    }
+    if (isPopGroupBetterForTop(g, top[worstIndex])) {
+      top[worstIndex] = g;
+    }
+  }
+  return top.sort(comparePopGroupsForTop);
 }
 
 function summarizePopulationByProvince(popGroups: PopGroup[]): Record<string, PopulationState["provinceSummaries"][string]> {
@@ -649,6 +724,19 @@ function defaultPopGroups(provinceOwner: Record<string, string>, _currentTurnId:
 
 function popMergeBucketKey(pop: PopGroup): string {
   const bucket = (value: number, step: number) => Math.round(value / step);
+  const buckets = gameSettings.population.mergeBuckets ?? normalizePopulationMergeBuckets(undefined);
+  if (pop.size < MIN_POP_GROUP_SIZE_FOR_MICRO_MERGE) {
+    return [
+      "micro",
+      pop.provinceId,
+      pop.raceId,
+      pop.cultureId,
+      pop.religionId,
+      pop.professionId,
+      pop.ideologyId,
+      pop.strata,
+    ].join("|");
+  }
   return [
     pop.provinceId,
     pop.raceId,
@@ -657,13 +745,13 @@ function popMergeBucketKey(pop: PopGroup): string {
     pop.professionId,
     pop.ideologyId,
     pop.strata,
-    bucket(pop.wealthX100, POP_BUCKETS.wealthX100),
-    bucket(pop.loyalty, POP_BUCKETS.loyalty),
-    bucket(pop.radicalism, POP_BUCKETS.radicalism),
-    bucket(pop.employment, POP_BUCKETS.employment),
-    bucket(pop.migrationDesire, POP_BUCKETS.migrationDesire),
-    bucket(pop.birthRatePermille, POP_BUCKETS.birthRatePermille),
-    bucket(pop.deathRatePermille, POP_BUCKETS.deathRatePermille),
+    bucket(pop.wealthX100, Math.max(1, buckets.wealthX100)),
+    bucket(pop.loyalty, Math.max(1, buckets.loyalty)),
+    bucket(pop.radicalism, Math.max(1, buckets.radicalism)),
+    bucket(pop.employment, Math.max(1, buckets.employment)),
+    bucket(pop.migrationDesire, Math.max(1, buckets.migrationDesire)),
+    bucket(pop.birthRatePermille, Math.max(1, buckets.birthRatePermille)),
+    bucket(pop.deathRatePermille, Math.max(1, buckets.deathRatePermille)),
   ].join("|");
 }
 
@@ -785,6 +873,10 @@ function ensurePopulationContentFallbacks(): {
 }
 
 function sanitizePopulationContentReferences(base: WorldBase): boolean {
+  const fingerprint = populationContentFingerprint();
+  if (lastPopulationSanitizeRef === base.population && lastPopulationSanitizeFingerprint === fingerprint) {
+    return false;
+  }
   const fallback = ensurePopulationContentFallbacks();
   const races = new Set(gameSettings.content.races.map((v) => v.id));
   const cultures = new Set(gameSettings.content.cultures.map((v) => v.id));
@@ -828,6 +920,8 @@ function sanitizePopulationContentReferences(base: WorldBase): boolean {
       turnId: base.turnId,
     });
   }
+  lastPopulationSanitizeRef = base.population;
+  lastPopulationSanitizeFingerprint = fingerprint;
   return changed;
 }
 
@@ -882,6 +976,10 @@ function applyPopulationTurnStep(base: WorldBase): void {
 type PopulationBreakdownRow = {
   id: string;
   label: string;
+  logoUrl?: string | null;
+  color?: string | null;
+  malePortraitUrl?: string | null;
+  femalePortraitUrl?: string | null;
   size: number;
   sharePermille: number;
   avgWealthX100: number;
@@ -900,13 +998,24 @@ type PopulationBreakdowns = {
   ideologies: PopulationBreakdownRow[];
 };
 
-function buildContentNameMaps() {
+function buildContentMetaMaps() {
   return {
-    races: new Map(gameSettings.content.races.map((v) => [v.id, v.name])),
-    cultures: new Map(gameSettings.content.cultures.map((v) => [v.id, v.name])),
-    religions: new Map(gameSettings.content.religions.map((v) => [v.id, v.name])),
-    professions: new Map(gameSettings.content.professions.map((v) => [v.id, v.name])),
-    ideologies: new Map(gameSettings.content.ideologies.map((v) => [v.id, v.name])),
+    races: new Map(
+      gameSettings.content.races.map((v) => [
+        v.id,
+        {
+          name: v.name,
+          logoUrl: v.logoUrl ?? null,
+          color: v.color ?? null,
+          malePortraitUrl: v.malePortraitUrl ?? null,
+          femalePortraitUrl: v.femalePortraitUrl ?? null,
+        },
+      ]),
+    ),
+    cultures: new Map(gameSettings.content.cultures.map((v) => [v.id, { name: v.name, logoUrl: v.logoUrl ?? null, color: v.color ?? null }])),
+    religions: new Map(gameSettings.content.religions.map((v) => [v.id, { name: v.name, logoUrl: v.logoUrl ?? null, color: v.color ?? null }])),
+    professions: new Map(gameSettings.content.professions.map((v) => [v.id, { name: v.name, logoUrl: v.logoUrl ?? null, color: v.color ?? null }])),
+    ideologies: new Map(gameSettings.content.ideologies.map((v) => [v.id, { name: v.name, logoUrl: v.logoUrl ?? null, color: v.color ?? null }])),
   };
 }
 
@@ -914,6 +1023,7 @@ function aggregatePopulationBreakdown(
   groups: PopGroup[],
   keySelector: (group: PopGroup) => string,
   labelSelector: (id: string) => string,
+  metaSelector?: (id: string) => { logoUrl?: string | null; color?: string | null; malePortraitUrl?: string | null; femalePortraitUrl?: string | null } | null,
 ): PopulationBreakdownRow[] {
   const totalPopulation = groups.reduce((sum, g) => sum + g.size, 0);
   const byKey = new Map<
@@ -947,6 +1057,7 @@ function aggregatePopulationBreakdown(
   }
   return [...byKey.entries()]
     .map(([id, acc]) => ({
+      ...(metaSelector?.(id) ?? {}),
       id,
       label: labelSelector(id),
       size: acc.size,
@@ -961,19 +1072,134 @@ function aggregatePopulationBreakdown(
 }
 
 function buildPopulationBreakdowns(groups: PopGroup[]): PopulationBreakdowns {
-  const names = buildContentNameMaps();
+  const meta = buildContentMetaMaps();
   return {
     strata: aggregatePopulationBreakdown(
       groups,
       (g) => g.strata,
       (id) => (id === "lower" ? "Низший" : id === "middle" ? "Средний" : "Высший"),
     ),
-    races: aggregatePopulationBreakdown(groups, (g) => g.raceId, (id) => names.races.get(id) ?? id),
-    cultures: aggregatePopulationBreakdown(groups, (g) => g.cultureId, (id) => names.cultures.get(id) ?? id),
-    religions: aggregatePopulationBreakdown(groups, (g) => g.religionId, (id) => names.religions.get(id) ?? id),
-    professions: aggregatePopulationBreakdown(groups, (g) => g.professionId, (id) => names.professions.get(id) ?? id),
-    ideologies: aggregatePopulationBreakdown(groups, (g) => g.ideologyId, (id) => names.ideologies.get(id) ?? id),
+    races: aggregatePopulationBreakdown(
+      groups,
+      (g) => g.raceId,
+      (id) => meta.races.get(id)?.name ?? id,
+      (id) => meta.races.get(id) ?? null,
+    ),
+    cultures: aggregatePopulationBreakdown(
+      groups,
+      (g) => g.cultureId,
+      (id) => meta.cultures.get(id)?.name ?? id,
+      (id) => meta.cultures.get(id) ?? null,
+    ),
+    religions: aggregatePopulationBreakdown(
+      groups,
+      (g) => g.religionId,
+      (id) => meta.religions.get(id)?.name ?? id,
+      (id) => meta.religions.get(id) ?? null,
+    ),
+    professions: aggregatePopulationBreakdown(
+      groups,
+      (g) => g.professionId,
+      (id) => meta.professions.get(id)?.name ?? id,
+      (id) => meta.professions.get(id) ?? null,
+    ),
+    ideologies: aggregatePopulationBreakdown(
+      groups,
+      (g) => g.ideologyId,
+      (id) => meta.ideologies.get(id)?.name ?? id,
+      (id) => meta.ideologies.get(id) ?? null,
+    ),
   };
+}
+
+function ensurePopulationEndpointCacheFresh() {
+  const fingerprint = populationContentFingerprint();
+  const ownerFingerprint = provinceOwnerFingerprint(worldBase.provinceOwner);
+  const samePopulationRef = populationEndpointCache.populationRef === worldBase.population;
+  const sameProvinceOwnerRef = populationEndpointCache.provinceOwnerRef === worldBase.provinceOwner;
+  const sameProvinceOwnerFingerprint = populationEndpointCache.provinceOwnerFingerprint === ownerFingerprint;
+  const sameFingerprint = populationEndpointCache.contentFingerprint === fingerprint;
+  if (samePopulationRef && sameProvinceOwnerRef && sameProvinceOwnerFingerprint && sameFingerprint) {
+    return populationEndpointCache;
+  }
+
+  const groupsByCountry = new Map<string, PopGroup[]>();
+  for (const group of worldBase.population.popGroups) {
+    const ownerId = worldBase.provinceOwner[group.provinceId];
+    if (!ownerId) continue;
+    const list = groupsByCountry.get(ownerId);
+    if (list) list.push(group);
+    else groupsByCountry.set(ownerId, [group]);
+  }
+
+  populationEndpointCache.populationRef = worldBase.population;
+  populationEndpointCache.provinceOwnerRef = worldBase.provinceOwner;
+  populationEndpointCache.provinceOwnerFingerprint = ownerFingerprint;
+  populationEndpointCache.contentFingerprint = fingerprint;
+  populationEndpointCache.groupsByCountry = groupsByCountry;
+  populationEndpointCache.worldResponse = null;
+  populationEndpointCache.countryResponses = new Map();
+  return populationEndpointCache;
+}
+
+function buildPopulationWorldSummaryResponseCached() {
+  const cache = ensurePopulationEndpointCacheFresh();
+  if (cache.worldResponse) {
+    return cache.worldResponse;
+  }
+  const groups = worldBase.population.popGroups;
+  const totalPopulation = groups.reduce((sum, g) => sum + g.size, 0);
+  const totalEmployed = groups.reduce((sum, g) => sum + Math.floor((g.size * g.employment) / 1000), 0);
+  cache.worldResponse = {
+    summary: {
+      scope: "world" as const,
+      totalPopulation,
+      employedPopulation: totalEmployed,
+      unemploymentPermille: totalPopulation > 0 ? clampInt(((totalPopulation - totalEmployed) * 1000) / totalPopulation, 0, 1000) : 0,
+      avgWealthX100: totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.wealthX100 * g.size, 0), totalPopulation) : 0,
+      avgLoyalty: totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.loyalty * g.size, 0), totalPopulation) : 0,
+      avgRadicalism: totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.radicalism * g.size, 0), totalPopulation) : 0,
+      avgMigrationDesire: totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.migrationDesire * g.size, 0), totalPopulation) : 0,
+      popGroupCount: groups.length,
+    },
+    breakdowns: buildPopulationBreakdowns(groups),
+    countries: Object.values(worldBase.population.countrySummaries).sort((a, b) => b.totalPopulation - a.totalPopulation),
+    history: worldBase.population.history.map((h) => ({
+      turnId: h.turnId,
+      totalPopulation: h.worldTotalPopulation,
+    })),
+  };
+  return cache.worldResponse;
+}
+
+function buildPopulationCountrySummaryResponseCached(countryId: string) {
+  const cache = ensurePopulationEndpointCacheFresh();
+  const cached = cache.countryResponses.get(countryId);
+  if (cached) {
+    return cached;
+  }
+  const groups = cache.groupsByCountry.get(countryId) ?? [];
+  const summary = worldBase.population.countrySummaries[countryId] ?? {
+    countryId,
+    totalPopulation: 0,
+    employedPopulation: 0,
+    unemploymentPermille: 0,
+    avgWealthX100: 0,
+    avgLoyalty: 0,
+    avgRadicalism: 0,
+    avgMigrationDesire: 0,
+  };
+  const response = {
+    summary: { ...summary, scope: "country" as const, popGroupCount: groups.length },
+    breakdowns: buildPopulationBreakdowns(groups),
+    provinces: aggregatePopulationBreakdown(groups, (g) => g.provinceId, (id) => id),
+    history: worldBase.population.history.map((h) => ({
+      turnId: h.turnId,
+      totalPopulation: h.countryTotals[countryId] ?? 0,
+    })),
+  };
+  cache.countryResponses.set(countryId, response);
+  return response;
 }
 
 function getAllProvinceIdsFromAdm1(): string[] {
@@ -1204,6 +1430,7 @@ const defaultGameSettings = (): GameSettings => ({
   population: {
     birthRateShiftPermille: 0,
     deathRateShiftPermille: 0,
+    mergeBuckets: normalizePopulationMergeBuckets(undefined),
   },
   map: {
     showAntarctica: false,
@@ -1246,6 +1473,51 @@ let gameSettings: GameSettings = defaultGameSettings();
 let worldBase: WorldBase = defaultWorldBase(turnId);
 let currentTurnStartedAtMs = Date.now();
 let isResolvingTurnNow = false;
+let lastPopulationSanitizeFingerprint = "";
+let lastPopulationSanitizeRef: WorldBase["population"] | null = null;
+
+type PopulationEndpointCache = {
+  populationRef: WorldBase["population"] | null;
+  provinceOwnerRef: WorldBase["provinceOwner"] | null;
+  provinceOwnerFingerprint: string;
+  contentFingerprint: string;
+  groupsByCountry: Map<string, PopGroup[]>;
+  worldResponse: null | {
+    summary: {
+      scope: "world";
+      totalPopulation: number;
+      employedPopulation: number;
+      unemploymentPermille: number;
+      avgWealthX100: number;
+      avgLoyalty: number;
+      avgRadicalism: number;
+      avgMigrationDesire: number;
+      popGroupCount: number;
+    };
+    breakdowns: PopulationBreakdowns;
+    countries: Array<PopulationState["countrySummaries"][string]>;
+    history: Array<{ turnId: number; totalPopulation: number }>;
+  };
+  countryResponses: Map<
+    string,
+    {
+      summary: PopulationState["countrySummaries"][string] & { scope: "country"; popGroupCount: number };
+      breakdowns: PopulationBreakdowns;
+      provinces: PopulationBreakdownRow[];
+      history: Array<{ turnId: number; totalPopulation: number }>;
+    }
+  >;
+};
+
+const populationEndpointCache: PopulationEndpointCache = {
+  populationRef: null,
+  provinceOwnerRef: null,
+  provinceOwnerFingerprint: "",
+  contentFingerprint: "",
+  groupsByCountry: new Map(),
+  worldResponse: null,
+  countryResponses: new Map(),
+};
 
 const persistedStatePath = resolve(__dirname, "../data/game-state.json");
 const GAME_STATE_ROW_ID = "primary";
@@ -1387,6 +1659,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
                 200,
               )
             : defaults.population.deathRateShiftPermille,
+        mergeBuckets: normalizePopulationMergeBuckets(
+          (next as Partial<{ population?: { mergeBuckets?: unknown } }>).population?.mergeBuckets,
+        ),
       },
       map: {
         showAntarctica:
@@ -2399,6 +2674,17 @@ const gameSettingsSchema = z.object({
     .object({
       birthRateShiftPermille: z.coerce.number().int().min(-200).max(200).optional(),
       deathRateShiftPermille: z.coerce.number().int().min(-200).max(200).optional(),
+      mergeBuckets: z
+        .object({
+          wealthX100: z.coerce.number().int().min(1).max(100_000).optional(),
+          loyalty: z.coerce.number().int().min(1).max(1000).optional(),
+          radicalism: z.coerce.number().int().min(1).max(1000).optional(),
+          employment: z.coerce.number().int().min(1).max(1000).optional(),
+          migrationDesire: z.coerce.number().int().min(1).max(1000).optional(),
+          birthRatePermille: z.coerce.number().int().min(1).max(200).optional(),
+          deathRatePermille: z.coerce.number().int().min(1).max(200).optional(),
+        })
+        .optional(),
     })
     .optional(),
   map: z
@@ -2446,12 +2732,22 @@ app.get("/admin/population/tuning", async (req, res) => {
   return res.json({
     birthRateShiftPermille: gameSettings.population.birthRateShiftPermille,
     deathRateShiftPermille: gameSettings.population.deathRateShiftPermille,
+    mergeBuckets: gameSettings.population.mergeBuckets,
   });
 });
 
 const populationTuningSchema = z.object({
   birthRateShiftPermille: z.coerce.number().int().min(-200).max(200),
   deathRateShiftPermille: z.coerce.number().int().min(-200).max(200),
+  mergeBuckets: z.object({
+    wealthX100: z.coerce.number().int().min(1).max(100_000),
+    loyalty: z.coerce.number().int().min(1).max(1000),
+    radicalism: z.coerce.number().int().min(1).max(1000),
+    employment: z.coerce.number().int().min(1).max(1000),
+    migrationDesire: z.coerce.number().int().min(1).max(1000),
+    birthRatePermille: z.coerce.number().int().min(1).max(200),
+    deathRatePermille: z.coerce.number().int().min(1).max(200),
+  }),
 });
 
 app.patch("/admin/population/tuning", async (req, res) => {
@@ -2465,12 +2761,14 @@ app.patch("/admin/population/tuning", async (req, res) => {
   }
   gameSettings.population.birthRateShiftPermille = clampInt(parsed.data.birthRateShiftPermille, -200, 200);
   gameSettings.population.deathRateShiftPermille = clampInt(parsed.data.deathRateShiftPermille, -200, 200);
+  gameSettings.population.mergeBuckets = normalizePopulationMergeBuckets(parsed.data.mergeBuckets);
   savePersistentState();
   return res.json({
     ok: true,
     tuning: {
       birthRateShiftPermille: gameSettings.population.birthRateShiftPermille,
       deathRateShiftPermille: gameSettings.population.deathRateShiftPermille,
+      mergeBuckets: gameSettings.population.mergeBuckets,
     },
   });
 });
@@ -3114,33 +3412,7 @@ app.get("/population/summary/world", async (req, res) => {
     return res.status(401).json({ error: "UNAUTHORIZED" });
   }
   sanitizePopulationContentReferences(worldBase);
-  const groups = worldBase.population.popGroups;
-  const totalPopulation = groups.reduce((sum, g) => sum + g.size, 0);
-  const totalEmployed = groups.reduce((sum, g) => sum + Math.floor((g.size * g.employment) / 1000), 0);
-  const summary = {
-    scope: "world" as const,
-    totalPopulation,
-    employedPopulation: totalEmployed,
-    unemploymentPermille: totalPopulation > 0 ? clampInt(((totalPopulation - totalEmployed) * 1000) / totalPopulation, 0, 1000) : 0,
-    avgWealthX100:
-      totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.wealthX100 * g.size, 0), totalPopulation) : 0,
-    avgLoyalty: totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.loyalty * g.size, 0), totalPopulation) : 0,
-    avgRadicalism:
-      totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.radicalism * g.size, 0), totalPopulation) : 0,
-    avgMigrationDesire:
-      totalPopulation > 0 ? weightedAvg(groups.reduce((sum, g) => sum + g.migrationDesire * g.size, 0), totalPopulation) : 0,
-    popGroupCount: groups.length,
-  };
-  const countries = Object.values(worldBase.population.countrySummaries).sort((a, b) => b.totalPopulation - a.totalPopulation);
-  return res.json({
-    summary,
-    breakdowns: buildPopulationBreakdowns(groups),
-    countries,
-    history: worldBase.population.history.map((h) => ({
-      turnId: h.turnId,
-      totalPopulation: h.worldTotalPopulation,
-    })),
-  });
+  return res.json(buildPopulationWorldSummaryResponseCached());
 });
 
 app.get("/population/summary/country/:countryId", async (req, res) => {
@@ -3153,30 +3425,7 @@ app.get("/population/summary/country/:countryId", async (req, res) => {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
   sanitizePopulationContentReferences(worldBase);
-  const groups = worldBase.population.popGroups.filter((g) => worldBase.provinceOwner[g.provinceId] === countryId);
-  const summary = worldBase.population.countrySummaries[countryId] ?? {
-    countryId,
-    totalPopulation: 0,
-    employedPopulation: 0,
-    unemploymentPermille: 0,
-    avgWealthX100: 0,
-    avgLoyalty: 0,
-    avgRadicalism: 0,
-    avgMigrationDesire: 0,
-  };
-  const topGroups = [...groups]
-    .sort((a, b) => b.size - a.size || b.radicalism - a.radicalism)
-    .slice(0, 200);
-  return res.json({
-    summary: { ...summary, scope: "country" as const, popGroupCount: groups.length },
-    breakdowns: buildPopulationBreakdowns(groups),
-    provinces: aggregatePopulationBreakdown(groups, (g) => g.provinceId, (id) => id),
-    history: worldBase.population.history.map((h) => ({
-      turnId: h.turnId,
-      totalPopulation: h.countryTotals[countryId] ?? 0,
-    })),
-    topGroups,
-  });
+  return res.json(buildPopulationCountrySummaryResponseCached(countryId));
 });
 
 app.post("/admin/population/generate-baseline", async (req, res) => {
@@ -3379,6 +3628,9 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
     if (typeof nextPopulation.deathRateShiftPermille === "number") {
       gameSettings.population.deathRateShiftPermille = clampInt(nextPopulation.deathRateShiftPermille, -200, 200);
+    }
+    if (nextPopulation.mergeBuckets) {
+      gameSettings.population.mergeBuckets = normalizePopulationMergeBuckets(nextPopulation.mergeBuckets);
     }
   }
 
