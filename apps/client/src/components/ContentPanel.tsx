@@ -19,6 +19,23 @@ type Props = {
   onClose: () => void;
 };
 
+const CONTENT_UI_SCHEMA = {
+  categories: [
+    {
+      id: "cultures",
+      label: "Культуры",
+      icon: Palette,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация" },
+        { id: "branding", label: "Логотип и стиль" },
+      ] as const,
+    },
+    { id: "religions", label: "Религии (скоро)", icon: ScrollText, enabled: false, sections: [] as const },
+    { id: "technologies", label: "Технологии (скоро)", icon: Sparkles, enabled: false, sections: [] as const },
+  ] as const,
+} as const;
+
 async function validateLogo64(file: File): Promise<void> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -48,6 +65,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedCultureId, setSelectedCultureId] = useState<string>("");
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
   const [draftColor, setDraftColor] = useState("#4ade80");
@@ -120,7 +139,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
         logoUrl: draftLogoUrl,
       }) !== savedSnapshot
     );
-  }, [draftColor, draftLogoUrl, draftName, savedSnapshot, selectedCulture]);
+  }, [draftColor, draftDescription, draftLogoUrl, draftName, savedSnapshot, selectedCulture]);
+
+  const requestClose = () => {
+    if (saving) return;
+    if (hasUnsavedChanges) {
+      setCloseConfirmOpen(true);
+      return;
+    }
+    onClose();
+  };
 
   const createCulture = async () => {
     setSaving(true);
@@ -179,6 +207,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       const result = await adminDeleteCulture(token, selectedCulture.id);
       setCultures(result.cultures);
       setSelectedCultureId(result.cultures[0]?.id ?? "");
+      setDeleteConfirmOpen(false);
       toast.success("Культура удалена");
     } catch {
       toast.error("Не удалось удалить культуру");
@@ -207,7 +236,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   };
 
   return (
-    <Dialog open={open} onClose={onClose} className="relative z-[205]">
+    <Dialog open={open} onClose={requestClose} className="relative z-[205]">
       <motion.div
         aria-hidden="true"
         className="fixed inset-0 bg-black/70 backdrop-blur-sm"
@@ -231,7 +260,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
               </div>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={requestClose}
                 className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-300 transition hover:text-arc-accent"
                 aria-label="Закрыть"
               >
@@ -242,22 +271,28 @@ export function ContentPanel({ open, token, onClose }: Props) {
             <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
               <aside className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-3">
                 <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Категории</div>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-lg border border-arc-accent/30 bg-arc-accent/10 px-3 py-2 text-left text-sm text-arc-accent"
-                >
-                  <Palette size={15} />
-                  <span>Культуры</span>
-                </button>
                 <div className="mt-2 space-y-2">
-                  <button type="button" disabled className="flex w-full items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-sm text-white/35">
-                    <ScrollText size={15} />
-                    <span>Религии (скоро)</span>
-                  </button>
-                  <button type="button" disabled className="flex w-full items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-sm text-white/35">
-                    <Sparkles size={15} />
-                    <span>Технологии (скоро)</span>
-                  </button>
+                  {CONTENT_UI_SCHEMA.categories.map((category) => {
+                    const Icon = category.icon;
+                    const isActive = category.id === activeCategory;
+                    return (
+                      <button
+                        key={category.id}
+                        type="button"
+                        disabled={!category.enabled}
+                        className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm ${
+                          !category.enabled
+                            ? "border-white/10 bg-black/20 text-white/35"
+                            : isActive
+                              ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
+                              : "border-white/10 bg-black/20 text-white/70"
+                        }`}
+                      >
+                        <Icon size={15} />
+                        <span>{category.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
 
               </aside>
@@ -321,28 +356,22 @@ export function ContentPanel({ open, token, onClose }: Props) {
 
                 <div className="grid min-h-0 gap-4 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
                 <div className="flex items-center gap-5 border-b border-white/10 px-1">
-                  <button
-                    type="button"
-                    onClick={() => setCultureSection("general")}
-                    className={`pb-2 text-sm transition ${
-                      cultureSection === "general"
-                        ? "border-b-2 border-arc-accent text-arc-accent"
-                        : "border-b-2 border-transparent text-white/60 hover:text-white"
-                    }`}
-                  >
-                    Основная информация
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCultureSection("branding")}
-                    className={`pb-2 text-sm transition ${
-                      cultureSection === "branding"
-                        ? "border-b-2 border-arc-accent text-arc-accent"
-                        : "border-b-2 border-transparent text-white/60 hover:text-white"
-                    }`}
-                  >
-                    Логотип и стиль
-                  </button>
+                  {CONTENT_UI_SCHEMA.categories
+                    .find((c) => c.id === "cultures")
+                    ?.sections.map((section) => (
+                      <button
+                        key={section.id}
+                        type="button"
+                        onClick={() => setCultureSection(section.id)}
+                        className={`pb-2 text-sm transition ${
+                          cultureSection === section.id
+                            ? "border-b-2 border-arc-accent text-arc-accent"
+                            : "border-b-2 border-transparent text-white/60 hover:text-white"
+                        }`}
+                      >
+                        {section.label}
+                      </button>
+                    ))}
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/20 p-3">
@@ -368,7 +397,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => void deleteCulture()}
+                      onClick={() => setDeleteConfirmOpen(true)}
                       disabled={!selectedCulture || saving}
                       className="panel-border inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-rose-500/10 px-3 text-sm text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -417,11 +446,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             value={draftDescription}
                             onChange={(e) => setDraftDescription(e.target.value)}
                             placeholder="Краткое описание культуры для механик и UI"
-                            maxLength={500}
+                            maxLength={5000}
                             rows={5}
                             className="w-full resize-y rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
                           />
-                          <div className="mt-1 text-right text-[11px] text-white/45">{draftDescription.length}/500</div>
+                          <div className="mt-1 text-right text-[11px] text-white/45">{draftDescription.length}/5000</div>
                         </label>
                       </section>
                     )}
@@ -482,7 +511,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                     <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Предпросмотр</div>
                     <div className="space-y-3">
                       <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                        <div className="mb-2 text-[11px] text-white/50">Плашка культуры</div>
+                        <div className="mb-2 text-[11px] text-white/50">Строка списка</div>
                         <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-2 py-2">
                           <div
                             className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg border border-white/10"
@@ -520,6 +549,33 @@ export function ContentPanel({ open, token, onClose }: Props) {
                         </div>
                       </div>
                       <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                        <div className="mb-2 text-[11px] text-white/50">Карточка страны</div>
+                        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                          <div className="flex items-center gap-3">
+                            <div className="h-8 w-12 rounded bg-white/10" />
+                            <div
+                              className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-white/10"
+                              style={{ backgroundColor: `${draftColor}22` }}
+                            >
+                              {draftLogoUrl ? (
+                                <img src={draftLogoUrl} alt="" className="h-full w-full object-cover" />
+                              ) : (
+                                <span className="text-xs font-semibold" style={{ color: draftColor }}>
+                                  {draftName.trim().slice(0, 1).toUpperCase() || "К"}
+                                </span>
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate text-sm text-white">Пример страны</div>
+                              <div className="mt-1 inline-flex items-center gap-2 rounded-full border px-2 py-1 text-[10px]" style={{ borderColor: `${draftColor}66`, color: draftColor, background: `${draftColor}10` }}>
+                                <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: draftColor }} />
+                                {draftName.trim() || "Культура"}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
                         <div className="mb-2 text-[11px] text-white/50">Описание</div>
                         <div className="text-xs leading-5 text-white/75">
                           {draftDescription.trim() || "Описание культуры будет отображаться здесь."}
@@ -534,6 +590,69 @@ export function ContentPanel({ open, token, onClose }: Props) {
           </Dialog.Panel>
         </motion.div>
       </div>
+
+      <Dialog open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} className="relative z-[206]">
+        <motion.div aria-hidden="true" className="fixed inset-0 bg-black/55 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+        <div className="fixed inset-0 z-[207] flex items-center justify-center p-4">
+          <motion.div initial={{ opacity: 0, y: 8, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.99 }} className="w-full max-w-md">
+            <Dialog.Panel className="glass panel-border rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
+              <Dialog.Title className="text-base font-semibold text-white">Удалить культуру?</Dialog.Title>
+              <div className="mt-2 text-sm text-white/70">
+                Культура <span className="font-semibold text-white">«{selectedCulture?.name ?? "Без названия"}»</span> будет удалена.
+              </div>
+              <div className="mt-1 text-xs text-white/45">Это действие удалит и логотип культуры, если он загружен.</div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmOpen(false)}
+                  className="panel-border inline-flex h-10 items-center justify-center rounded-lg bg-white/5 px-3 text-sm text-white/80 transition hover:text-white"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteCulture()}
+                  disabled={saving}
+                  className="inline-flex h-10 items-center justify-center rounded-lg bg-rose-500/90 px-4 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
+                >
+                  Удалить
+                </button>
+              </div>
+            </Dialog.Panel>
+          </motion.div>
+        </div>
+      </Dialog>
+
+      <Dialog open={closeConfirmOpen} onClose={() => setCloseConfirmOpen(false)} className="relative z-[206]">
+        <motion.div aria-hidden="true" className="fixed inset-0 bg-black/55 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+        <div className="fixed inset-0 z-[207] flex items-center justify-center p-4">
+          <motion.div initial={{ opacity: 0, y: 8, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.99 }} className="w-full max-w-md">
+            <Dialog.Panel className="glass panel-border rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
+              <Dialog.Title className="text-base font-semibold text-white">Закрыть панель контента?</Dialog.Title>
+              <div className="mt-2 text-sm text-white/70">Есть несохранённые изменения в выбранной культуре.</div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCloseConfirmOpen(false)}
+                  className="panel-border inline-flex h-10 items-center justify-center rounded-lg bg-white/5 px-3 text-sm text-white/80 transition hover:text-white"
+                >
+                  Остаться
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCloseConfirmOpen(false);
+                    onClose();
+                  }}
+                  className="inline-flex h-10 items-center justify-center rounded-lg bg-rose-500/90 px-4 text-sm font-semibold text-white transition hover:brightness-110"
+                >
+                  Закрыть без сохранения
+                </button>
+              </div>
+            </Dialog.Panel>
+          </motion.div>
+        </div>
+      </Dialog>
     </Dialog>
   );
 }

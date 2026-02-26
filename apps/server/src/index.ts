@@ -213,6 +213,20 @@ const SETTINGS_MAX_NUMBER = 1_000_000_000_000;
 
 type GameSettings = {
   content: {
+    religions: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+    }>;
+    technologies: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+    }>;
     cultures: Array<{
       id: string;
       name: string;
@@ -289,7 +303,7 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
     const logoUrl = typeof row.logoUrl === "string" || row.logoUrl === null ? (row.logoUrl ?? null) : null;
     if (!id || !name || seen.has(id)) continue;
     seen.add(id);
-    items.push({ id, name: name.slice(0, 80), description: description.slice(0, 500), color, logoUrl });
+    items.push({ id, name: name.slice(0, 80), description: description.slice(0, 5000), color, logoUrl });
   }
   return items;
 }
@@ -477,6 +491,8 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
 
 const defaultGameSettings = (): GameSettings => ({
   content: {
+    religions: [],
+    technologies: [],
     cultures: [],
   },
   civilopedia: {
@@ -587,6 +603,8 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     const civilopediaEntries = normalizeCivilopediaEntries((next as Partial<{ civilopedia?: { entries?: unknown } }>).civilopedia?.entries);
     gameSettings = {
       content: {
+        religions: normalizeContentCultures((next as Partial<{ content?: { religions?: unknown } }>).content?.religions),
+        technologies: normalizeContentCultures((next as Partial<{ content?: { technologies?: unknown } }>).content?.technologies),
         cultures: normalizeContentCultures((next as Partial<{ content?: { cultures?: unknown } }>).content?.cultures),
       },
       civilopedia: {
@@ -1901,7 +1919,7 @@ app.patch("/admin/ui-background", upload.single("uiBackground"), async (req, res
 
 const culturePayloadSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  description: z.string().trim().max(500).optional().default(""),
+  description: z.string().trim().max(5000).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
 });
 
