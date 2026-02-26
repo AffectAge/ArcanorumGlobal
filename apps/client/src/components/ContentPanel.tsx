@@ -26,6 +26,30 @@ type Props = {
 type EditableContentKind = "cultures" | "races" | "religions" | "professions" | "ideologies";
 type ContentSectionId = "general" | "branding";
 
+function SafePreviewImage({
+  src,
+  alt,
+  className,
+  fallback,
+}: {
+  src?: string | null;
+  alt: string;
+  className: string;
+  fallback: React.ReactNode;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (!src || failed) {
+    return <>{fallback}</>;
+  }
+
+  return <img src={src} alt={alt} className={className} onError={() => setFailed(true)} />;
+}
+
 const CONTENT_UI_SCHEMA = {
   categories: [
     {
@@ -165,7 +189,7 @@ async function validateLogo64(file: File): Promise<void> {
   });
 }
 
-async function validatePortrait512(file: File): Promise<void> {
+async function validatePortrait89x100(file: File): Promise<void> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ""));
@@ -175,7 +199,7 @@ async function validatePortrait512(file: File): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      if (img.width > 512 || img.height > 512) {
+      if (img.width > 89 || img.height > 100) {
         reject(new Error("PORTRAIT_TOO_LARGE"));
         return;
       }
@@ -400,7 +424,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const uploadRacePortrait = async (slot: "male" | "female", file: File | null) => {
     if (!file || !selectedEntry || activeCategory !== "races") return;
     try {
-      await validatePortrait512(file);
+      await validatePortrait89x100(file);
       setSaving(true);
       const result = await adminUploadRacePortrait(token, selectedEntry.id, slot, file);
       setEntries(result.items);
@@ -410,7 +434,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "PORTRAIT_INVALID";
       if (msg === "PORTRAIT_TOO_LARGE" || msg === "IMAGE_DIMENSIONS_TOO_LARGE") {
-        toast.error("Портрет должен быть максимум 512x512");
+        toast.error("Портрет должен быть максимум 89x100");
       } else {
         toast.error("Не удалось загрузить портрет");
       }
@@ -677,7 +701,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                   <div className="flex gap-3">
                                     <div className="flex h-[112px] w-[112px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/20">
                                       {portrait.url ? (
-                                        <img src={portrait.url} alt={portrait.label} className="h-full w-full object-cover" />
+                                        <SafePreviewImage
+                                          src={portrait.url}
+                                          alt={portrait.label}
+                                          className="h-full w-full object-contain"
+                                          fallback={<span className="text-xs text-white/45">Нет</span>}
+                                        />
                                       ) : (
                                         <span className="text-xs text-white/45">Нет</span>
                                       )}
@@ -706,7 +735,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                 </div>
                               ))}
                             </div>
-                            <div className="mt-2 text-xs text-white/50">Портреты: максимум 512x512. Рекомендуется PNG/JPG/WebP.</div>
+                            <div className="mt-2 text-xs text-white/50">Портреты: максимум 89x100. Рекомендуется PNG/JPG/WebP.</div>
                           </>
                         )}
                       </section>
@@ -794,7 +823,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               <div className="mb-1 text-[10px] text-white/50">Мужчина</div>
                               <div className="flex aspect-square items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/20">
                                 {draftMalePortraitUrl ? (
-                                  <img src={draftMalePortraitUrl} alt="" className="h-full w-full object-cover" />
+                                  <SafePreviewImage
+                                    src={draftMalePortraitUrl}
+                                    alt="Портрет мужчины"
+                                    className="h-full w-full object-contain"
+                                    fallback={<span className="text-[10px] text-white/40">Нет</span>}
+                                  />
                                 ) : (
                                   <span className="text-[10px] text-white/40">Нет</span>
                                 )}
@@ -804,7 +838,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               <div className="mb-1 text-[10px] text-white/50">Женщина</div>
                               <div className="flex aspect-square items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/20">
                                 {draftFemalePortraitUrl ? (
-                                  <img src={draftFemalePortraitUrl} alt="" className="h-full w-full object-cover" />
+                                  <SafePreviewImage
+                                    src={draftFemalePortraitUrl}
+                                    alt="Портрет женщины"
+                                    className="h-full w-full object-contain"
+                                    fallback={<span className="text-[10px] text-white/40">Нет</span>}
+                                  />
                                 ) : (
                                   <span className="text-[10px] text-white/40">Нет</span>
                                 )}

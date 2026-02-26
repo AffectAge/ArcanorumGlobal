@@ -74,7 +74,7 @@ const storage = multer.diskStorage({
       cb(null, uiBackgroundsDir);
       return;
     }
-    if (file.fieldname === "cultureLogo") {
+    if (file.fieldname === "cultureLogo" || file.fieldname === "racePortrait") {
       cb(null, culturesDir);
       return;
     }
@@ -2342,9 +2342,21 @@ app.patch("/admin/content/entries/races/:entryId/portraits/:slot", upload.single
   if (!file) {
     return res.status(400).json({ error: "NO_FILE" });
   }
-  if (!validateImageDimensions(file, 512)) {
+  if (!validateImageDimensions(file, 100)) {
     removeUploadedFile(file);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "512x512" });
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "89x100" });
+  }
+  try {
+    const image = imageSize(readFileSync(file.path));
+    const width = Number(image.width ?? 0);
+    const height = Number(image.height ?? 0);
+    if (width > 89 || height > 100) {
+      removeUploadedFile(file);
+      return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "89x100" });
+    }
+  } catch {
+    removeUploadedFile(file);
+    return res.status(400).json({ error: "IMAGE_INVALID" });
   }
   const key = slotParsed.data === "male" ? "malePortraitUrl" : "femalePortraitUrl";
   const previousUrl = items[index][key] ?? null;
