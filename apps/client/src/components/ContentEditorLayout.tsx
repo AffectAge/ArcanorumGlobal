@@ -16,6 +16,7 @@ export type ContentSectionTab = {
 type Props = {
   categories: ContentCategoryNavItem[];
   activeCategoryId: string;
+  onCategorySelect?: (id: string) => void;
   listTitle: string;
   listSearchValue: string;
   onListSearchChange: (value: string) => void;
@@ -37,6 +38,7 @@ type Props = {
 export function ContentEditorLayout({
   categories,
   activeCategoryId,
+  onCategorySelect,
   listTitle,
   listSearchValue,
   onListSearchChange,
@@ -66,6 +68,7 @@ export function ContentEditorLayout({
               <button
                 key={category.id}
                 type="button"
+                onClick={() => onCategorySelect?.(category.id)}
                 disabled={!category.enabled}
                 className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm ${
                   !category.enabled
@@ -141,4 +144,3 @@ export function ContentEditorLayout({
     </div>
   );
 }
-

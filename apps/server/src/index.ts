@@ -213,12 +213,41 @@ const SETTINGS_MAX_NUMBER = 1_000_000_000_000;
 
 type GameSettings = {
   content: {
+    races: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+      malePortraitUrl?: string | null;
+      femalePortraitUrl?: string | null;
+    }>;
     religions: Array<{
       id: string;
       name: string;
       description: string;
       color: string;
       logoUrl: string | null;
+      malePortraitUrl?: string | null;
+      femalePortraitUrl?: string | null;
+    }>;
+    professions: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+      malePortraitUrl?: string | null;
+      femalePortraitUrl?: string | null;
+    }>;
+    ideologies: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+      malePortraitUrl?: string | null;
+      femalePortraitUrl?: string | null;
     }>;
     technologies: Array<{
       id: string;
@@ -226,6 +255,8 @@ type GameSettings = {
       description: string;
       color: string;
       logoUrl: string | null;
+      malePortraitUrl?: string | null;
+      femalePortraitUrl?: string | null;
     }>;
     cultures: Array<{
       id: string;
@@ -233,6 +264,8 @@ type GameSettings = {
       description: string;
       color: string;
       logoUrl: string | null;
+      malePortraitUrl?: string | null;
+      femalePortraitUrl?: string | null;
     }>;
   };
   civilopedia: {
@@ -295,15 +328,35 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
   const items: GameSettings["content"]["cultures"] = [];
   for (const raw of input) {
     if (!raw || typeof raw !== "object") continue;
-    const row = raw as Partial<{ id: unknown; name: unknown; description: unknown; color: unknown; logoUrl: unknown }>;
+    const row = raw as Partial<{
+      id: unknown;
+      name: unknown;
+      description: unknown;
+      color: unknown;
+      logoUrl: unknown;
+      malePortraitUrl: unknown;
+      femalePortraitUrl: unknown;
+    }>;
     const id = typeof row.id === "string" ? row.id.trim() : "";
     const name = typeof row.name === "string" ? row.name.trim() : "";
     const description = typeof row.description === "string" ? row.description.trim() : "";
     const color = typeof row.color === "string" && /^#[0-9A-Fa-f]{6}$/.test(row.color.trim()) ? row.color.trim() : "#4ade80";
     const logoUrl = typeof row.logoUrl === "string" || row.logoUrl === null ? (row.logoUrl ?? null) : null;
+    const malePortraitUrl =
+      typeof row.malePortraitUrl === "string" || row.malePortraitUrl === null ? (row.malePortraitUrl ?? null) : null;
+    const femalePortraitUrl =
+      typeof row.femalePortraitUrl === "string" || row.femalePortraitUrl === null ? (row.femalePortraitUrl ?? null) : null;
     if (!id || !name || seen.has(id)) continue;
     seen.add(id);
-    items.push({ id, name: name.slice(0, 80), description: description.slice(0, 5000), color, logoUrl });
+    items.push({
+      id,
+      name: name.slice(0, 80),
+      description: description.slice(0, 5000),
+      color,
+      logoUrl,
+      malePortraitUrl,
+      femalePortraitUrl,
+    });
   }
   return items;
 }
@@ -491,7 +544,10 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
 
 const defaultGameSettings = (): GameSettings => ({
   content: {
+    races: [],
     religions: [],
+    professions: [],
+    ideologies: [],
     technologies: [],
     cultures: [],
   },
@@ -603,7 +659,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     const civilopediaEntries = normalizeCivilopediaEntries((next as Partial<{ civilopedia?: { entries?: unknown } }>).civilopedia?.entries);
     gameSettings = {
       content: {
+        races: normalizeContentCultures((next as Partial<{ content?: { races?: unknown } }>).content?.races),
         religions: normalizeContentCultures((next as Partial<{ content?: { religions?: unknown } }>).content?.religions),
+        professions: normalizeContentCultures((next as Partial<{ content?: { professions?: unknown } }>).content?.professions),
+        ideologies: normalizeContentCultures((next as Partial<{ content?: { ideologies?: unknown } }>).content?.ideologies),
         technologies: normalizeContentCultures((next as Partial<{ content?: { technologies?: unknown } }>).content?.technologies),
         cultures: normalizeContentCultures((next as Partial<{ content?: { cultures?: unknown } }>).content?.cultures),
       },
@@ -1923,6 +1982,24 @@ const culturePayloadSchema = z.object({
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
 });
 
+const contentEntryKindSchema = z.enum(["cultures", "races", "religions", "professions", "ideologies"]);
+type ContentEntryKind = z.infer<typeof contentEntryKindSchema>;
+
+function getContentEntriesByKind(kind: ContentEntryKind) {
+  return gameSettings.content[kind];
+}
+
+function contentNameExists(kind: ContentEntryKind, name: string, excludeId?: string): boolean {
+  return getContentEntriesByKind(kind).some(
+    (entry) => entry.id !== excludeId && entry.name.trim().toLowerCase() === name.trim().toLowerCase(),
+  );
+}
+
+function getContentDuplicateNameError(kind: ContentEntryKind): string {
+  if (kind === "cultures") return "CULTURE_NAME_EXISTS";
+  return "CONTENT_NAME_EXISTS";
+}
+
 app.get("/content/cultures", (_req, res) => {
   return res.json({ cultures: gameSettings.content.cultures });
 });
@@ -2059,6 +2136,255 @@ app.delete("/admin/content/cultures/:cultureId", async (req, res) => {
   }
   savePersistentState();
   return res.json({ ok: true, cultures: gameSettings.content.cultures });
+});
+
+app.get("/content/entries/:kind", (req, res) => {
+  const parsedKind = contentEntryKindSchema.safeParse(String(req.params.kind));
+  if (!parsedKind.success) {
+    return res.status(400).json({ error: "INVALID_CONTENT_KIND" });
+  }
+  return res.json({ items: getContentEntriesByKind(parsedKind.data) });
+});
+
+app.get("/admin/content/entries/:kind", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsedKind = contentEntryKindSchema.safeParse(String(req.params.kind));
+  if (!parsedKind.success) {
+    return res.status(400).json({ error: "INVALID_CONTENT_KIND" });
+  }
+  return res.json({ items: getContentEntriesByKind(parsedKind.data) });
+});
+
+app.post("/admin/content/entries/:kind", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsedKind = contentEntryKindSchema.safeParse(String(req.params.kind));
+  if (!parsedKind.success) {
+    return res.status(400).json({ error: "INVALID_CONTENT_KIND" });
+  }
+  const parsed = culturePayloadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const kind = parsedKind.data;
+  const normalizedName = parsed.data.name.trim();
+  if (contentNameExists(kind, normalizedName)) {
+    return res.status(409).json({ error: getContentDuplicateNameError(kind) });
+  }
+  const item = {
+    id: randomUUID(),
+    name: normalizedName,
+    description: (parsed.data.description ?? "").trim(),
+    color: parsed.data.color,
+    logoUrl: null as string | null,
+    malePortraitUrl: null as string | null,
+    femalePortraitUrl: null as string | null,
+  };
+  getContentEntriesByKind(kind).unshift(item);
+  savePersistentState();
+  return res.json({ item, items: getContentEntriesByKind(kind) });
+});
+
+app.patch("/admin/content/entries/:kind/:entryId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsedKind = contentEntryKindSchema.safeParse(String(req.params.kind));
+  if (!parsedKind.success) {
+    return res.status(400).json({ error: "INVALID_CONTENT_KIND" });
+  }
+  const parsed = culturePayloadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const kind = parsedKind.data;
+  const entryId = String(req.params.entryId);
+  const items = getContentEntriesByKind(kind);
+  const index = items.findIndex((entry) => entry.id === entryId);
+  if (index < 0) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const normalizedName = parsed.data.name.trim();
+  if (contentNameExists(kind, normalizedName, entryId)) {
+    return res.status(409).json({ error: getContentDuplicateNameError(kind) });
+  }
+  items[index] = {
+    ...items[index],
+    name: normalizedName,
+    description: (parsed.data.description ?? "").trim(),
+    color: parsed.data.color,
+  };
+  savePersistentState();
+  return res.json({ item: items[index], items });
+});
+
+app.patch("/admin/content/entries/:kind/:entryId/logo", upload.single("cultureLogo"), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsedKind = contentEntryKindSchema.safeParse(String(req.params.kind));
+  if (!parsedKind.success) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(400).json({ error: "INVALID_CONTENT_KIND" });
+  }
+  const kind = parsedKind.data;
+  const entryId = String(req.params.entryId);
+  const items = getContentEntriesByKind(kind);
+  const index = items.findIndex((entry) => entry.id === entryId);
+  if (index < 0) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const file = req.file as Express.Multer.File | undefined;
+  if (!file) {
+    return res.status(400).json({ error: "NO_FILE" });
+  }
+  if (!validateImageDimensions(file, 64)) {
+    removeUploadedFile(file);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "64x64" });
+  }
+  const previousUrl = items[index].logoUrl;
+  items[index] = {
+    ...items[index],
+    logoUrl: `/uploads/cultures/${file.filename}`,
+  };
+  if (previousUrl) {
+    removeUploadedByUrl(previousUrl);
+  }
+  savePersistentState();
+  return res.json({ item: items[index], items });
+});
+
+app.delete("/admin/content/entries/:kind/:entryId/logo", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsedKind = contentEntryKindSchema.safeParse(String(req.params.kind));
+  if (!parsedKind.success) {
+    return res.status(400).json({ error: "INVALID_CONTENT_KIND" });
+  }
+  const kind = parsedKind.data;
+  const entryId = String(req.params.entryId);
+  const items = getContentEntriesByKind(kind);
+  const index = items.findIndex((entry) => entry.id === entryId);
+  if (index < 0) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const previousUrl = items[index].logoUrl;
+  items[index] = { ...items[index], logoUrl: null };
+  if (previousUrl) {
+    removeUploadedByUrl(previousUrl);
+  }
+  savePersistentState();
+  return res.json({ item: items[index], items });
+});
+
+app.delete("/admin/content/entries/:kind/:entryId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsedKind = contentEntryKindSchema.safeParse(String(req.params.kind));
+  if (!parsedKind.success) {
+    return res.status(400).json({ error: "INVALID_CONTENT_KIND" });
+  }
+  const kind = parsedKind.data;
+  const entryId = String(req.params.entryId);
+  const items = getContentEntriesByKind(kind);
+  const index = items.findIndex((entry) => entry.id === entryId);
+  if (index < 0) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const [removed] = items.splice(index, 1);
+  if (removed?.logoUrl) {
+    removeUploadedByUrl(removed.logoUrl);
+  }
+  if (removed?.malePortraitUrl) {
+    removeUploadedByUrl(removed.malePortraitUrl);
+  }
+  if (removed?.femalePortraitUrl) {
+    removeUploadedByUrl(removed.femalePortraitUrl);
+  }
+  savePersistentState();
+  return res.json({ ok: true, items });
+});
+
+const racePortraitSlotSchema = z.enum(["male", "female"]);
+
+app.patch("/admin/content/entries/races/:entryId/portraits/:slot", upload.single("racePortrait"), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const slotParsed = racePortraitSlotSchema.safeParse(String(req.params.slot));
+  if (!slotParsed.success) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(400).json({ error: "INVALID_RACE_PORTRAIT_SLOT" });
+  }
+  const entryId = String(req.params.entryId);
+  const items = gameSettings.content.races;
+  const index = items.findIndex((entry) => entry.id === entryId);
+  if (index < 0) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const file = req.file as Express.Multer.File | undefined;
+  if (!file) {
+    return res.status(400).json({ error: "NO_FILE" });
+  }
+  if (!validateImageDimensions(file, 512)) {
+    removeUploadedFile(file);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "512x512" });
+  }
+  const key = slotParsed.data === "male" ? "malePortraitUrl" : "femalePortraitUrl";
+  const previousUrl = items[index][key] ?? null;
+  items[index] = {
+    ...items[index],
+    [key]: `/uploads/cultures/${file.filename}`,
+  };
+  if (previousUrl) {
+    removeUploadedByUrl(previousUrl);
+  }
+  savePersistentState();
+  return res.json({ item: items[index], items });
+});
+
+app.delete("/admin/content/entries/races/:entryId/portraits/:slot", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const slotParsed = racePortraitSlotSchema.safeParse(String(req.params.slot));
+  if (!slotParsed.success) {
+    return res.status(400).json({ error: "INVALID_RACE_PORTRAIT_SLOT" });
+  }
+  const entryId = String(req.params.entryId);
+  const items = gameSettings.content.races;
+  const index = items.findIndex((entry) => entry.id === entryId);
+  if (index < 0) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const key = slotParsed.data === "male" ? "malePortraitUrl" : "femalePortraitUrl";
+  const previousUrl = items[index][key] ?? null;
+  items[index] = {
+    ...items[index],
+    [key]: null,
+  };
+  if (previousUrl) {
+    removeUploadedByUrl(previousUrl);
+  }
+  savePersistentState();
+  return res.json({ item: items[index], items });
 });
 
 app.get("/admin/game-settings", async (req, res) => {

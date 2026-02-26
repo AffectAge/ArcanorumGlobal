@@ -1,16 +1,19 @@
 import { Dialog } from "@headlessui/react";
 import { motion } from "framer-motion";
-import { Palette, ScrollText, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { Briefcase, Flame, Palette, ScrollText, Sparkles, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
-  adminCreateCulture,
-  adminDeleteCulture,
-  adminDeleteCultureLogo,
-  adminFetchContentCultures,
-  adminUpdateCulture,
-  adminUploadCultureLogo,
-  type ContentCulture,
+  adminCreateContentEntry,
+  adminDeleteContentEntry,
+  adminDeleteContentEntryLogo,
+  adminDeleteRacePortrait,
+  adminFetchContentEntries,
+  adminUpdateContentEntry,
+  adminUploadContentEntryLogo,
+  adminUploadRacePortrait,
+  type ContentEntry,
+  type ContentEntryKind,
 } from "../lib/api";
 import { ContentEditorLayout } from "./ContentEditorLayout";
 
@@ -19,6 +22,9 @@ type Props = {
   token: string;
   onClose: () => void;
 };
+
+type EditableContentKind = "cultures" | "races" | "religions" | "professions" | "ideologies";
+type ContentSectionId = "general" | "branding";
 
 const CONTENT_UI_SCHEMA = {
   categories: [
@@ -32,10 +38,111 @@ const CONTENT_UI_SCHEMA = {
         { id: "branding", label: "Логотип и стиль" },
       ] as const,
     },
-    { id: "religions", label: "Религии (скоро)", icon: ScrollText, enabled: false, sections: [] as const },
+    {
+      id: "races",
+      label: "Расы",
+      icon: Sparkles,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация" },
+        { id: "branding", label: "Логотип и стиль" },
+      ] as const,
+    },
+    {
+      id: "religions",
+      label: "Религии",
+      icon: ScrollText,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация" },
+        { id: "branding", label: "Логотип и стиль" },
+      ] as const,
+    },
+    {
+      id: "professions",
+      label: "Профессии",
+      icon: Briefcase,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация" },
+        { id: "branding", label: "Логотип и стиль" },
+      ] as const,
+    },
+    {
+      id: "ideologies",
+      label: "Идеологии",
+      icon: Flame,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация" },
+        { id: "branding", label: "Логотип и стиль" },
+      ] as const,
+    },
     { id: "technologies", label: "Технологии (скоро)", icon: Sparkles, enabled: false, sections: [] as const },
   ] as const,
 } as const;
+
+const CONTENT_KIND_META: Record<EditableContentKind, {
+  single: string;
+  singleLower: string;
+  plural: string;
+  listTitle: string;
+  searchPlaceholder: string;
+  createLabel: string;
+  emptyLetter: string;
+  sectionSubtitle: string;
+}> = {
+  cultures: {
+    single: "Культура",
+    singleLower: "культура",
+    plural: "Культуры",
+    listTitle: "Список культур",
+    searchPlaceholder: "Поиск культуры",
+    createLabel: "Создать культуру",
+    emptyLetter: "К",
+    sectionSubtitle: "Раздел создания и редактирования культур",
+  },
+  races: {
+    single: "Раса",
+    singleLower: "раса",
+    plural: "Расы",
+    listTitle: "Список рас",
+    searchPlaceholder: "Поиск расы",
+    createLabel: "Создать расу",
+    emptyLetter: "Р",
+    sectionSubtitle: "Раздел создания и редактирования рас",
+  },
+  religions: {
+    single: "Религия",
+    singleLower: "религия",
+    plural: "Религии",
+    listTitle: "Список религий",
+    searchPlaceholder: "Поиск религии",
+    createLabel: "Создать религию",
+    emptyLetter: "Р",
+    sectionSubtitle: "Раздел создания и редактирования религий",
+  },
+  professions: {
+    single: "Профессия",
+    singleLower: "профессия",
+    plural: "Профессии",
+    listTitle: "Список профессий",
+    searchPlaceholder: "Поиск профессии",
+    createLabel: "Создать профессию",
+    emptyLetter: "П",
+    sectionSubtitle: "Раздел создания и редактирования профессий",
+  },
+  ideologies: {
+    single: "Идеология",
+    singleLower: "идеология",
+    plural: "Идеологии",
+    listTitle: "Список идеологий",
+    searchPlaceholder: "Поиск идеологии",
+    createLabel: "Создать идеологию",
+    emptyLetter: "И",
+    sectionSubtitle: "Раздел создания и редактирования идеологий",
+  },
+};
 
 async function validateLogo64(file: File): Promise<void> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -58,45 +165,70 @@ async function validateLogo64(file: File): Promise<void> {
   });
 }
 
+async function validatePortrait512(file: File): Promise<void> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("READ_FAILED"));
+    reader.readAsDataURL(file);
+  });
+  await new Promise<void>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      if (img.width > 512 || img.height > 512) {
+        reject(new Error("PORTRAIT_TOO_LARGE"));
+        return;
+      }
+      resolve();
+    };
+    img.onerror = () => reject(new Error("IMAGE_INVALID"));
+    img.src = dataUrl;
+  });
+}
+
 export function ContentPanel({ open, token, onClose }: Props) {
-  const [activeCategory] = useState<"cultures">("cultures");
-  const [cultureSection, setCultureSection] = useState<"general" | "branding">("general");
-  const [cultures, setCultures] = useState<ContentCulture[]>([]);
+  const [activeCategory, setActiveCategory] = useState<EditableContentKind>("cultures");
+  const [entitySection, setEntitySection] = useState<ContentSectionId>("general");
+  const [entries, setEntries] = useState<ContentEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [selectedCultureId, setSelectedCultureId] = useState<string>("");
+  const [selectedEntryId, setSelectedEntryId] = useState<string>("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
   const [draftColor, setDraftColor] = useState("#4ade80");
   const [draftLogoUrl, setDraftLogoUrl] = useState<string | null>(null);
+  const [draftMalePortraitUrl, setDraftMalePortraitUrl] = useState<string | null>(null);
+  const [draftFemalePortraitUrl, setDraftFemalePortraitUrl] = useState<string | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState<string>("");
 
-  const filteredCultures = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return cultures;
-    return cultures.filter((c) => c.name.toLowerCase().includes(q));
-  }, [cultures, search]);
+  const activeMeta = CONTENT_KIND_META[activeCategory];
 
-  const selectedCulture = useMemo(
-    () => cultures.find((c) => c.id === selectedCultureId) ?? null,
-    [cultures, selectedCultureId],
+  const filteredEntries = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter((c) => c.name.toLowerCase().includes(q) || (c.description ?? "").toLowerCase().includes(q));
+  }, [entries, search]);
+
+  const selectedEntry = useMemo(
+    () => entries.find((c) => c.id === selectedEntryId) ?? null,
+    [entries, selectedEntryId],
   );
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    adminFetchContentCultures(token)
+    adminFetchContentEntries(token, activeCategory as ContentEntryKind)
       .then((items) => {
         if (cancelled) return;
-        setCultures(items);
-        setSelectedCultureId((prev) => prev || items[0]?.id || "");
+        setEntries(items);
+        setSelectedEntryId((prev) => (items.some((x) => x.id === prev) ? prev : items[0]?.id || ""));
       })
       .catch(() => {
-        if (!cancelled) toast.error("Не удалось загрузить культуры");
+        if (!cancelled) toast.error(`Не удалось загрузить ${activeMeta.plural.toLowerCase()}`);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -104,43 +236,58 @@ export function ContentPanel({ open, token, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [open, token]);
+  }, [open, token, activeCategory, activeMeta.plural]);
 
   useEffect(() => {
     if (!open) return;
-    if (!selectedCultureId && cultures[0]) {
-      setSelectedCultureId(cultures[0].id);
+    if (!selectedEntryId && entries[0]) {
+      setSelectedEntryId(entries[0].id);
     }
-  }, [open, cultures, selectedCultureId]);
+  }, [open, entries, selectedEntryId]);
 
   useEffect(() => {
-    if (!selectedCulture) {
+    if (!selectedEntry) {
       setDraftName("");
       setDraftDescription("");
       setDraftColor("#4ade80");
       setDraftLogoUrl(null);
+      setDraftMalePortraitUrl(null);
+      setDraftFemalePortraitUrl(null);
       setSavedSnapshot("");
       return;
     }
-    setDraftName(selectedCulture.name);
-    setDraftDescription(selectedCulture.description ?? "");
-    setDraftColor(selectedCulture.color);
-    setDraftLogoUrl(selectedCulture.logoUrl);
-    setSavedSnapshot(JSON.stringify(selectedCulture));
-  }, [selectedCulture]);
+    setDraftName(selectedEntry.name);
+    setDraftDescription(selectedEntry.description ?? "");
+    setDraftColor(selectedEntry.color);
+    setDraftLogoUrl(selectedEntry.logoUrl);
+    setDraftMalePortraitUrl(selectedEntry.malePortraitUrl ?? null);
+    setDraftFemalePortraitUrl(selectedEntry.femalePortraitUrl ?? null);
+    setSavedSnapshot(JSON.stringify(selectedEntry));
+  }, [selectedEntry]);
 
   const hasUnsavedChanges = useMemo(() => {
-    if (!selectedCulture) return false;
+    if (!selectedEntry) return false;
     return (
       JSON.stringify({
-        id: selectedCulture.id,
+        id: selectedEntry.id,
         name: draftName.trim(),
         description: draftDescription.trim(),
         color: draftColor,
         logoUrl: draftLogoUrl,
+        malePortraitUrl: draftMalePortraitUrl,
+        femalePortraitUrl: draftFemalePortraitUrl,
       }) !== savedSnapshot
     );
-  }, [draftColor, draftDescription, draftLogoUrl, draftName, savedSnapshot, selectedCulture]);
+  }, [
+    draftColor,
+    draftDescription,
+    draftFemalePortraitUrl,
+    draftLogoUrl,
+    draftMalePortraitUrl,
+    draftName,
+    savedSnapshot,
+    selectedEntry,
+  ]);
 
   const requestClose = () => {
     if (saving) return;
@@ -151,86 +298,138 @@ export function ContentPanel({ open, token, onClose }: Props) {
     onClose();
   };
 
-  const createCulture = async () => {
+  const createEntry = async () => {
     setSaving(true);
     try {
-      const nextNameBase = "Новая культура";
+      const nextNameBase = `Новая ${activeMeta.singleLower}`;
       let name = nextNameBase;
       let i = 2;
-      const used = new Set(cultures.map((c) => c.name.trim().toLowerCase()));
+      const used = new Set(entries.map((c) => c.name.trim().toLowerCase()));
       while (used.has(name.toLowerCase())) {
         name = `${nextNameBase} ${i++}`;
       }
-      const result = await adminCreateCulture(token, { name, description: "", color: "#a78bfa" });
-      setCultures(result.cultures);
-      setSelectedCultureId(result.culture.id);
-      toast.success("Культура создана");
+      const result = await adminCreateContentEntry(token, activeCategory as ContentEntryKind, {
+        name,
+        description: "",
+        color: "#a78bfa",
+      });
+      setEntries(result.items);
+      setSelectedEntryId(result.item.id);
+      toast.success(`${activeMeta.single} создана`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "ADMIN_CREATE_CULTURE_FAILED";
-      if (msg === "CULTURE_NAME_EXISTS") toast.error("Название культуры уже используется");
-      else toast.error("Не удалось создать культуру");
+      const msg = err instanceof Error ? err.message : "ADMIN_CREATE_CONTENT_ENTRY_FAILED";
+      if (msg === "CULTURE_NAME_EXISTS" || msg === "CONTENT_NAME_EXISTS") {
+        toast.error(`Название (${activeMeta.singleLower}) уже используется`);
+      } else {
+        toast.error(`Не удалось создать: ${activeMeta.singleLower}`);
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  const saveCulture = async () => {
-    if (!selectedCulture) return;
+  const saveEntry = async () => {
+    if (!selectedEntry) return;
     const name = draftName.trim();
     if (!name) {
-      toast.error("Введите название культуры");
+      toast.error(`Введите название (${activeMeta.singleLower})`);
       return;
     }
-    if (cultures.some((c) => c.id !== selectedCulture.id && c.name.trim().toLowerCase() === name.toLowerCase())) {
-      toast.error("Название культуры должно быть уникальным");
+    if (entries.some((c) => c.id !== selectedEntry.id && c.name.trim().toLowerCase() === name.toLowerCase())) {
+      toast.error(`Название (${activeMeta.singleLower}) должно быть уникальным`);
       return;
     }
     const color = /^#[0-9A-Fa-f]{6}$/.test(draftColor) ? draftColor : "#4ade80";
     setSaving(true);
     try {
-      const result = await adminUpdateCulture(token, selectedCulture.id, { name, description: draftDescription.trim(), color });
-      setCultures(result.cultures);
-      setSavedSnapshot(JSON.stringify(result.culture));
-      toast.success("Культура сохранена");
+      const result = await adminUpdateContentEntry(token, activeCategory as ContentEntryKind, selectedEntry.id, {
+        name,
+        description: draftDescription.trim(),
+        color,
+      });
+      setEntries(result.items);
+      setSavedSnapshot(JSON.stringify(result.item));
+      toast.success(`${activeMeta.single} сохранена`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "ADMIN_UPDATE_CULTURE_FAILED";
-      if (msg === "CULTURE_NAME_EXISTS") toast.error("Название культуры уже используется");
-      else toast.error("Не удалось сохранить культуру");
+      const msg = err instanceof Error ? err.message : "ADMIN_UPDATE_CONTENT_ENTRY_FAILED";
+      if (msg === "CULTURE_NAME_EXISTS" || msg === "CONTENT_NAME_EXISTS") {
+        toast.error(`Название (${activeMeta.singleLower}) уже используется`);
+      } else {
+        toast.error(`Не удалось сохранить: ${activeMeta.singleLower}`);
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  const deleteCulture = async () => {
-    if (!selectedCulture) return;
+  const deleteEntry = async () => {
+    if (!selectedEntry) return;
     setSaving(true);
     try {
-      const result = await adminDeleteCulture(token, selectedCulture.id);
-      setCultures(result.cultures);
-      setSelectedCultureId(result.cultures[0]?.id ?? "");
+      const result = await adminDeleteContentEntry(token, activeCategory as ContentEntryKind, selectedEntry.id);
+      setEntries(result.items);
+      setSelectedEntryId(result.items[0]?.id ?? "");
       setDeleteConfirmOpen(false);
-      toast.success("Культура удалена");
+      toast.success(`${activeMeta.single} удалена`);
     } catch {
-      toast.error("Не удалось удалить культуру");
+      toast.error(`Не удалось удалить: ${activeMeta.singleLower}`);
     } finally {
       setSaving(false);
     }
   };
 
   const uploadLogo = async (file: File | null) => {
-    if (!file || !selectedCulture) return;
+    if (!file || !selectedEntry) return;
     try {
       await validateLogo64(file);
       setSaving(true);
-      const result = await adminUploadCultureLogo(token, selectedCulture.id, file);
-      setCultures(result.cultures);
-      setDraftLogoUrl(result.culture.logoUrl);
-      setSavedSnapshot(JSON.stringify(result.culture));
+      const result = await adminUploadContentEntryLogo(token, activeCategory as ContentEntryKind, selectedEntry.id, file);
+      setEntries(result.items);
+      setDraftLogoUrl(result.item.logoUrl);
+      setSavedSnapshot(JSON.stringify(result.item));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "LOGO_INVALID";
       if (msg === "LOGO_TOO_LARGE") toast.error("Логотип должен быть максимум 64x64");
       else if (msg === "IMAGE_DIMENSIONS_TOO_LARGE") toast.error("Логотип должен быть максимум 64x64");
       else toast.error("Не удалось загрузить логотип");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const uploadRacePortrait = async (slot: "male" | "female", file: File | null) => {
+    if (!file || !selectedEntry || activeCategory !== "races") return;
+    try {
+      await validatePortrait512(file);
+      setSaving(true);
+      const result = await adminUploadRacePortrait(token, selectedEntry.id, slot, file);
+      setEntries(result.items);
+      setSavedSnapshot(JSON.stringify(result.item));
+      setDraftMalePortraitUrl(result.item.malePortraitUrl ?? null);
+      setDraftFemalePortraitUrl(result.item.femalePortraitUrl ?? null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "PORTRAIT_INVALID";
+      if (msg === "PORTRAIT_TOO_LARGE" || msg === "IMAGE_DIMENSIONS_TOO_LARGE") {
+        toast.error("Портрет должен быть максимум 512x512");
+      } else {
+        toast.error("Не удалось загрузить портрет");
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteRacePortrait = async (slot: "male" | "female") => {
+    if (!selectedEntry || activeCategory !== "races") return;
+    try {
+      setSaving(true);
+      const result = await adminDeleteRacePortrait(token, selectedEntry.id, slot);
+      setEntries(result.items);
+      setSavedSnapshot(JSON.stringify(result.item));
+      setDraftMalePortraitUrl(result.item.malePortraitUrl ?? null);
+      setDraftFemalePortraitUrl(result.item.femalePortraitUrl ?? null);
+    } catch {
+      toast.error("Не удалось удалить портрет");
     } finally {
       setSaving(false);
     }
@@ -272,24 +471,33 @@ export function ContentPanel({ open, token, onClose }: Props) {
             <ContentEditorLayout
               categories={CONTENT_UI_SCHEMA.categories.map((c) => ({ id: c.id, label: c.label, icon: c.icon, enabled: c.enabled }))}
               activeCategoryId={activeCategory}
-              listTitle="Список культур"
+              onCategorySelect={(id) => {
+                const category = CONTENT_UI_SCHEMA.categories.find((c) => c.id === id);
+                if (!category?.enabled || id === activeCategory || id === "technologies") return;
+                setActiveCategory(id as EditableContentKind);
+                setEntitySection("general");
+                setSearch("");
+              }}
+              listTitle={activeMeta.listTitle}
               listSearchValue={search}
               onListSearchChange={setSearch}
-              listSearchPlaceholder="Поиск культуры"
-              onCreateItem={() => void createCulture()}
-              createItemLabel="Создать культуру"
+              listSearchPlaceholder={activeMeta.searchPlaceholder}
+              onCreateItem={() => void createEntry()}
+              createItemLabel={activeMeta.createLabel}
               createItemDisabled={saving}
               listContent={
                 loading ? (
-                  <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">Загрузка культур...</div>
+                  <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">
+                    Загрузка: {activeMeta.plural.toLowerCase()}...
+                  </div>
                 ) : (
-                  filteredCultures.map((culture) => (
+                  filteredEntries.map((culture) => (
                     <button
                       key={culture.id}
                       type="button"
-                      onClick={() => setSelectedCultureId(culture.id)}
+                      onClick={() => setSelectedEntryId(culture.id)}
                       className={`flex w-full items-center gap-2 rounded-lg border px-2 py-2 text-left transition ${
-                        selectedCultureId === culture.id
+                        selectedEntryId === culture.id
                           ? "border-arc-accent/30 bg-arc-accent/10"
                           : "border-white/10 bg-black/20 hover:border-white/15"
                       }`}
@@ -318,12 +526,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
                 )
               }
               sectionTabs={
-                (CONTENT_UI_SCHEMA.categories.find((c) => c.id === "cultures")?.sections ?? []).map((s) => ({ id: s.id, label: s.label }))
+                (CONTENT_UI_SCHEMA.categories.find((c) => c.id === activeCategory)?.sections ?? []).map((s) => ({ id: s.id, label: s.label }))
               }
-              activeSectionId={cultureSection}
-              onSectionChange={(id) => setCultureSection(id as "general" | "branding")}
-              headerTitle={selectedCulture ? selectedCulture.name : "Новая культура"}
-              headerSubtitle={activeCategory === "cultures" ? "Раздел создания и редактирования культур" : ""}
+              activeSectionId={entitySection}
+              onSectionChange={(id) => setEntitySection(id as ContentSectionId)}
+              headerTitle={selectedEntry ? selectedEntry.name : `Новая ${activeMeta.singleLower}`}
+              headerSubtitle={activeMeta.sectionSubtitle}
               headerActions={
                 <>
                   {hasUnsavedChanges && (
@@ -333,8 +541,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
                   )}
                   <button
                     type="button"
-                    onClick={() => void saveCulture()}
-                    disabled={!selectedCulture || saving}
+                    onClick={() => void saveEntry()}
+                    disabled={!selectedEntry || saving}
                     className="inline-flex h-10 items-center justify-center rounded-lg bg-arc-accent px-4 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Сохранить
@@ -342,7 +550,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                   <button
                     type="button"
                     onClick={() => setDeleteConfirmOpen(true)}
-                    disabled={!selectedCulture || saving}
+                    disabled={!selectedEntry || saving}
                     className="panel-border inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-rose-500/10 px-3 text-sm text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Trash2 size={14} />
@@ -352,7 +560,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
               }
               editorContent={
                 <div className="space-y-4">
-                    {cultureSection === "general" && (
+                    {entitySection === "general" && (
                       <section className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Основные данные</div>
                         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_200px]">
@@ -361,7 +569,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             <input
                               value={draftName}
                               onChange={(e) => setDraftName(e.target.value)}
-                              placeholder="Название культуры"
+                              placeholder={`Название (${activeMeta.singleLower})`}
                               className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
                             />
                           </label>
@@ -388,7 +596,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                           <textarea
                             value={draftDescription}
                             onChange={(e) => setDraftDescription(e.target.value)}
-                            placeholder="Краткое описание культуры для механик и UI"
+                            placeholder={`Краткое описание (${activeMeta.singleLower}) для механик и UI`}
                             maxLength={5000}
                             rows={5}
                             className="w-full resize-y rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
@@ -398,16 +606,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
                       </section>
                     )}
 
-                    {cultureSection === "branding" && (
+                    {entitySection === "branding" && (
                       <section className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Логотип</div>
                         <div className="flex flex-wrap items-start gap-4">
                           <div className="flex h-[88px] w-[88px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-[#131a22]">
                             {draftLogoUrl ? (
-                              <img src={draftLogoUrl} alt="Логотип культуры" className="h-full w-full object-cover" />
+                              <img src={draftLogoUrl} alt={`Логотип (${activeMeta.singleLower})`} className="h-full w-full object-cover" />
                             ) : (
                               <span className="text-xs font-semibold" style={{ color: draftColor }}>
-                                {draftName.trim().slice(0, 1).toUpperCase() || "К"}
+                                {draftName.trim().slice(0, 1).toUpperCase() || activeMeta.emptyLetter}
                               </span>
                             )}
                           </div>
@@ -426,20 +634,24 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               <button
                                 type="button"
                                 onClick={async () => {
-                                  if (!selectedCulture) return;
+                                  if (!selectedEntry) return;
                                   try {
                                     setSaving(true);
-                                    const result = await adminDeleteCultureLogo(token, selectedCulture.id);
-                                    setCultures(result.cultures);
-                                    setDraftLogoUrl(result.culture.logoUrl);
-                                    setSavedSnapshot(JSON.stringify(result.culture));
+                                    const result = await adminDeleteContentEntryLogo(
+                                      token,
+                                      activeCategory as ContentEntryKind,
+                                      selectedEntry.id,
+                                    );
+                                    setEntries(result.items);
+                                    setDraftLogoUrl(result.item.logoUrl);
+                                    setSavedSnapshot(JSON.stringify(result.item));
                                   } catch {
                                     toast.error("Не удалось удалить логотип");
                                   } finally {
                                     setSaving(false);
                                   }
                                 }}
-                                disabled={!selectedCulture || saving}
+                                disabled={!selectedEntry || saving}
                                 className="panel-border inline-flex h-10 items-center justify-center rounded-lg bg-rose-500/10 px-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 Удалить логотип
@@ -448,6 +660,55 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             <div className="text-xs text-white/50">Максимум 64x64. Рекомендуется PNG или SVG.</div>
                           </div>
                         </div>
+
+                        {activeCategory === "races" && (
+                          <>
+                            <div className="my-4 h-px bg-white/10" />
+                            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                              Портреты расы
+                            </div>
+                            <div className="grid gap-4 lg:grid-cols-2">
+                              {([
+                                { slot: "male", label: "Портрет мужчины", url: draftMalePortraitUrl },
+                                { slot: "female", label: "Портрет женщины", url: draftFemalePortraitUrl },
+                              ] as const).map((portrait) => (
+                                <div key={portrait.slot} className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                                  <div className="mb-2 text-xs text-white/65">{portrait.label}</div>
+                                  <div className="flex gap-3">
+                                    <div className="flex h-[112px] w-[112px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                                      {portrait.url ? (
+                                        <img src={portrait.url} alt={portrait.label} className="h-full w-full object-cover" />
+                                      ) : (
+                                        <span className="text-xs text-white/45">Нет</span>
+                                      )}
+                                    </div>
+                                    <div className="flex min-h-[112px] min-w-0 flex-1 flex-col justify-center gap-2">
+                                      <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg bg-arc-accent px-3 text-sm font-semibold text-black transition hover:brightness-110">
+                                        <Upload size={14} />
+                                        Загрузить
+                                        <input
+                                          type="file"
+                                          accept="image/png,image/webp,image/jpeg"
+                                          className="hidden"
+                                          onChange={(e) => void uploadRacePortrait(portrait.slot, e.target.files?.[0] ?? null)}
+                                        />
+                                      </label>
+                                      <button
+                                        type="button"
+                                        onClick={() => void deleteRacePortrait(portrait.slot)}
+                                        disabled={saving || !selectedEntry}
+                                        className="panel-border inline-flex h-10 items-center justify-center rounded-lg bg-rose-500/10 px-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        Удалить
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="mt-2 text-xs text-white/50">Портреты: максимум 512x512. Рекомендуется PNG/JPG/WebP.</div>
+                          </>
+                        )}
                       </section>
                     )}
                 </div>
@@ -465,12 +726,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               <img src={draftLogoUrl} alt="" className="h-full w-full object-cover" />
                             ) : (
                               <span className="text-xs font-semibold" style={{ color: draftColor }}>
-                                {draftName.trim().slice(0, 1).toUpperCase() || "К"}
+                                {draftName.trim().slice(0, 1).toUpperCase() || activeMeta.emptyLetter}
                               </span>
                             )}
                           </div>
                           <div className="min-w-0">
-                            <div className="truncate text-sm text-white">{draftName.trim() || "Название культуры"}</div>
+                            <div className="truncate text-sm text-white">{draftName.trim() || `Название (${activeMeta.singleLower})`}</div>
                             <div className="mt-1 flex items-center gap-2">
                               <span className="inline-block h-2.5 w-2.5 rounded-full border border-white/20" style={{ backgroundColor: draftColor }} />
                               <span className="text-[10px] text-white/50">{draftColor}</span>
@@ -489,7 +750,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             className="inline-block h-2 w-2 rounded-full"
                             style={{ backgroundColor: draftColor }}
                           />
-                          {draftName.trim() || "Название культуры"}
+                          {draftName.trim() || `Название (${activeMeta.singleLower})`}
                         </div>
                       </div>
                       <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
@@ -505,7 +766,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                 <img src={draftLogoUrl} alt="" className="h-full w-full object-cover" />
                               ) : (
                                 <span className="text-xs font-semibold" style={{ color: draftColor }}>
-                                  {draftName.trim().slice(0, 1).toUpperCase() || "К"}
+                                  {draftName.trim().slice(0, 1).toUpperCase() || activeMeta.emptyLetter}
                                 </span>
                               )}
                             </div>
@@ -513,7 +774,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               <div className="truncate text-sm text-white">Пример страны</div>
                               <div className="mt-1 inline-flex items-center gap-2 rounded-full border px-2 py-1 text-[10px]" style={{ borderColor: `${draftColor}66`, color: draftColor, background: `${draftColor}10` }}>
                                 <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: draftColor }} />
-                                {draftName.trim() || "Культура"}
+                                {draftName.trim() || activeMeta.single}
                               </div>
                             </div>
                           </div>
@@ -522,9 +783,36 @@ export function ContentPanel({ open, token, onClose }: Props) {
                       <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
                         <div className="mb-2 text-[11px] text-white/50">Описание</div>
                         <div className="text-xs leading-5 text-white/75">
-                          {draftDescription.trim() || "Описание культуры будет отображаться здесь."}
+                          {draftDescription.trim() || `Описание (${activeMeta.singleLower}) будет отображаться здесь.`}
                         </div>
                       </div>
+                      {activeCategory === "races" && (
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="mb-2 text-[11px] text-white/50">Портреты</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                              <div className="mb-1 text-[10px] text-white/50">Мужчина</div>
+                              <div className="flex aspect-square items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/20">
+                                {draftMalePortraitUrl ? (
+                                  <img src={draftMalePortraitUrl} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <span className="text-[10px] text-white/40">Нет</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                              <div className="mb-1 text-[10px] text-white/50">Женщина</div>
+                              <div className="flex aspect-square items-center justify-center overflow-hidden rounded-md border border-white/10 bg-black/20">
+                                {draftFemalePortraitUrl ? (
+                                  <img src={draftFemalePortraitUrl} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <span className="text-[10px] text-white/40">Нет</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                 </div>
               }
             />
@@ -537,11 +825,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
         <div className="fixed inset-0 z-[207] flex items-center justify-center p-4">
           <motion.div initial={{ opacity: 0, y: 8, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.99 }} className="w-full max-w-md">
             <Dialog.Panel className="glass panel-border rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
-              <Dialog.Title className="text-base font-semibold text-white">Удалить культуру?</Dialog.Title>
+              <Dialog.Title className="text-base font-semibold text-white">Удалить {activeMeta.singleLower}?</Dialog.Title>
               <div className="mt-2 text-sm text-white/70">
-                Культура <span className="font-semibold text-white">«{selectedCulture?.name ?? "Без названия"}»</span> будет удалена.
+                {activeMeta.single} <span className="font-semibold text-white">«{selectedEntry?.name ?? "Без названия"}»</span> будет удалена.
               </div>
-              <div className="mt-1 text-xs text-white/45">Это действие удалит и логотип культуры, если он загружен.</div>
+              <div className="mt-1 text-xs text-white/45">Это действие удалит и логотип, если он загружен.</div>
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
@@ -552,7 +840,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void deleteCulture()}
+                  onClick={() => void deleteEntry()}
                   disabled={saving}
                   className="inline-flex h-10 items-center justify-center rounded-lg bg-rose-500/90 px-4 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
                 >
@@ -570,7 +858,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
           <motion.div initial={{ opacity: 0, y: 8, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.99 }} className="w-full max-w-md">
             <Dialog.Panel className="glass panel-border rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
               <Dialog.Title className="text-base font-semibold text-white">Закрыть панель контента?</Dialog.Title>
-              <div className="mt-2 text-sm text-white/70">Есть несохранённые изменения в выбранной культуре.</div>
+              <div className="mt-2 text-sm text-white/70">Есть несохранённые изменения в выбранном элементе контента.</div>
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"

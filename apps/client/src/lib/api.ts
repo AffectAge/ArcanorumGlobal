@@ -10,7 +10,12 @@ export type ContentCulture = {
   description: string;
   color: string;
   logoUrl: string | null;
+  malePortraitUrl?: string | null;
+  femalePortraitUrl?: string | null;
 };
+
+export type ContentEntry = ContentCulture;
+export type ContentEntryKind = "cultures" | "races" | "religions" | "professions" | "ideologies";
 
 
 function withAssetBase(url?: string | null): string | null | undefined {
@@ -41,7 +46,13 @@ function normalizeContentCulture(culture: ContentCulture): ContentCulture {
   return {
     ...culture,
     logoUrl: withAssetBase(culture.logoUrl) ?? null,
+    malePortraitUrl: withAssetBase(culture.malePortraitUrl) ?? null,
+    femalePortraitUrl: withAssetBase(culture.femalePortraitUrl) ?? null,
   };
+}
+
+function normalizeContentEntry(entry: ContentEntry): ContentEntry {
+  return normalizeContentCulture(entry);
 }
 
 export async function fetchServerStatus(): Promise<{ status: ServerStatus; turnId: number }> {
@@ -150,6 +161,137 @@ export async function adminDeleteCulture(token: string, cultureId: string) {
   }
   const data = (await response.json()) as { cultures: ContentCulture[] };
   return { cultures: data.cultures.map(normalizeContentCulture) };
+}
+
+export async function adminFetchContentEntries(token: string, kind: ContentEntryKind): Promise<ContentEntry[]> {
+  const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_CONTENT_ENTRIES_FAILED");
+  }
+  const data = (await response.json()) as { items?: ContentEntry[] };
+  return (data.items ?? []).map(normalizeContentEntry);
+}
+
+export async function adminCreateContentEntry(
+  token: string,
+  kind: ContentEntryKind,
+  payload: { name: string; description?: string; color: string },
+) {
+  const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_CREATE_CONTENT_ENTRY_FAILED");
+  }
+  const data = (await response.json()) as { item: ContentEntry; items: ContentEntry[] };
+  return { item: normalizeContentEntry(data.item), items: data.items.map(normalizeContentEntry) };
+}
+
+export async function adminUpdateContentEntry(
+  token: string,
+  kind: ContentEntryKind,
+  entryId: string,
+  payload: { name: string; description?: string; color: string },
+) {
+  const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_UPDATE_CONTENT_ENTRY_FAILED");
+  }
+  const data = (await response.json()) as { item: ContentEntry; items: ContentEntry[] };
+  return { item: normalizeContentEntry(data.item), items: data.items.map(normalizeContentEntry) };
+}
+
+export async function adminUploadContentEntryLogo(token: string, kind: ContentEntryKind, entryId: string, file: File) {
+  const formData = new FormData();
+  formData.set("cultureLogo", file);
+  const response = await fetch(
+    `${API}/admin/content/entries/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/logo`,
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    },
+  );
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_UPLOAD_CONTENT_ENTRY_LOGO_FAILED");
+  }
+  const data = (await response.json()) as { item: ContentEntry; items: ContentEntry[] };
+  return { item: normalizeContentEntry(data.item), items: data.items.map(normalizeContentEntry) };
+}
+
+export async function adminDeleteContentEntryLogo(token: string, kind: ContentEntryKind, entryId: string) {
+  const response = await fetch(
+    `${API}/admin/content/entries/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/logo`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_DELETE_CONTENT_ENTRY_LOGO_FAILED");
+  }
+  const data = (await response.json()) as { item: ContentEntry; items: ContentEntry[] };
+  return { item: normalizeContentEntry(data.item), items: data.items.map(normalizeContentEntry) };
+}
+
+export async function adminDeleteContentEntry(token: string, kind: ContentEntryKind, entryId: string) {
+  const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_DELETE_CONTENT_ENTRY_FAILED");
+  }
+  const data = (await response.json()) as { items: ContentEntry[] };
+  return { items: data.items.map(normalizeContentEntry) };
+}
+
+export async function adminUploadRacePortrait(
+  token: string,
+  raceId: string,
+  slot: "male" | "female",
+  file: File,
+) {
+  const formData = new FormData();
+  formData.set("racePortrait", file);
+  const response = await fetch(`${API}/admin/content/entries/races/${encodeURIComponent(raceId)}/portraits/${slot}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_UPLOAD_RACE_PORTRAIT_FAILED");
+  }
+  const data = (await response.json()) as { item: ContentEntry; items: ContentEntry[] };
+  return { item: normalizeContentEntry(data.item), items: data.items.map(normalizeContentEntry) };
+}
+
+export async function adminDeleteRacePortrait(token: string, raceId: string, slot: "male" | "female") {
+  const response = await fetch(`${API}/admin/content/entries/races/${encodeURIComponent(raceId)}/portraits/${slot}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_DELETE_RACE_PORTRAIT_FAILED");
+  }
+  const data = (await response.json()) as { item: ContentEntry; items: ContentEntry[] };
+  return { item: normalizeContentEntry(data.item), items: data.items.map(normalizeContentEntry) };
 }
 
 export async function login(payload: LoginPayload): Promise<{ token: string; playerId: string; countryId: string; isAdmin: boolean; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }> {
