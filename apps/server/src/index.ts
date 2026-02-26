@@ -50,11 +50,13 @@ const crestsDir = resolve(uploadsRoot, "crests");
 const resourceIconsDir = resolve(uploadsRoot, "resource-icons");
 const uiBackgroundsDir = resolve(uploadsRoot, "ui-backgrounds");
 const civilopediaImagesDir = resolve(uploadsRoot, "civilopedia");
+const culturesDir = resolve(uploadsRoot, "cultures");
 mkdirSync(flagsDir, { recursive: true });
 mkdirSync(crestsDir, { recursive: true });
 mkdirSync(resourceIconsDir, { recursive: true });
 mkdirSync(uiBackgroundsDir, { recursive: true });
 mkdirSync(civilopediaImagesDir, { recursive: true });
+mkdirSync(culturesDir, { recursive: true });
 
 const resourceIconFields = new Set(["culture", "science", "religion", "colonization", "ducats", "gold"]);
 
@@ -70,6 +72,10 @@ const storage = multer.diskStorage({
     }
     if (file.fieldname === "uiBackground") {
       cb(null, uiBackgroundsDir);
+      return;
+    }
+    if (file.fieldname === "cultureLogo") {
+      cb(null, culturesDir);
       return;
     }
     if (file.fieldname === "flag") {
@@ -206,6 +212,14 @@ const DEFAULT_PROVINCE_COLONIZATION_COST = 100;
 const SETTINGS_MAX_NUMBER = 1_000_000_000_000;
 
 type GameSettings = {
+  content: {
+    cultures: Array<{
+      id: string;
+      name: string;
+      color: string;
+      logoUrl: string | null;
+    }>;
+  };
   civilopedia: {
     categories: string[];
     entries: Array<{
@@ -259,6 +273,24 @@ type GameSettings = {
     gold: string | null;
   };
 };
+
+function normalizeContentCultures(input: unknown): GameSettings["content"]["cultures"] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const items: GameSettings["content"]["cultures"] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Partial<{ id: unknown; name: unknown; color: unknown; logoUrl: unknown }>;
+    const id = typeof row.id === "string" ? row.id.trim() : "";
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    const color = typeof row.color === "string" && /^#[0-9A-Fa-f]{6}$/.test(row.color.trim()) ? row.color.trim() : "#4ade80";
+    const logoUrl = typeof row.logoUrl === "string" || row.logoUrl === null ? (row.logoUrl ?? null) : null;
+    if (!id || !name || seen.has(id)) continue;
+    seen.add(id);
+    items.push({ id, name: name.slice(0, 80), color, logoUrl });
+  }
+  return items;
+}
 
 function defaultCivilopediaEntries(): GameSettings["civilopedia"]["entries"] {
   return [
@@ -442,6 +474,9 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
 }
 
 const defaultGameSettings = (): GameSettings => ({
+  content: {
+    cultures: [],
+  },
   civilopedia: {
     categories: defaultCivilopediaCategories(),
     entries: defaultCivilopediaEntries(),
@@ -549,6 +584,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     const defaults = defaultGameSettings();
     const civilopediaEntries = normalizeCivilopediaEntries((next as Partial<{ civilopedia?: { entries?: unknown } }>).civilopedia?.entries);
     gameSettings = {
+      content: {
+        cultures: normalizeContentCultures((next as Partial<{ content?: { cultures?: unknown } }>).content?.cultures),
+      },
       civilopedia: {
         categories: normalizeCivilopediaCategories((next as Partial<{ civilopedia?: { categories?: unknown } }>).civilopedia?.categories, civilopediaEntries),
         entries: civilopediaEntries,
@@ -1857,6 +1895,142 @@ app.patch("/admin/ui-background", upload.single("uiBackground"), async (req, res
   });
 
   return res.json({ map: gameSettings.map });
+});
+
+const culturePayloadSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+});
+
+app.get("/content/cultures", (_req, res) => {
+  return res.json({ cultures: gameSettings.content.cultures });
+});
+
+app.get("/admin/content/cultures", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  return res.json({ cultures: gameSettings.content.cultures });
+});
+
+app.post("/admin/content/cultures", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsed = culturePayloadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const normalizedName = parsed.data.name.trim();
+  if (gameSettings.content.cultures.some((c) => c.name.trim().toLowerCase() === normalizedName.toLowerCase())) {
+    return res.status(409).json({ error: "CULTURE_NAME_EXISTS" });
+  }
+  const culture = { id: randomUUID(), name: normalizedName, color: parsed.data.color, logoUrl: null as string | null };
+  gameSettings.content.cultures.unshift(culture);
+  savePersistentState();
+  return res.json({ culture, cultures: gameSettings.content.cultures });
+});
+
+app.patch("/admin/content/cultures/:cultureId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsed = culturePayloadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const cultureId = String(req.params.cultureId);
+  const index = gameSettings.content.cultures.findIndex((c) => c.id === cultureId);
+  if (index < 0) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const normalizedName = parsed.data.name.trim();
+  if (
+    gameSettings.content.cultures.some(
+      (c) => c.id !== cultureId && c.name.trim().toLowerCase() === normalizedName.toLowerCase(),
+    )
+  ) {
+    return res.status(409).json({ error: "CULTURE_NAME_EXISTS" });
+  }
+  gameSettings.content.cultures[index] = {
+    ...gameSettings.content.cultures[index],
+    name: normalizedName,
+    color: parsed.data.color,
+  };
+  savePersistentState();
+  return res.json({ culture: gameSettings.content.cultures[index], cultures: gameSettings.content.cultures });
+});
+
+app.patch("/admin/content/cultures/:cultureId/logo", upload.single("cultureLogo"), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const cultureId = String(req.params.cultureId);
+  const index = gameSettings.content.cultures.findIndex((c) => c.id === cultureId);
+  if (index < 0) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const file = req.file as Express.Multer.File | undefined;
+  if (!file) {
+    return res.status(400).json({ error: "NO_FILE" });
+  }
+  if (!validateImageDimensions(file, 64)) {
+    removeUploadedFile(file);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "64x64" });
+  }
+  const previousUrl = gameSettings.content.cultures[index].logoUrl;
+  gameSettings.content.cultures[index] = {
+    ...gameSettings.content.cultures[index],
+    logoUrl: `/uploads/cultures/${file.filename}`,
+  };
+  if (previousUrl) {
+    removeUploadedByUrl(previousUrl);
+  }
+  savePersistentState();
+  return res.json({ culture: gameSettings.content.cultures[index], cultures: gameSettings.content.cultures });
+});
+
+app.delete("/admin/content/cultures/:cultureId/logo", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const cultureId = String(req.params.cultureId);
+  const index = gameSettings.content.cultures.findIndex((c) => c.id === cultureId);
+  if (index < 0) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const previousUrl = gameSettings.content.cultures[index].logoUrl;
+  gameSettings.content.cultures[index] = { ...gameSettings.content.cultures[index], logoUrl: null };
+  if (previousUrl) {
+    removeUploadedByUrl(previousUrl);
+  }
+  savePersistentState();
+  return res.json({ culture: gameSettings.content.cultures[index], cultures: gameSettings.content.cultures });
+});
+
+app.delete("/admin/content/cultures/:cultureId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const cultureId = String(req.params.cultureId);
+  const index = gameSettings.content.cultures.findIndex((c) => c.id === cultureId);
+  if (index < 0) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+  const [removed] = gameSettings.content.cultures.splice(index, 1);
+  if (removed?.logoUrl) {
+    removeUploadedByUrl(removed.logoUrl);
+  }
+  savePersistentState();
+  return res.json({ ok: true, cultures: gameSettings.content.cultures });
 });
 
 app.get("/admin/game-settings", async (req, res) => {

@@ -17,6 +17,7 @@ import { CountryCustomizationModal } from "./components/CountryCustomizationModa
 import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
+import { ContentPanel } from "./components/ContentPanel";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -63,6 +64,7 @@ export default function App() {
   });
   const [cmdOpen, setCmdOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [contentPanelOpen, setContentPanelOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
@@ -977,6 +979,7 @@ export default function App() {
             isAdmin={auth.isAdmin}
             onAdminForceResolve={forceResolveAsAdmin}
             onOpenAdminPanel={() => setAdminOpen(true)}
+            onOpenContentPanel={() => setContentPanelOpen(true)}
             onOpenGameSettings={() => setGameSettingsOpen(true)}
             onOpenCountryCustomization={() => setCountryCustomizationOpen(true)}
             onOpenClientSettings={() => setClientSettingsOpen(true)}
@@ -1001,6 +1004,14 @@ export default function App() {
           <MapModePanel activeMode={mapMode} onModeChange={setMapMode} />
 
         </motion.div>
+      )}
+
+      {auth?.isAdmin && auth?.token && (
+        <ContentPanel
+          open={contentPanelOpen}
+          token={auth.token}
+          onClose={() => setContentPanelOpen(false)}
+        />
       )}
 
       {auth?.isAdmin && auth?.token && (

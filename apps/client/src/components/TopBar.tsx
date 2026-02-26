@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, type LucideIcon } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, Palette, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
@@ -23,6 +23,7 @@ type Props = {
   isAdmin?: boolean;
   onAdminForceResolve?: () => void;
   onOpenAdminPanel?: () => void;
+  onOpenContentPanel?: () => void;
   onOpenGameSettings?: () => void;
   onOpenCountryCustomization?: () => void;
   onOpenClientSettings?: () => void;
@@ -125,6 +126,7 @@ export function TopBar({
   isAdmin = false,
   onAdminForceResolve,
   onOpenAdminPanel,
+  onOpenContentPanel,
   onOpenGameSettings,
   onOpenCountryCustomization,
   onOpenClientSettings,
@@ -383,6 +385,7 @@ export function TopBar({
           <TopIconActionButton label="Настройки клиента" onClick={onOpenClientSettings} icon={Sliders} />
 
           {isAdmin && <TopIconActionButton label="Панель администратора" onClick={onOpenAdminPanel} icon={SlidersHorizontal} variant="admin" />}
+          {isAdmin && <TopIconActionButton label="Панель контента" onClick={onOpenContentPanel} icon={Palette} variant="admin" />}
           {isAdmin && <TopIconActionButton label="Настройки игры" onClick={onOpenGameSettings} icon={Cog} variant="admin" />}
           {isAdmin && <TopIconActionButton label="Админ: форс-резолв" onClick={onAdminForceResolve} icon={ShieldAlert} variant="admin" />}
 

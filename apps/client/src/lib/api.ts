@@ -4,6 +4,13 @@ const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 export const apiBase = API;
 
+export type ContentCulture = {
+  id: string;
+  name: string;
+  color: string;
+  logoUrl: string | null;
+};
+
 
 function withAssetBase(url?: string | null): string | null | undefined {
   if (!url) {
@@ -29,6 +36,13 @@ function normalizeCountry(country: Country): Country {
   };
 }
 
+function normalizeContentCulture(culture: ContentCulture): ContentCulture {
+  return {
+    ...culture,
+    logoUrl: withAssetBase(culture.logoUrl) ?? null,
+  };
+}
+
 export async function fetchServerStatus(): Promise<{ status: ServerStatus; turnId: number }> {
   const response = await fetch(`${API}/health`);
   if (!response.ok) {
@@ -44,6 +58,97 @@ export async function fetchCountries(): Promise<Country[]> {
   }
   const countries = (await response.json()) as Country[];
   return countries.map(normalizeCountry);
+}
+
+export async function fetchContentCultures(): Promise<ContentCulture[]> {
+  const response = await fetch(`${API}/content/cultures`);
+  if (!response.ok) {
+    throw new Error("CONTENT_CULTURES_FAILED");
+  }
+  const data = (await response.json()) as { cultures?: ContentCulture[] };
+  return (data.cultures ?? []).map(normalizeContentCulture);
+}
+
+export async function adminFetchContentCultures(token: string): Promise<ContentCulture[]> {
+  const response = await fetch(`${API}/admin/content/cultures`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_CONTENT_CULTURES_FAILED");
+  }
+  const data = (await response.json()) as { cultures?: ContentCulture[] };
+  return (data.cultures ?? []).map(normalizeContentCulture);
+}
+
+export async function adminCreateCulture(token: string, payload: { name: string; color: string }) {
+  const response = await fetch(`${API}/admin/content/cultures`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_CREATE_CULTURE_FAILED");
+  }
+  const data = (await response.json()) as { culture: ContentCulture; cultures: ContentCulture[] };
+  return { culture: normalizeContentCulture(data.culture), cultures: data.cultures.map(normalizeContentCulture) };
+}
+
+export async function adminUpdateCulture(token: string, cultureId: string, payload: { name: string; color: string }) {
+  const response = await fetch(`${API}/admin/content/cultures/${encodeURIComponent(cultureId)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_UPDATE_CULTURE_FAILED");
+  }
+  const data = (await response.json()) as { culture: ContentCulture; cultures: ContentCulture[] };
+  return { culture: normalizeContentCulture(data.culture), cultures: data.cultures.map(normalizeContentCulture) };
+}
+
+export async function adminUploadCultureLogo(token: string, cultureId: string, file: File) {
+  const formData = new FormData();
+  formData.set("cultureLogo", file);
+  const response = await fetch(`${API}/admin/content/cultures/${encodeURIComponent(cultureId)}/logo`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_UPLOAD_CULTURE_LOGO_FAILED");
+  }
+  const data = (await response.json()) as { culture: ContentCulture; cultures: ContentCulture[] };
+  return { culture: normalizeContentCulture(data.culture), cultures: data.cultures.map(normalizeContentCulture) };
+}
+
+export async function adminDeleteCultureLogo(token: string, cultureId: string) {
+  const response = await fetch(`${API}/admin/content/cultures/${encodeURIComponent(cultureId)}/logo`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_DELETE_CULTURE_LOGO_FAILED");
+  }
+  const data = (await response.json()) as { culture: ContentCulture; cultures: ContentCulture[] };
+  return { culture: normalizeContentCulture(data.culture), cultures: data.cultures.map(normalizeContentCulture) };
+}
+
+export async function adminDeleteCulture(token: string, cultureId: string) {
+  const response = await fetch(`${API}/admin/content/cultures/${encodeURIComponent(cultureId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_DELETE_CULTURE_FAILED");
+  }
+  const data = (await response.json()) as { cultures: ContentCulture[] };
+  return { cultures: data.cultures.map(normalizeContentCulture) };
 }
 
 export async function login(payload: LoginPayload): Promise<{ token: string; playerId: string; countryId: string; isAdmin: boolean; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }> {
