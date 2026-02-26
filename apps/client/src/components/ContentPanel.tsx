@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { motion } from "framer-motion";
-import { Palette, Plus, ScrollText, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { Palette, ScrollText, Sparkles, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -12,6 +12,7 @@ import {
   adminUploadCultureLogo,
   type ContentCulture,
 } from "../lib/api";
+import { ContentEditorLayout } from "./ContentEditorLayout";
 
 type Props = {
   open: boolean;
@@ -268,147 +269,89 @@ export function ContentPanel({ open, token, onClose }: Props) {
               </button>
             </div>
 
-            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-              <aside className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-3">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Категории</div>
-                <div className="mt-2 space-y-2">
-                  {CONTENT_UI_SCHEMA.categories.map((category) => {
-                    const Icon = category.icon;
-                    const isActive = category.id === activeCategory;
-                    return (
-                      <button
-                        key={category.id}
-                        type="button"
-                        disabled={!category.enabled}
-                        className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm ${
-                          !category.enabled
-                            ? "border-white/10 bg-black/20 text-white/35"
-                            : isActive
-                              ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
-                              : "border-white/10 bg-black/20 text-white/70"
-                        }`}
+            <ContentEditorLayout
+              categories={CONTENT_UI_SCHEMA.categories.map((c) => ({ id: c.id, label: c.label, icon: c.icon, enabled: c.enabled }))}
+              activeCategoryId={activeCategory}
+              listTitle="Список культур"
+              listSearchValue={search}
+              onListSearchChange={setSearch}
+              listSearchPlaceholder="Поиск культуры"
+              onCreateItem={() => void createCulture()}
+              createItemLabel="Создать культуру"
+              createItemDisabled={saving}
+              listContent={
+                loading ? (
+                  <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">Загрузка культур...</div>
+                ) : (
+                  filteredCultures.map((culture) => (
+                    <button
+                      key={culture.id}
+                      type="button"
+                      onClick={() => setSelectedCultureId(culture.id)}
+                      className={`flex w-full items-center gap-2 rounded-lg border px-2 py-2 text-left transition ${
+                        selectedCultureId === culture.id
+                          ? "border-arc-accent/30 bg-arc-accent/10"
+                          : "border-white/10 bg-black/20 hover:border-white/15"
+                      }`}
+                    >
+                      <div
+                        className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-[#131a22]"
+                        style={{ boxShadow: `0 0 0 1px ${culture.color}33 inset` }}
                       >
-                        <Icon size={15} />
-                        <span>{category.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-              </aside>
-
-              <div className="grid min-h-0 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-                <section className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-3">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Список культур</div>
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Поиск культуры"
-                    className="mb-2 w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
-                  />
+                        {culture.logoUrl ? (
+                          <img src={culture.logoUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <span className="text-xs font-semibold" style={{ color: culture.color }}>
+                            {culture.name.slice(0, 1).toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm text-white">{culture.name}</div>
+                        <div className="mt-1 flex items-center gap-2">
+                          <span className="inline-block h-2.5 w-2.5 rounded-full border border-white/20" style={{ backgroundColor: culture.color }} />
+                          <span className="text-[10px] text-white/50">{culture.color}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))
+                )
+              }
+              sectionTabs={
+                (CONTENT_UI_SCHEMA.categories.find((c) => c.id === "cultures")?.sections ?? []).map((s) => ({ id: s.id, label: s.label }))
+              }
+              activeSectionId={cultureSection}
+              onSectionChange={(id) => setCultureSection(id as "general" | "branding")}
+              headerTitle={selectedCulture ? selectedCulture.name : "Новая культура"}
+              headerSubtitle={activeCategory === "cultures" ? "Раздел создания и редактирования культур" : ""}
+              headerActions={
+                <>
+                  {hasUnsavedChanges && (
+                    <span className="rounded-md border border-amber-400/20 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                      Есть несохранённые изменения
+                    </span>
+                  )}
                   <button
                     type="button"
-                    onClick={() => void createCulture()}
-                    disabled={saving}
-                    className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-arc-accent px-3 py-2 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-60"
+                    onClick={() => void saveCulture()}
+                    disabled={!selectedCulture || saving}
+                    className="inline-flex h-10 items-center justify-center rounded-lg bg-arc-accent px-4 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <Plus size={15} />
-                    Создать культуру
+                    Сохранить
                   </button>
-
-                  <div className="arc-scrollbar max-h-[calc(100%-6.75rem)] space-y-2 overflow-auto pr-1">
-                    {loading ? (
-                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">Загрузка культур...</div>
-                    ) : filteredCultures.map((culture) => (
-                      <button
-                        key={culture.id}
-                        type="button"
-                        onClick={() => setSelectedCultureId(culture.id)}
-                        className={`flex w-full items-center gap-2 rounded-lg border px-2 py-2 text-left transition ${
-                          selectedCultureId === culture.id
-                            ? "border-arc-accent/30 bg-arc-accent/10"
-                            : "border-white/10 bg-black/20 hover:border-white/15"
-                        }`}
-                      >
-                        <div
-                          className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-[#131a22]"
-                          style={{ boxShadow: `0 0 0 1px ${culture.color}33 inset` }}
-                        >
-                          {culture.logoUrl ? (
-                            <img src={culture.logoUrl} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="text-xs font-semibold" style={{ color: culture.color }}>
-                              {culture.name.slice(0, 1).toUpperCase()}
-                            </span>
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm text-white">{culture.name}</div>
-                          <div className="mt-1 flex items-center gap-2">
-                            <span className="inline-block h-2.5 w-2.5 rounded-full border border-white/20" style={{ backgroundColor: culture.color }} />
-                            <span className="text-[10px] text-white/50">{culture.color}</span>
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-
-                <div className="grid min-h-0 gap-4 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
-                <div className="flex items-center gap-5 border-b border-white/10 px-1">
-                  {CONTENT_UI_SCHEMA.categories
-                    .find((c) => c.id === "cultures")
-                    ?.sections.map((section) => (
-                      <button
-                        key={section.id}
-                        type="button"
-                        onClick={() => setCultureSection(section.id)}
-                        className={`pb-2 text-sm transition ${
-                          cultureSection === section.id
-                            ? "border-b-2 border-arc-accent text-arc-accent"
-                            : "border-b-2 border-transparent text-white/60 hover:text-white"
-                        }`}
-                      >
-                        {section.label}
-                      </button>
-                    ))}
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/20 p-3">
-                  <div>
-                    <div className="text-sm font-semibold text-white">{selectedCulture ? selectedCulture.name : "Новая культура"}</div>
-                    <div className="mt-1 text-xs text-white/55">
-                      {activeCategory === "cultures" ? "Раздел создания и редактирования культур" : ""}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {hasUnsavedChanges && (
-                      <span className="rounded-md border border-amber-400/20 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
-                        Есть несохранённые изменения
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => void saveCulture()}
-                      disabled={!selectedCulture || saving}
-                      className="inline-flex h-10 items-center justify-center rounded-lg bg-arc-accent px-4 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Сохранить
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDeleteConfirmOpen(true)}
-                      disabled={!selectedCulture || saving}
-                      className="panel-border inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-rose-500/10 px-3 text-sm text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Trash2 size={14} />
-                      Удалить
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-                  <div className="arc-scrollbar min-h-0 space-y-4 overflow-auto pr-1">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteConfirmOpen(true)}
+                    disabled={!selectedCulture || saving}
+                    className="panel-border inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-rose-500/10 px-3 text-sm text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Trash2 size={14} />
+                    Удалить
+                  </button>
+                </>
+              }
+              editorContent={
+                <div className="space-y-4">
                     {cultureSection === "general" && (
                       <section className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Основные данные</div>
@@ -505,11 +448,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
                         </div>
                       </section>
                     )}
-                  </div>
-
-                  <aside className="rounded-xl border border-white/10 bg-black/20 p-4">
-                    <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Предпросмотр</div>
-                    <div className="space-y-3">
+                </div>
+              }
+              previewContent={
+                <div className="space-y-3">
                       <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
                         <div className="mb-2 text-[11px] text-white/50">Строка списка</div>
                         <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-2 py-2">
@@ -581,12 +523,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
                           {draftDescription.trim() || "Описание культуры будет отображаться здесь."}
                         </div>
                       </div>
-                    </div>
-                  </aside>
                 </div>
-              </div>
-              </div>
-            </div>
+              }
+            />
           </Dialog.Panel>
         </motion.div>
       </div>
