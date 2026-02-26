@@ -7,6 +7,7 @@ export const apiBase = API;
 export type ContentCulture = {
   id: string;
   name: string;
+  description: string;
   color: string;
   logoUrl: string | null;
 };
@@ -81,7 +82,7 @@ export async function adminFetchContentCultures(token: string): Promise<ContentC
   return (data.cultures ?? []).map(normalizeContentCulture);
 }
 
-export async function adminCreateCulture(token: string, payload: { name: string; color: string }) {
+export async function adminCreateCulture(token: string, payload: { name: string; description?: string; color: string }) {
   const response = await fetch(`${API}/admin/content/cultures`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -95,7 +96,7 @@ export async function adminCreateCulture(token: string, payload: { name: string;
   return { culture: normalizeContentCulture(data.culture), cultures: data.cultures.map(normalizeContentCulture) };
 }
 
-export async function adminUpdateCulture(token: string, cultureId: string, payload: { name: string; color: string }) {
+export async function adminUpdateCulture(token: string, cultureId: string, payload: { name: string; description?: string; color: string }) {
   const response = await fetch(`${API}/admin/content/cultures/${encodeURIComponent(cultureId)}`, {
     method: "PATCH",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

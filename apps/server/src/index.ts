@@ -216,6 +216,7 @@ type GameSettings = {
     cultures: Array<{
       id: string;
       name: string;
+      description: string;
       color: string;
       logoUrl: string | null;
     }>;
@@ -280,14 +281,15 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
   const items: GameSettings["content"]["cultures"] = [];
   for (const raw of input) {
     if (!raw || typeof raw !== "object") continue;
-    const row = raw as Partial<{ id: unknown; name: unknown; color: unknown; logoUrl: unknown }>;
+    const row = raw as Partial<{ id: unknown; name: unknown; description: unknown; color: unknown; logoUrl: unknown }>;
     const id = typeof row.id === "string" ? row.id.trim() : "";
     const name = typeof row.name === "string" ? row.name.trim() : "";
+    const description = typeof row.description === "string" ? row.description.trim() : "";
     const color = typeof row.color === "string" && /^#[0-9A-Fa-f]{6}$/.test(row.color.trim()) ? row.color.trim() : "#4ade80";
     const logoUrl = typeof row.logoUrl === "string" || row.logoUrl === null ? (row.logoUrl ?? null) : null;
     if (!id || !name || seen.has(id)) continue;
     seen.add(id);
-    items.push({ id, name: name.slice(0, 80), color, logoUrl });
+    items.push({ id, name: name.slice(0, 80), description: description.slice(0, 500), color, logoUrl });
   }
   return items;
 }
@@ -1899,6 +1901,7 @@ app.patch("/admin/ui-background", upload.single("uiBackground"), async (req, res
 
 const culturePayloadSchema = z.object({
   name: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(500).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
 });
 
@@ -1927,7 +1930,13 @@ app.post("/admin/content/cultures", async (req, res) => {
   if (gameSettings.content.cultures.some((c) => c.name.trim().toLowerCase() === normalizedName.toLowerCase())) {
     return res.status(409).json({ error: "CULTURE_NAME_EXISTS" });
   }
-  const culture = { id: randomUUID(), name: normalizedName, color: parsed.data.color, logoUrl: null as string | null };
+  const culture = {
+    id: randomUUID(),
+    name: normalizedName,
+    description: (parsed.data.description ?? "").trim(),
+    color: parsed.data.color,
+    logoUrl: null as string | null,
+  };
   gameSettings.content.cultures.unshift(culture);
   savePersistentState();
   return res.json({ culture, cultures: gameSettings.content.cultures });
@@ -1958,6 +1967,7 @@ app.patch("/admin/content/cultures/:cultureId", async (req, res) => {
   gameSettings.content.cultures[index] = {
     ...gameSettings.content.cultures[index],
     name: normalizedName,
+    description: (parsed.data.description ?? "").trim(),
     color: parsed.data.color,
   };
   savePersistentState();

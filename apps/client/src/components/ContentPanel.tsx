@@ -49,6 +49,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [search, setSearch] = useState("");
   const [selectedCultureId, setSelectedCultureId] = useState<string>("");
   const [draftName, setDraftName] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
   const [draftColor, setDraftColor] = useState("#4ade80");
   const [draftLogoUrl, setDraftLogoUrl] = useState<string | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState<string>("");
@@ -95,12 +96,14 @@ export function ContentPanel({ open, token, onClose }: Props) {
   useEffect(() => {
     if (!selectedCulture) {
       setDraftName("");
+      setDraftDescription("");
       setDraftColor("#4ade80");
       setDraftLogoUrl(null);
       setSavedSnapshot("");
       return;
     }
     setDraftName(selectedCulture.name);
+    setDraftDescription(selectedCulture.description ?? "");
     setDraftColor(selectedCulture.color);
     setDraftLogoUrl(selectedCulture.logoUrl);
     setSavedSnapshot(JSON.stringify(selectedCulture));
@@ -112,6 +115,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       JSON.stringify({
         id: selectedCulture.id,
         name: draftName.trim(),
+        description: draftDescription.trim(),
         color: draftColor,
         logoUrl: draftLogoUrl,
       }) !== savedSnapshot
@@ -128,7 +132,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       while (used.has(name.toLowerCase())) {
         name = `${nextNameBase} ${i++}`;
       }
-      const result = await adminCreateCulture(token, { name, color: "#a78bfa" });
+      const result = await adminCreateCulture(token, { name, description: "", color: "#a78bfa" });
       setCultures(result.cultures);
       setSelectedCultureId(result.culture.id);
       toast.success("Культура создана");
@@ -155,7 +159,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     const color = /^#[0-9A-Fa-f]{6}$/.test(draftColor) ? draftColor : "#4ade80";
     setSaving(true);
     try {
-      const result = await adminUpdateCulture(token, selectedCulture.id, { name, color });
+      const result = await adminUpdateCulture(token, selectedCulture.id, { name, description: draftDescription.trim(), color });
       setCultures(result.cultures);
       setSavedSnapshot(JSON.stringify(result.culture));
       toast.success("Культура сохранена");
@@ -407,6 +411,18 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             </div>
                           </div>
                         </div>
+                        <label className="mt-4 block">
+                          <div className="mb-1 text-xs text-white/60">Описание</div>
+                          <textarea
+                            value={draftDescription}
+                            onChange={(e) => setDraftDescription(e.target.value)}
+                            placeholder="Краткое описание культуры для механик и UI"
+                            maxLength={500}
+                            rows={5}
+                            className="w-full resize-y rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                          />
+                          <div className="mt-1 text-right text-[11px] text-white/45">{draftDescription.length}/500</div>
+                        </label>
                       </section>
                     )}
 
@@ -501,6 +517,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             style={{ backgroundColor: draftColor }}
                           />
                           {draftName.trim() || "Название культуры"}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                        <div className="mb-2 text-[11px] text-white/50">Описание</div>
+                        <div className="text-xs leading-5 text-white/75">
+                          {draftDescription.trim() || "Описание культуры будет отображаться здесь."}
                         </div>
                       </div>
                     </div>
