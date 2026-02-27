@@ -699,8 +699,11 @@ function summarizePopulation(groups: PopulationGroup[], provinceOwner: Record<st
     totals.byRace[group.raceId] = (totals.byRace[group.raceId] ?? 0) + size;
     totals.byCulture[group.cultureId] = (totals.byCulture[group.cultureId] ?? 0) + size;
     totals.byReligion[group.religionId] = (totals.byReligion[group.religionId] ?? 0) + size;
-    const owner = provinceOwner[group.provinceId];
-    if (owner) totals.byCountry[owner] = (totals.byCountry[owner] ?? 0) + size;
+  }
+  // byCountry derives from province totals so owner lookup scales with province count, not group count.
+  for (const [provinceId, provincePopulation] of Object.entries(totals.byProvince)) {
+    const owner = provinceOwner[provinceId];
+    if (owner) totals.byCountry[owner] = (totals.byCountry[owner] ?? 0) + provincePopulation;
   }
   totals.groups = groups.length;
   return totals;
@@ -766,6 +769,95 @@ let gameSettings: GameSettings = defaultGameSettings();
 let worldBase: WorldBase = defaultWorldBase(turnId);
 let currentTurnStartedAtMs = Date.now();
 let isResolvingTurnNow = false;
+let populationRevision = 0;
+let provinceOwnerRevision = 0;
+
+type PopulationWorldSummaryResponse = {
+  turnId: number;
+  totals: PopulationTotals;
+  top: {
+    countries: Array<{ id: string; value: number }>;
+    races: Array<{ id: string; value: number }>;
+    cultures: Array<{ id: string; value: number }>;
+    religions: Array<{ id: string; value: number }>;
+    provinces: Array<{ id: string; value: number }>;
+  };
+};
+
+const populationCache: {
+  provinceIndexRevision: number;
+  topByProvince: Map<string, PopulationGroup[]>;
+  worldSummaryCacheKey: string;
+  worldSummary: PopulationWorldSummaryResponse | null;
+} = {
+  provinceIndexRevision: -1,
+  topByProvince: new Map(),
+  worldSummaryCacheKey: "",
+  worldSummary: null,
+};
+
+function invalidatePopulationCaches(): void {
+  populationRevision += 1;
+  populationCache.provinceIndexRevision = -1;
+  populationCache.topByProvince.clear();
+  populationCache.worldSummaryCacheKey = "";
+  populationCache.worldSummary = null;
+}
+
+function invalidateProvinceOwnerCaches(): void {
+  provinceOwnerRevision += 1;
+  populationCache.worldSummaryCacheKey = "";
+  populationCache.worldSummary = null;
+}
+
+function setPopulationState(next: WorldBase["population"]): void {
+  worldBase.population = next;
+  invalidatePopulationCaches();
+}
+
+function setProvinceOwner(provinceId: string, ownerCountryId: string | null): void {
+  const previous = worldBase.provinceOwner[provinceId] ?? null;
+  if (ownerCountryId) {
+    worldBase.provinceOwner[provinceId] = ownerCountryId;
+  } else {
+    delete worldBase.provinceOwner[provinceId];
+  }
+  const current = worldBase.provinceOwner[provinceId] ?? null;
+  if (previous !== current) {
+    invalidateProvinceOwnerCaches();
+  }
+}
+
+function buildByCountryFromProvinceTotals(
+  byProvince: Record<string, number>,
+  provinceOwner: Record<string, string>,
+): Record<string, number> {
+  const byCountry: Record<string, number> = {};
+  for (const [provinceId, provincePopulation] of Object.entries(byProvince)) {
+    const owner = provinceOwner[provinceId];
+    if (!owner) continue;
+    byCountry[owner] = (byCountry[owner] ?? 0) + Math.max(0, Math.floor(Number(provincePopulation) || 0));
+  }
+  return byCountry;
+}
+
+function populationTotalsForClient(base: WorldBase): PopulationTotals {
+  return {
+    ...base.population.totals,
+    byCountry: buildByCountryFromProvinceTotals(base.population.totals.byProvince, base.provinceOwner),
+  };
+}
+
+function worldBaseForClient(base: WorldBase): WorldBase {
+  return {
+    ...base,
+    turnId,
+    population: {
+      groups: [],
+      totals: populationTotalsForClient(base),
+    },
+  };
+}
 
 const persistedStatePath = resolve(__dirname, "../data/game-state.json");
 const GAME_STATE_ROW_ID = "primary";
@@ -945,6 +1037,8 @@ function parseAndApplyPersistentState(input: unknown): boolean {
   } else {
     worldBase = defaultWorldBase(turnId);
   }
+  invalidatePopulationCaches();
+  invalidateProvinceOwnerCaches();
 
   ordersByTurn.clear();
   if (Array.isArray(parsed.ordersByTurn)) {
@@ -1004,6 +1098,10 @@ async function persistStateToDb(): Promise<void> {
     worldBase: {
       ...worldBase,
       turnId,
+      population: {
+        ...worldBase.population,
+        totals: populationTotalsForClient(worldBase),
+      },
     },
     ordersByTurn: serializeOrdersByTurn(),
     resolveReadyByTurn: serializeResolveReadyByTurn(),
@@ -1441,10 +1539,7 @@ async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSock
 function broadcastWorldBaseSync(wss: WebSocketServer): void {
   broadcast(wss, {
     type: "WORLD_BASE_SYNC",
-    worldBase: {
-      ...worldBase,
-      turnId,
-    },
+    worldBase: worldBaseForClient(worldBase),
     turnId,
   });
 }
@@ -1671,7 +1766,7 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
     candidates.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     const winnerCountryId = candidates[0][0];
     const previousOwnerId = worldBase.provinceOwner[provinceId] ?? null;
-    worldBase.provinceOwner[provinceId] = winnerCountryId;
+    setProvinceOwner(provinceId, winnerCountryId);
     delete worldBase.colonyProgressByProvince[provinceId];
     news.push(
       makeOfficialNews({
@@ -1710,7 +1805,7 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
     patch: {
       type: "WORLD_PATCH",
       turnId,
-      worldBase,
+      worldBase: worldBaseForClient(worldBase),
       rejectedOrders,
     },
     news,
@@ -1880,6 +1975,52 @@ function topFromRecord(input: Record<string, number>, limit = 20): Array<{ id: s
     .slice(0, limit);
 }
 
+function buildPopulationProvinceIndexIfNeeded(): void {
+  if (populationCache.provinceIndexRevision === populationRevision) {
+    return;
+  }
+  populationCache.topByProvince.clear();
+  const groupsByProvince = new Map<string, PopulationGroup[]>();
+  for (const group of worldBase.population.groups) {
+    const list = groupsByProvince.get(group.provinceId);
+    if (list) {
+      list.push(group);
+    } else {
+      groupsByProvince.set(group.provinceId, [group]);
+    }
+  }
+  for (const [provinceId, list] of groupsByProvince.entries()) {
+    const top = list
+      .slice()
+      .sort((a, b) => b.size - a.size || a.id.localeCompare(b.id))
+      .slice(0, 200);
+    populationCache.topByProvince.set(provinceId, top);
+  }
+  populationCache.provinceIndexRevision = populationRevision;
+}
+
+function getPopulationWorldSummaryCached(): PopulationWorldSummaryResponse {
+  const cacheKey = `${populationRevision}:${provinceOwnerRevision}:${turnId}`;
+  if (populationCache.worldSummaryCacheKey === cacheKey && populationCache.worldSummary) {
+    return populationCache.worldSummary;
+  }
+  const totals = populationTotalsForClient(worldBase);
+  const summary: PopulationWorldSummaryResponse = {
+    turnId,
+    totals,
+    top: {
+      countries: topFromRecord(totals.byCountry),
+      races: topFromRecord(totals.byRace),
+      cultures: topFromRecord(totals.byCulture),
+      religions: topFromRecord(totals.byReligion),
+      provinces: topFromRecord(totals.byProvince),
+    },
+  };
+  populationCache.worldSummaryCacheKey = cacheKey;
+  populationCache.worldSummary = summary;
+  return summary;
+}
+
 function contentIdsOrFallback(
   rows: Array<{ id: string }>,
   fallbackPrefix: string,
@@ -1903,18 +2044,7 @@ app.get("/population/summary/world", async (req, res) => {
   if (!auth) {
     return res.status(401).json({ error: "UNAUTHORIZED" });
   }
-  const totals = worldBase.population.totals;
-  return res.json({
-    turnId,
-    totals,
-    top: {
-      countries: topFromRecord(totals.byCountry),
-      races: topFromRecord(totals.byRace),
-      cultures: topFromRecord(totals.byCulture),
-      religions: topFromRecord(totals.byReligion),
-      provinces: topFromRecord(totals.byProvince),
-    },
-  });
+  return res.json(getPopulationWorldSummaryCached());
 });
 
 app.get("/population/summary/province/:provinceId", async (req, res) => {
@@ -1923,16 +2053,14 @@ app.get("/population/summary/province/:provinceId", async (req, res) => {
     return res.status(401).json({ error: "UNAUTHORIZED" });
   }
   const provinceId = String(req.params.provinceId);
-  const groups = worldBase.population.groups.filter((group) => group.provinceId === provinceId);
-  const totalPopulation = groups.reduce((sum, g) => sum + g.size, 0);
+  buildPopulationProvinceIndexIfNeeded();
+  const totalPopulation = Math.max(0, Math.floor(Number(worldBase.population.totals.byProvince[provinceId]) || 0));
+  const groups = populationCache.topByProvince.get(provinceId) ?? [];
   return res.json({
     turnId,
     provinceId,
     totalPopulation,
-    groups: groups
-      .slice()
-      .sort((a, b) => b.size - a.size || a.id.localeCompare(b.id))
-      .slice(0, 200),
+    groups,
   });
 });
 
@@ -1969,6 +2097,8 @@ app.post("/admin/population/generate", async (req, res) => {
   const groupsPerProvince = parsed.data.groupsPerProvince;
   const populationPerProvince = parsed.data.populationPerProvince;
   const aggregate = new Map<string, PopulationGroup>();
+  const weightByIndex = Array.from({ length: groupsPerProvince }, (_v, i) => (i % 5) + 1);
+  const weightSum = weightByIndex.reduce((sum, value) => sum + value, 0);
 
   if (!parsed.data.replaceExisting) {
     for (const group of worldBase.population.groups) {
@@ -1984,19 +2114,12 @@ app.post("/admin/population/generate", async (req, res) => {
 
   for (let provinceIdx = 0; provinceIdx < provinceIds.length; provinceIdx += 1) {
     const provinceId = provinceIds[provinceIdx];
-    const weights: number[] = [];
-    let weightSum = 0;
-    for (let i = 0; i < groupsPerProvince; i += 1) {
-      const w = (i % 5) + 1;
-      weights.push(w);
-      weightSum += w;
-    }
     let distributed = 0;
     for (let i = 0; i < groupsPerProvince; i += 1) {
       const isLast = i === groupsPerProvince - 1;
       const size = isLast
         ? Math.max(0, populationPerProvince - distributed)
-        : Math.floor((populationPerProvince * weights[i]) / Math.max(1, weightSum));
+        : Math.floor((populationPerProvince * weightByIndex[i]) / Math.max(1, weightSum));
       distributed += size;
       if (size <= 0) continue;
       const raceId = fixedRaceId ?? raceIds[(provinceIdx * 31 + i * 17) % raceIds.length];
@@ -2007,7 +2130,7 @@ app.post("/admin/population/generate", async (req, res) => {
       if (existing) {
         existing.size += size;
       } else {
-        aggregate.set(key, { id: randomUUID(), provinceId, raceId, cultureId, religionId, size });
+        aggregate.set(key, { id: `pop:${key}`, provinceId, raceId, cultureId, religionId, size });
       }
     }
   }
@@ -2015,10 +2138,11 @@ app.post("/admin/population/generate", async (req, res) => {
   return withPerfAsync(
     "admin.population.generate",
     async () => {
-      const groups = [...aggregate.values()]
-        .filter((group) => group.size > 0)
-        .sort((a, b) => a.provinceId.localeCompare(b.provinceId) || b.size - a.size || a.id.localeCompare(b.id));
-      worldBase.population = makePopulationState(groups, worldBase.provinceOwner);
+      const groups = [...aggregate.values()].filter((group) => group.size > 0);
+      if (groups.length <= 200_000) {
+        groups.sort((a, b) => a.provinceId.localeCompare(b.provinceId) || b.size - a.size || a.id.localeCompare(b.id));
+      }
+      setPopulationState(makePopulationState(groups, worldBase.provinceOwner));
       savePersistentState();
       broadcastWorldBaseSync(wss);
       broadcast(wss, {
@@ -3209,9 +3333,9 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
         return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
       }
       ensureCountryInWorldBase(nextOwner);
-      worldBase.provinceOwner[provinceId] = nextOwner;
+      setProvinceOwner(provinceId, nextOwner);
     } else {
-      delete worldBase.provinceOwner[provinceId];
+      setProvinceOwner(provinceId, null);
     }
     cleanupProvinceColonizationProgress(provinceId);
     clearedProgress = true;
@@ -3413,7 +3537,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   delete worldBase.resourcesByCountry[countryIdParam];
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
     if (ownerId === countryIdParam) {
-      delete worldBase.provinceOwner[provinceId];
+      setProvinceOwner(provinceId, null);
     }
   }
   for (const progress of Object.values(worldBase.colonyProgressByProvince)) {
@@ -3867,7 +3991,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
 
   delete worldBase.resourcesByCountry[targetId];
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
-    if (ownerId === targetId) delete worldBase.provinceOwner[provinceId];
+    if (ownerId === targetId) setProvinceOwner(provinceId, null);
   }
   for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
     if (progressByCountry[targetId] != null) {
@@ -4005,7 +4129,7 @@ wss.on("connection", (socket) => {
           playerId: payload.id,
           countryId: payload.countryId,
           isAdmin,
-          worldBase,
+          worldBase: worldBaseForClient(worldBase),
           turnId,
           clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
         });
@@ -4257,12 +4381,3 @@ startServer().catch((error) => {
   console.error("[startup] Failed to initialize server:", error);
   process.exit(1);
 });
-
-
-
-
-
-
-
-
-
