@@ -4,7 +4,7 @@
 
 ## Стек
 - Клиент: Vite + React + TypeScript, Tailwind, Zustand (`worldBase + ordersOverlay`), maplibre, framer-motion, lucide-react, Headless UI Tabs, floating-ui (кастомный tooltip), radix-ui, sonner, cmdk, react-hook-form + zod, colord
-- Сервер: Node + Express + WS, jsonwebtoken, PostgreSQL + Prisma
+- Сервер: Node + Express + WS, jsonwebtoken, SQLite + Prisma
 - Опционально: Redis (presence/rate-limit/pubsub/planning cache)
 
 ## Структура
@@ -14,13 +14,13 @@
 
 ## Подготовка
 1. Скопируйте `apps/server/.env.example` в `apps/server/.env`
-2. Поднимите PostgreSQL и создайте БД `arcanorum`
+2. БД по умолчанию: SQLite (`apps/server/prisma/dev.db`)
 3. Выполните:
 
 ```bash
 npm install
 npm run prisma:generate -w @arcanorum/server
-npm run prisma:migrate -w @arcanorum/server
+npm run prisma:push -w @arcanorum/server
 ```
 
 ## Запуск
@@ -35,7 +35,19 @@ npm run dev
 1. Клиенты отправляют `OrderDelta`
 2. Сервер валидирует и ретранслирует `ORDER_BROADCAST`
 3. В конце фазы `REQUEST_RESOLVE` → `ResolveTurn()`
-4. Всем рассылается `WORLD_PATCH` + `rejectedOrders`
+4. Всем рассылается `WORLD_DELTA` (компактный формат с `mask` и короткими ключами) + `rejectedOrders`
+
+## Синхронизация мира
+- При авторизации клиент получает полный snapshot через `AUTH_OK` (`worldBase`, `turnId`, `worldStateVersion`).
+- Далее применяются только `WORLD_DELTA`.
+- Клиент отправляет `WORLD_DELTA_ACK` после применения дельт.
+- При разрыве последовательности запрашивается `WORLD_DELTA_REPLAY_REQUEST`.
+- Если replay недоступен, используется `GET /world/snapshot` для мягкого ресинка.
+
+## Админ-диагностика
+- `GET /admin/ws-delta-metrics` — метрики размера WS-дельт (compact vs baseline).
+- `POST /admin/ws-delta-metrics/reset` — сброс метрик.
+- `GET /admin/world-delta-log/status` — состояние персистентного журнала дельт (БД и in-memory replay window).
 
 ## Важно для Windows
 В текущем окружении запуск Vite может ломаться из пути с пробелом (`...\Ages 3`) из-за `esbuild` (`spawn EFTYPE`).

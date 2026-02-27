@@ -34,3 +34,13 @@ model GameState {
   resolveReadyByTurnJson Json
   updatedAt          DateTime @updatedAt
 }
+
+model WorldDeltaLog {
+  id                Int      @id @default(autoincrement())
+  worldStateVersion Int      @unique
+  turnId            Int
+  payloadJson       String
+  createdAt         DateTime @default(now())
+
+  @@index([worldStateVersion])
+}

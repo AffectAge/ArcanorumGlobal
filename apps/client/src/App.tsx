@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "@headlessui/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
@@ -21,7 +21,7 @@ import { ContentPanel } from "./components/ContentPanel";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
-import { adminReviewRegistration, apiBase, fetchCountries, fetchPendingUiNotifications, fetchProvinceIndex, fetchPublicGameUiSettings, markUiNotificationViewed, type ResourceIconsMap } from "./lib/api";
+import { adminReviewRegistration, apiBase, fetchCountries, fetchPendingUiNotifications, fetchProvinceIndex, fetchPublicGameUiSettings, fetchWorldSnapshot, markUiNotificationViewed, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
 
@@ -38,7 +38,11 @@ type RegistrationApprovalCountry = Extract<
 >["country"];
 
 export default function App() {
+  const worldResyncInFlightRef = useRef(false);
+  const replayRequestInFlightRef = useRef(false);
   const [entryLoadingGate, setEntryLoadingGate] = useState<"hidden" | "loading" | "ready">("hidden");
+  const [pendingDeltaAckVersion, setPendingDeltaAckVersion] = useState<number | null>(null);
+  const [pendingReplayFromWorldStateVersion, setPendingReplayFromWorldStateVersion] = useState<number | null>(null);
   const [turnResolveOverlay, setTurnResolveOverlay] = useState<
     | { phase: "idle" }
     | { phase: "processing"; startedAtMs: number }
@@ -148,10 +152,37 @@ export default function App() {
   const eventLogRetentionTurns = useGameStore((s) => s.eventLogRetentionTurns);
   const setEventLogRetentionTurns = useGameStore((s) => s.setEventLogRetentionTurns);
 
+  const resyncWorldState = useCallback(async () => {
+    if (worldResyncInFlightRef.current) {
+      return;
+    }
+    const token = useGameStore.getState().auth?.token;
+    if (!token) {
+      return;
+    }
+    worldResyncInFlightRef.current = true;
+    try {
+      const snapshot = await fetchWorldSnapshot(token);
+      setWorldBase(snapshot.worldBase, snapshot.turnId, snapshot.worldStateVersion);
+      setPendingDeltaAckVersion(snapshot.worldStateVersion);
+      replayRequestInFlightRef.current = false;
+      resetOverlay(snapshot.turnId);
+      setTurnTimerUi((prev) => ({ ...prev, startedAtMs: Date.now() }));
+      toast.warning("Состояние мира синхронизировано заново");
+    } catch {
+      toast.error("Не удалось синхронизировать мир, выполняется перезагрузка");
+      window.location.reload();
+    } finally {
+      worldResyncInFlightRef.current = false;
+    }
+  }, [resetOverlay, setWorldBase]);
+
   const onWsMessage = useCallback(
     (msg: WsOutMessage) => {
       if (msg.type === "AUTH_OK") {
         setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
+        setPendingDeltaAckVersion(msg.worldStateVersion);
+        replayRequestInFlightRef.current = false;
         const currentAuth = useGameStore.getState().auth;
         if (currentAuth?.token) {
           setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
@@ -184,8 +215,11 @@ export default function App() {
       if (msg.type === "WORLD_DELTA") {
         const currentWorldStateVersion = useGameStore.getState().worldStateVersion;
         if (msg.worldStateVersion !== currentWorldStateVersion + 1) {
-          toast.error("Состояние мира рассинхронизировано, выполняется переподключение");
-          window.location.reload();
+          if (!replayRequestInFlightRef.current) {
+            replayRequestInFlightRef.current = true;
+            setPendingReplayFromWorldStateVersion(currentWorldStateVersion);
+            toast.warning("Обнаружен рассинхрон версии, запрошен replay дельт");
+          }
           return;
         }
         setTurnResolveOverlay((prev) =>
@@ -200,6 +234,8 @@ export default function App() {
             : prev,
         );
         applyWorldDelta(msg, msg.turnId, msg.worldStateVersion);
+        setPendingDeltaAckVersion(msg.worldStateVersion);
+        replayRequestInFlightRef.current = false;
         setTurnTimerUi((prev) => ({ ...prev, startedAtMs: Date.now() }));
         resetOverlay(msg.turnId);
         pruneLogEntries(msg.turnId);
@@ -262,14 +298,36 @@ export default function App() {
 
       if (msg.type === "ERROR") {
         setTurnResolveOverlay((prev) => (prev.phase === "processing" ? { phase: "idle" } : prev));
+        if (msg.code === "REPLAY_UNAVAILABLE") {
+          replayRequestInFlightRef.current = false;
+          toast.warning("Replay недоступен, выполняется snapshot-ресинк");
+          void resyncWorldState();
+          return;
+        }
         toast.error(msg.message);
         addEvent({ category: "system", title: "Ошибка", message: msg.message, priority: "high", visibility: "private" });
       }
     },
-    [addEvent, addOrder, applyWorldDelta, pruneLogEntries, resetOverlay, setEventLogRetentionTurns, setPresence, setWorldBase],
+    [addEvent, addOrder, applyWorldDelta, pruneLogEntries, resetOverlay, resyncWorldState, setEventLogRetentionTurns, setPresence, setWorldBase],
   );
 
   const { send } = useWs(onWsMessage, auth?.token);
+
+  useEffect(() => {
+    if (pendingDeltaAckVersion == null || !auth?.token) {
+      return;
+    }
+    send({ type: "WORLD_DELTA_ACK", worldStateVersion: pendingDeltaAckVersion });
+    setPendingDeltaAckVersion(null);
+  }, [auth?.token, pendingDeltaAckVersion, send]);
+
+  useEffect(() => {
+    if (pendingReplayFromWorldStateVersion == null || !auth?.token) {
+      return;
+    }
+    send({ type: "WORLD_DELTA_REPLAY_REQUEST", fromWorldStateVersion: pendingReplayFromWorldStateVersion });
+    setPendingReplayFromWorldStateVersion(null);
+  }, [auth?.token, pendingReplayFromWorldStateVersion, send]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1226,8 +1284,6 @@ export default function App() {
     </div>
   );
 }
-
-
 
 
 

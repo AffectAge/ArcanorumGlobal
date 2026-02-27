@@ -1,4 +1,4 @@
-import type { Country, LoginPayload, ServerStatus, WsOutMessage } from "@arcanorum/shared";
+import type { Country, LoginPayload, ServerStatus, WorldBase, WsOutMessage } from "@arcanorum/shared";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -68,6 +68,17 @@ export async function fetchCountries(): Promise<Country[]> {
   }
   const countries = (await response.json()) as Country[];
   return countries.map(normalizeCountry);
+}
+
+export async function fetchWorldSnapshot(token: string): Promise<{ worldBase: WorldBase; turnId: number; worldStateVersion: number }> {
+  const response = await fetch(`${API}/world/snapshot`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "WORLD_SNAPSHOT_FAILED");
+  }
+  return response.json();
 }
 
 export async function fetchContentCultures(): Promise<ContentCulture[]> {

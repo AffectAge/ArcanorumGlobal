@@ -94,6 +94,8 @@ export type WsInMessage =
   | { type: "AUTH"; token: string }
   | OrderDelta
   | { type: "PING" }
+  | { type: "WORLD_DELTA_ACK"; worldStateVersion: number }
+  | { type: "WORLD_DELTA_REPLAY_REQUEST"; fromWorldStateVersion: number }
   | { type: "REQUEST_RESOLVE" }
   | { type: "ADMIN_FORCE_RESOLVE" };
 

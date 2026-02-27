@@ -249,6 +249,9 @@ const wsDeltaSizeMetrics: WsDeltaSizeMetrics = {
   lastStateVersion: null,
   updatedAtIso: null,
 };
+const MAX_WORLD_DELTA_HISTORY = 512;
+const MAX_PERSISTED_WORLD_DELTA_LOG = 10_000;
+const worldDeltaHistory: WorldDelta[] = [];
 const onlinePlayers = new Set<string>();
 const lastLoginAtByCountryId = new Map<string, string>();
 const MAX_UI_NOTIFICATION_QUEUE = 500;
@@ -941,6 +944,7 @@ async function persistStateToDb(): Promise<void> {
 }
 
 let persistStateQueue: Promise<void> = Promise.resolve();
+let persistWorldDeltaQueue: Promise<void> = Promise.resolve();
 
 function savePersistentState(): void {
   persistStateQueue = persistStateQueue
@@ -950,6 +954,79 @@ function savePersistentState(): void {
     .catch((error) => {
       console.error("[state] Failed to save game state to DB:", error);
     });
+}
+
+async function ensureWorldDeltaLogTable(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS WorldDeltaLog (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      worldStateVersion INTEGER NOT NULL UNIQUE,
+      turnId INTEGER NOT NULL,
+      payloadJson TEXT NOT NULL,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    `CREATE INDEX IF NOT EXISTS idx_world_delta_log_version ON WorldDeltaLog(worldStateVersion)`,
+  );
+}
+
+async function persistWorldDeltaToDb(delta: WorldDelta): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT OR IGNORE INTO WorldDeltaLog (worldStateVersion, turnId, payloadJson)
+    VALUES (${delta.worldStateVersion}, ${delta.turnId}, ${JSON.stringify(delta)})
+  `;
+  await prisma.$executeRawUnsafe(`
+    DELETE FROM WorldDeltaLog
+    WHERE id NOT IN (
+      SELECT id FROM WorldDeltaLog
+      ORDER BY worldStateVersion DESC
+      LIMIT ${MAX_PERSISTED_WORLD_DELTA_LOG}
+    )
+  `);
+}
+
+function saveWorldDeltaPersistent(delta: WorldDelta): void {
+  persistWorldDeltaQueue = persistWorldDeltaQueue
+    .then(async () => {
+      await persistWorldDeltaToDb(delta);
+    })
+    .catch((error) => {
+      console.error("[state] Failed to save world delta log:", error);
+    });
+}
+
+async function syncPersistedWorldDeltaLogWithCurrentState(): Promise<void> {
+  await prisma.$executeRaw`DELETE FROM WorldDeltaLog WHERE worldStateVersion > ${worldStateVersion}`;
+}
+
+function isWorldDeltaPayload(value: unknown): value is WorldDelta {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Partial<WorldDelta>;
+  return row.type === "WORLD_DELTA" && typeof row.worldStateVersion === "number" && typeof row.turnId === "number";
+}
+
+async function loadPersistedWorldDeltaHistory(): Promise<void> {
+  const rows = await prisma.$queryRaw<Array<{ worldStateVersion: number; payloadJson: string }>>`
+    SELECT worldStateVersion, payloadJson
+    FROM WorldDeltaLog
+    WHERE worldStateVersion <= ${worldStateVersion}
+    ORDER BY worldStateVersion DESC
+    LIMIT ${MAX_WORLD_DELTA_HISTORY}
+  `;
+  const parsed: WorldDelta[] = [];
+  for (const row of [...rows].reverse()) {
+    try {
+      const payload = JSON.parse(row.payloadJson) as unknown;
+      if (!isWorldDeltaPayload(payload)) {
+        continue;
+      }
+      parsed.push(payload);
+    } catch {
+      // ignore malformed payload rows
+    }
+  }
+  worldDeltaHistory.splice(0, worldDeltaHistory.length, ...parsed);
 }
 
 async function tryImportPersistentStateFromFile(): Promise<boolean> {
@@ -1363,6 +1440,37 @@ function resetWsDeltaSizeMetrics(): void {
   wsDeltaSizeMetrics.updatedAtIso = null;
 }
 
+function pushWorldDeltaToHistory(delta: WorldDelta): void {
+  worldDeltaHistory.push(delta);
+  if (worldDeltaHistory.length > MAX_WORLD_DELTA_HISTORY) {
+    worldDeltaHistory.splice(0, worldDeltaHistory.length - MAX_WORLD_DELTA_HISTORY);
+  }
+}
+
+function getReplayDeltasFromVersion(fromWorldStateVersion: number): { ok: true; deltas: WorldDelta[] } | { ok: false } {
+  if (fromWorldStateVersion >= worldStateVersion) {
+    return { ok: true, deltas: [] };
+  }
+  const deltas = worldDeltaHistory
+    .filter((delta) => delta.worldStateVersion > fromWorldStateVersion)
+    .sort((a, b) => a.worldStateVersion - b.worldStateVersion);
+  if (deltas.length === 0) {
+    return { ok: false };
+  }
+  if (deltas[0].worldStateVersion !== fromWorldStateVersion + 1) {
+    return { ok: false };
+  }
+  for (let i = 1; i < deltas.length; i += 1) {
+    if (deltas[i].worldStateVersion !== deltas[i - 1].worldStateVersion + 1) {
+      return { ok: false };
+    }
+  }
+  if (deltas[deltas.length - 1].worldStateVersion !== worldStateVersion) {
+    return { ok: false };
+  }
+  return { ok: true, deltas };
+}
+
 function captureWsDeltaSizeMetrics(params: { compactPayload: WorldDelta; baselinePayload: unknown }): void {
   const compactBytes = Buffer.byteLength(JSON.stringify(params.compactPayload), "utf8");
   const baselineBytes = Buffer.byteLength(JSON.stringify(params.baselinePayload), "utf8");
@@ -1520,6 +1628,8 @@ function broadcastWorldDeltaFromSnapshot(wss: WebSocketServer, previous: WorldBa
     rejectedOrders,
   };
   captureWsDeltaSizeMetrics({ compactPayload: payload, baselinePayload });
+  pushWorldDeltaToHistory(payload);
+  saveWorldDeltaPersistent(payload);
   broadcast(wss, payload);
 }
 
@@ -1829,6 +1939,22 @@ app.get("/health", async (_req, res) => {
   res.json({ status: env.serverStatus, turnId, serverTime: new Date().toISOString() });
 });
 
+app.get("/world/snapshot", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  ensureCountryInWorldBase(auth.countryId);
+  return res.json({
+    worldBase: {
+      ...worldBase,
+      turnId,
+    },
+    turnId,
+    worldStateVersion,
+  });
+});
+
 app.get("/admin/ws-delta-metrics", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth || !(await isAdminCountry(auth.countryId))) {
@@ -1853,6 +1979,29 @@ app.get("/admin/ws-delta-metrics", async (req, res) => {
     avgBaselineBytes: Number(avgBaselineBytes.toFixed(2)),
     savedBytes,
     savedPercent,
+  });
+});
+
+app.get("/admin/world-delta-log/status", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const rows = await prisma.$queryRaw<Array<{ depth: number; oldest: number | null; newest: number | null }>>`
+    SELECT COUNT(*) as depth, MIN(worldStateVersion) as oldest, MAX(worldStateVersion) as newest
+    FROM WorldDeltaLog
+  `;
+  const db = rows[0] ?? { depth: 0, oldest: null, newest: null };
+  return res.json({
+    dbDepth: Number(db.depth ?? 0),
+    dbOldestWorldStateVersion: db.oldest == null ? null : Number(db.oldest),
+    dbNewestWorldStateVersion: db.newest == null ? null : Number(db.newest),
+    memoryDepth: worldDeltaHistory.length,
+    memoryOldestWorldStateVersion: worldDeltaHistory[0]?.worldStateVersion ?? null,
+    memoryNewestWorldStateVersion: worldDeltaHistory[worldDeltaHistory.length - 1]?.worldStateVersion ?? null,
+    currentWorldStateVersion: worldStateVersion,
+    maxPersisted: MAX_PERSISTED_WORLD_DELTA_LOG,
+    maxReplayInMemory: MAX_WORLD_DELTA_HISTORY,
   });
 });
 
@@ -3885,6 +4034,7 @@ wss.on("connection", (socket) => {
   let playerId: string | null = null;
   let playerCountryId: string | null = null;
   let isAdmin = false;
+  let lastAckedWorldStateVersion = 0;
 
   const send = (message: WsOutMessage) => {
     socket.send(JSON.stringify(message));
@@ -3952,6 +4102,38 @@ wss.on("connection", (socket) => {
 
     if (!playerId) {
       send({ type: "ERROR", code: "UNAUTHORIZED", message: "Please authenticate first" });
+      return;
+    }
+
+    if (msg.type === "WORLD_DELTA_ACK") {
+      if (typeof msg.worldStateVersion === "number" && Number.isFinite(msg.worldStateVersion)) {
+        lastAckedWorldStateVersion = Math.max(lastAckedWorldStateVersion, Math.floor(msg.worldStateVersion));
+      }
+      return;
+    }
+
+    if (msg.type === "WORLD_DELTA_REPLAY_REQUEST") {
+      const fromWorldStateVersion = Math.floor(msg.fromWorldStateVersion ?? 0);
+      if (!Number.isFinite(fromWorldStateVersion) || fromWorldStateVersion < 0) {
+        send({ type: "ERROR", code: "REPLAY_BAD_REQUEST", message: "Invalid replay request version" });
+        return;
+      }
+      const replayBaseVersion =
+        lastAckedWorldStateVersion > 0
+          ? Math.min(fromWorldStateVersion, lastAckedWorldStateVersion)
+          : fromWorldStateVersion;
+      const replay = getReplayDeltasFromVersion(replayBaseVersion);
+      if (!replay.ok) {
+        send({
+          type: "ERROR",
+          code: "REPLAY_UNAVAILABLE",
+          message: "Replay history is unavailable for requested version",
+        });
+        return;
+      }
+      for (const delta of replay.deltas) {
+        send(delta);
+      }
       return;
     }
 
@@ -4124,7 +4306,10 @@ wss.on("connection", (socket) => {
 });
 
 async function startServer(): Promise<void> {
+  await ensureWorldDeltaLogTable();
   await loadPersistentState();
+  await syncPersistedWorldDeltaLogWithCurrentState();
+  await loadPersistedWorldDeltaHistory();
   resetTurnTimerAnchor();
   setInterval(() => {
     try {
@@ -4183,11 +4368,3 @@ startServer().catch((error) => {
   console.error("[startup] Failed to initialize server:", error);
   process.exit(1);
 });
-
-
-
-
-
-
-
-
