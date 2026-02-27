@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { EventCategory, EventLogEntry, EventPriority, EventVisibility, Order, ResourceTotals, WorldBase, WorldDelta } from "@arcanorum/shared";
+import { WORLD_DELTA_MASK, type EventCategory, type EventLogEntry, type EventPriority, type EventVisibility, type Order, type ResourceTotals, type WorldBase, type WorldDelta } from "@arcanorum/shared";
 
 type OrdersByTurn = Map<number, Map<string, Order[]>>;
 
@@ -22,7 +22,7 @@ type GameState = {
   eventLogRetentionTurns: number;
   setAuth: (auth: AuthState | null) => void;
   setWorldBase: (world: WorldBase, turnId: number, worldStateVersion: number) => void;
-  applyWorldDelta: (delta: WorldDelta["changes"], turnId: number, worldStateVersion: number) => void;
+  applyWorldDelta: (delta: WorldDelta, turnId: number, worldStateVersion: number) => void;
   addOrder: (order: Order) => void;
   setPresence: (ids: string[]) => void;
   setSelectedProvince: (id: string | null) => void;
@@ -65,9 +65,9 @@ export const useGameStore = create<GameState>((set) => ({
         turnId: nextTurnId,
       };
 
-      if (delta.resourcesByCountry) {
+      if ((delta.mask & WORLD_DELTA_MASK.resourcesByCountry) !== 0 && delta.c) {
         nextWorldBase.resourcesByCountry = { ...nextWorldBase.resourcesByCountry };
-        for (const [countryId, value] of Object.entries(delta.resourcesByCountry)) {
+        for (const [countryId, value] of Object.entries(delta.c)) {
           if (!value) {
             delete nextWorldBase.resourcesByCountry[countryId];
             continue;
@@ -76,9 +76,9 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
-      if (delta.provinceOwner) {
+      if ((delta.mask & WORLD_DELTA_MASK.provinceOwner) !== 0 && delta.o) {
         nextWorldBase.provinceOwner = { ...nextWorldBase.provinceOwner };
-        for (const [provinceId, value] of Object.entries(delta.provinceOwner)) {
+        for (const [provinceId, value] of Object.entries(delta.o)) {
           if (value == null) {
             delete nextWorldBase.provinceOwner[provinceId];
             continue;
@@ -87,9 +87,9 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
-      if (delta.provinceNameById) {
+      if ((delta.mask & WORLD_DELTA_MASK.provinceNameById) !== 0 && delta.n) {
         nextWorldBase.provinceNameById = { ...nextWorldBase.provinceNameById };
-        for (const [provinceId, value] of Object.entries(delta.provinceNameById)) {
+        for (const [provinceId, value] of Object.entries(delta.n)) {
           if (value == null) {
             delete nextWorldBase.provinceNameById[provinceId];
             continue;
@@ -98,9 +98,9 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
-      if (delta.colonyProgressByProvince) {
+      if ((delta.mask & WORLD_DELTA_MASK.colonyProgressByProvince) !== 0 && delta.p) {
         nextWorldBase.colonyProgressByProvince = { ...nextWorldBase.colonyProgressByProvince };
-        for (const [provinceId, value] of Object.entries(delta.colonyProgressByProvince)) {
+        for (const [provinceId, value] of Object.entries(delta.p)) {
           if (!value) {
             delete nextWorldBase.colonyProgressByProvince[provinceId];
             continue;
@@ -109,9 +109,9 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
-      if (delta.provinceColonizationByProvince) {
+      if ((delta.mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0 && delta.z) {
         nextWorldBase.provinceColonizationByProvince = { ...nextWorldBase.provinceColonizationByProvince };
-        for (const [provinceId, value] of Object.entries(delta.provinceColonizationByProvince)) {
+        for (const [provinceId, value] of Object.entries(delta.z)) {
           if (!value) {
             delete nextWorldBase.provinceColonizationByProvince[provinceId];
             continue;

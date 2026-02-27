@@ -69,17 +69,24 @@ export type WorldBase = {
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
 };
 
+export const WORLD_DELTA_MASK = {
+  resourcesByCountry: 1 << 0,
+  provinceOwner: 1 << 1,
+  provinceNameById: 1 << 2,
+  colonyProgressByProvince: 1 << 3,
+  provinceColonizationByProvince: 1 << 4,
+} as const;
+
 export type WorldDelta = {
   type: "WORLD_DELTA";
   turnId: number;
   worldStateVersion: number;
-  changes: {
-    resourcesByCountry?: Record<string, ResourceTotals | null>;
-    provinceOwner?: Record<string, string | null>;
-    provinceNameById?: Record<string, string | null>;
-    colonyProgressByProvince?: Record<string, Record<string, number> | null>;
-    provinceColonizationByProvince?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
-  };
+  mask: number;
+  c?: Record<string, ResourceTotals | null>;
+  o?: Record<string, string | null>;
+  n?: Record<string, string | null>;
+  p?: Record<string, Record<string, number> | null>;
+  z?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
   rejectedOrders: Array<{ playerId: string; reason: string; tempOrderId?: string }>;
 };
 

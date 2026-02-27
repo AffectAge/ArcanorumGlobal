@@ -26,6 +26,7 @@ import {
   type ServerStatus,
   type WorldBase,
   type WorldDelta,
+  WORLD_DELTA_MASK,
   type WsInMessage,
   type WsOutMessage,
 } from "@arcanorum/shared";
@@ -224,6 +225,30 @@ const countrySelect = {
 
 let turnId = 1;
 let worldStateVersion = 1;
+type WsDeltaSizeMetrics = {
+  totalMessages: number;
+  totalCompactBytes: number;
+  totalBaselineBytes: number;
+  maxCompactBytes: number;
+  maxBaselineBytes: number;
+  lastCompactBytes: number;
+  lastBaselineBytes: number;
+  lastTurnId: number | null;
+  lastStateVersion: number | null;
+  updatedAtIso: string | null;
+};
+const wsDeltaSizeMetrics: WsDeltaSizeMetrics = {
+  totalMessages: 0,
+  totalCompactBytes: 0,
+  totalBaselineBytes: 0,
+  maxCompactBytes: 0,
+  maxBaselineBytes: 0,
+  lastCompactBytes: 0,
+  lastBaselineBytes: 0,
+  lastTurnId: null,
+  lastStateVersion: null,
+  updatedAtIso: null,
+};
 const onlinePlayers = new Set<string>();
 const lastLoginAtByCountryId = new Map<string, string>();
 const MAX_UI_NOTIFICATION_QUEUE = 500;
@@ -1325,7 +1350,35 @@ function cloneWorldBaseSnapshot(): WorldBase {
   });
 }
 
-function buildWorldDeltaChanges(prev: WorldBase, next: WorldBase): WorldDelta["changes"] {
+function resetWsDeltaSizeMetrics(): void {
+  wsDeltaSizeMetrics.totalMessages = 0;
+  wsDeltaSizeMetrics.totalCompactBytes = 0;
+  wsDeltaSizeMetrics.totalBaselineBytes = 0;
+  wsDeltaSizeMetrics.maxCompactBytes = 0;
+  wsDeltaSizeMetrics.maxBaselineBytes = 0;
+  wsDeltaSizeMetrics.lastCompactBytes = 0;
+  wsDeltaSizeMetrics.lastBaselineBytes = 0;
+  wsDeltaSizeMetrics.lastTurnId = null;
+  wsDeltaSizeMetrics.lastStateVersion = null;
+  wsDeltaSizeMetrics.updatedAtIso = null;
+}
+
+function captureWsDeltaSizeMetrics(params: { compactPayload: WorldDelta; baselinePayload: unknown }): void {
+  const compactBytes = Buffer.byteLength(JSON.stringify(params.compactPayload), "utf8");
+  const baselineBytes = Buffer.byteLength(JSON.stringify(params.baselinePayload), "utf8");
+  wsDeltaSizeMetrics.totalMessages += 1;
+  wsDeltaSizeMetrics.totalCompactBytes += compactBytes;
+  wsDeltaSizeMetrics.totalBaselineBytes += baselineBytes;
+  wsDeltaSizeMetrics.maxCompactBytes = Math.max(wsDeltaSizeMetrics.maxCompactBytes, compactBytes);
+  wsDeltaSizeMetrics.maxBaselineBytes = Math.max(wsDeltaSizeMetrics.maxBaselineBytes, baselineBytes);
+  wsDeltaSizeMetrics.lastCompactBytes = compactBytes;
+  wsDeltaSizeMetrics.lastBaselineBytes = baselineBytes;
+  wsDeltaSizeMetrics.lastTurnId = params.compactPayload.turnId;
+  wsDeltaSizeMetrics.lastStateVersion = params.compactPayload.worldStateVersion;
+  wsDeltaSizeMetrics.updatedAtIso = new Date().toISOString();
+}
+
+function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> {
   const resourcesByCountry: Record<string, ResourceTotals | null> = {};
   const provinceOwner: Record<string, string | null> = {};
   const provinceNameById: Record<string, string | null> = {};
@@ -1405,23 +1458,30 @@ function buildWorldDeltaChanges(prev: WorldBase, next: WorldBase): WorldDelta["c
     }
   }
 
-  const changes: WorldDelta["changes"] = {};
+  let mask = 0;
+  const compact: Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> = { mask: 0 };
   if (Object.keys(resourcesByCountry).length > 0) {
-    changes.resourcesByCountry = resourcesByCountry;
+    mask |= WORLD_DELTA_MASK.resourcesByCountry;
+    compact.c = resourcesByCountry;
   }
   if (Object.keys(provinceOwner).length > 0) {
-    changes.provinceOwner = provinceOwner;
+    mask |= WORLD_DELTA_MASK.provinceOwner;
+    compact.o = provinceOwner;
   }
   if (Object.keys(provinceNameById).length > 0) {
-    changes.provinceNameById = provinceNameById;
+    mask |= WORLD_DELTA_MASK.provinceNameById;
+    compact.n = provinceNameById;
   }
   if (Object.keys(colonyProgressByProvince).length > 0) {
-    changes.colonyProgressByProvince = colonyProgressByProvince;
+    mask |= WORLD_DELTA_MASK.colonyProgressByProvince;
+    compact.p = colonyProgressByProvince;
   }
   if (Object.keys(provinceColonizationByProvince).length > 0) {
-    changes.provinceColonizationByProvince = provinceColonizationByProvince;
+    mask |= WORLD_DELTA_MASK.provinceColonizationByProvince;
+    compact.z = provinceColonizationByProvince;
   }
-  return changes;
+  compact.mask = mask;
+  return compact;
 }
 
 function broadcastWorldDeltaFromSnapshot(wss: WebSocketServer, previous: WorldBase, rejectedOrders: WorldDelta["rejectedOrders"] = []): void {
@@ -1429,25 +1489,38 @@ function broadcastWorldDeltaFromSnapshot(wss: WebSocketServer, previous: WorldBa
     ...worldBase,
     turnId,
   };
-  const changes = buildWorldDeltaChanges(previous, next);
-  if (
-    !changes.resourcesByCountry &&
-    !changes.provinceOwner &&
-    !changes.provinceNameById &&
-    !changes.colonyProgressByProvince &&
-    !changes.provinceColonizationByProvince &&
-    rejectedOrders.length === 0
-  ) {
+  const compact = buildCompactWorldDelta(previous, next);
+  if (compact.mask === 0 && rejectedOrders.length === 0) {
     return;
   }
   worldStateVersion += 1;
-  broadcast(wss, {
+  const payload: WorldDelta = {
     type: "WORLD_DELTA",
     turnId,
     worldStateVersion,
-    changes,
+    mask: compact.mask,
+    c: compact.c,
+    o: compact.o,
+    n: compact.n,
+    p: compact.p,
+    z: compact.z,
     rejectedOrders,
-  });
+  };
+  const baselinePayload = {
+    type: "WORLD_DELTA",
+    turnId,
+    worldStateVersion,
+    changes: {
+      resourcesByCountry: compact.c,
+      provinceOwner: compact.o,
+      provinceNameById: compact.n,
+      colonyProgressByProvince: compact.p,
+      provinceColonizationByProvince: compact.z,
+    },
+    rejectedOrders,
+  };
+  captureWsDeltaSizeMetrics({ compactPayload: payload, baselinePayload });
+  broadcast(wss, payload);
 }
 
 function getCountrySkipInfo(country: { ignoreUntilTurn: number | null }, currentTurn: number): { ignored: boolean; ignoreUntilTurn: number | null } {
@@ -1754,6 +1827,42 @@ function getPendingUiNotificationsForCountry(params: { countryId: string; isAdmi
 
 app.get("/health", async (_req, res) => {
   res.json({ status: env.serverStatus, turnId, serverTime: new Date().toISOString() });
+});
+
+app.get("/admin/ws-delta-metrics", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const avgCompactBytes =
+    wsDeltaSizeMetrics.totalMessages > 0
+      ? wsDeltaSizeMetrics.totalCompactBytes / wsDeltaSizeMetrics.totalMessages
+      : 0;
+  const avgBaselineBytes =
+    wsDeltaSizeMetrics.totalMessages > 0
+      ? wsDeltaSizeMetrics.totalBaselineBytes / wsDeltaSizeMetrics.totalMessages
+      : 0;
+  const savedBytes = Math.max(0, wsDeltaSizeMetrics.totalBaselineBytes - wsDeltaSizeMetrics.totalCompactBytes);
+  const savedPercent =
+    wsDeltaSizeMetrics.totalBaselineBytes > 0
+      ? Number(((savedBytes / wsDeltaSizeMetrics.totalBaselineBytes) * 100).toFixed(2))
+      : 0;
+  return res.json({
+    ...wsDeltaSizeMetrics,
+    avgCompactBytes: Number(avgCompactBytes.toFixed(2)),
+    avgBaselineBytes: Number(avgBaselineBytes.toFixed(2)),
+    savedBytes,
+    savedPercent,
+  });
+});
+
+app.post("/admin/ws-delta-metrics/reset", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  resetWsDeltaSizeMetrics();
+  return res.json({ ok: true });
 });
 
 app.get("/countries", async (_req, res) => {
@@ -4074,8 +4183,6 @@ startServer().catch((error) => {
   console.error("[startup] Failed to initialize server:", error);
   process.exit(1);
 });
-
-
 
 
 

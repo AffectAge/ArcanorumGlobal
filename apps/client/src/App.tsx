@@ -199,7 +199,7 @@ export default function App() {
               }
             : prev,
         );
-        applyWorldDelta(msg.changes, msg.turnId, msg.worldStateVersion);
+        applyWorldDelta(msg, msg.turnId, msg.worldStateVersion);
         setTurnTimerUi((prev) => ({ ...prev, startedAtMs: Date.now() }));
         resetOverlay(msg.turnId);
         pruneLogEntries(msg.turnId);
@@ -1226,7 +1226,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 
