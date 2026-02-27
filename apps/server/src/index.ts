@@ -629,6 +629,67 @@ const defaultGameSettings = (): GameSettings => ({
   },
 });
 
+type PopulationGroup = WorldBase["population"]["groups"][number];
+type PopulationTotals = WorldBase["population"]["totals"];
+
+function summarizePopulation(groups: PopulationGroup[], provinceOwner: Record<string, string>): PopulationTotals {
+  const totals: PopulationTotals = {
+    population: 0,
+    groups: groups.length,
+    byCountry: {},
+    byProvince: {},
+    byRace: {},
+    byCulture: {},
+    byReligion: {},
+  };
+  for (const group of groups) {
+    const size = Math.max(0, Math.floor(Number(group.size) || 0));
+    if (size <= 0) continue;
+    totals.population += size;
+    totals.byProvince[group.provinceId] = (totals.byProvince[group.provinceId] ?? 0) + size;
+    totals.byRace[group.raceId] = (totals.byRace[group.raceId] ?? 0) + size;
+    totals.byCulture[group.cultureId] = (totals.byCulture[group.cultureId] ?? 0) + size;
+    totals.byReligion[group.religionId] = (totals.byReligion[group.religionId] ?? 0) + size;
+    const owner = provinceOwner[group.provinceId];
+    if (owner) totals.byCountry[owner] = (totals.byCountry[owner] ?? 0) + size;
+  }
+  totals.groups = groups.length;
+  return totals;
+}
+
+function makePopulationState(groups: PopulationGroup[], provinceOwner: Record<string, string>): WorldBase["population"] {
+  return {
+    groups,
+    totals: summarizePopulation(groups, provinceOwner),
+  };
+}
+
+function normalizePopulation(input: unknown, provinceOwner: Record<string, string>): WorldBase["population"] {
+  if (!input || typeof input !== "object") return makePopulationState([], provinceOwner);
+  const state = input as Partial<{ groups: unknown }>;
+  if (!Array.isArray(state.groups)) return makePopulationState([], provinceOwner);
+  const groups: PopulationGroup[] = [];
+  for (const raw of state.groups) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Partial<PopulationGroup>;
+    const provinceId = typeof row.provinceId === "string" ? row.provinceId.trim() : "";
+    const raceId = typeof row.raceId === "string" ? row.raceId.trim() : "";
+    const cultureId = typeof row.cultureId === "string" ? row.cultureId.trim() : "";
+    const religionId = typeof row.religionId === "string" ? row.religionId.trim() : "";
+    const size = Math.max(0, Math.floor(Number(row.size) || 0));
+    if (!provinceId || !raceId || !cultureId || !religionId || size <= 0) continue;
+    groups.push({
+      id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : randomUUID(),
+      provinceId,
+      raceId,
+      cultureId,
+      religionId,
+      size,
+    });
+  }
+  return makePopulationState(groups, provinceOwner);
+}
+
 function defaultWorldBase(currentTurnId: number): WorldBase {
   return {
     turnId: currentTurnId,
@@ -644,6 +705,11 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
+    population: makePopulationState([], {
+      "p-north": "ARC",
+      "p-south": "ARC",
+      "p-east": "VAL",
+    }),
   };
 }
 
@@ -818,6 +884,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         colonyProgressByProvince: candidate.colonyProgressByProvince,
         provinceColonizationByProvince: normalizeProvinceColonizationMap(
           (candidate as Partial<WorldBase> & { provinceColonizationByProvince?: unknown }).provinceColonizationByProvince,
+        ),
+        population: normalizePopulation(
+          (candidate as Partial<WorldBase> & { population?: unknown }).population,
+          candidate.provinceOwner as Record<string, string>,
         ),
       };
     } else {
@@ -1733,6 +1803,156 @@ app.patch("/notifications/ui/:id/viewed", async (req, res) => {
   }
   target.viewedByCountryIds.add(auth.countryId);
   return res.json({ ok: true });
+});
+
+function topFromRecord(input: Record<string, number>, limit = 20): Array<{ id: string; value: number }> {
+  return Object.entries(input)
+    .map(([id, value]) => ({ id, value: Math.max(0, Math.floor(Number(value) || 0)) }))
+    .filter((item) => item.value > 0)
+    .sort((a, b) => b.value - a.value || a.id.localeCompare(b.id))
+    .slice(0, limit);
+}
+
+function contentIdsOrFallback(
+  rows: Array<{ id: string }>,
+  fallbackPrefix: string,
+): string[] {
+  const ids = rows.map((row) => row.id).filter(Boolean);
+  return ids.length > 0 ? ids : [`sys-${fallbackPrefix}-default`];
+}
+
+const populationGenerateSchema = z.object({
+  populationPerProvince: z.coerce.number().int().min(1).max(50_000_000).default(100_000),
+  groupsPerProvince: z.coerce.number().int().min(1).max(1000).default(24),
+  target: z.enum(["all", "owned"]).default("all"),
+  replaceExisting: z.boolean().default(true),
+});
+
+app.get("/population/summary/world", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const totals = worldBase.population.totals;
+  return res.json({
+    turnId,
+    totals,
+    top: {
+      countries: topFromRecord(totals.byCountry),
+      races: topFromRecord(totals.byRace),
+      cultures: topFromRecord(totals.byCulture),
+      religions: topFromRecord(totals.byReligion),
+      provinces: topFromRecord(totals.byProvince),
+    },
+  });
+});
+
+app.get("/population/summary/province/:provinceId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const provinceId = String(req.params.provinceId);
+  const groups = worldBase.population.groups.filter((group) => group.provinceId === provinceId);
+  const totalPopulation = groups.reduce((sum, g) => sum + g.size, 0);
+  return res.json({
+    turnId,
+    provinceId,
+    totalPopulation,
+    groups: groups
+      .slice()
+      .sort((a, b) => b.size - a.size || a.id.localeCompare(b.id))
+      .slice(0, 200),
+  });
+});
+
+app.post("/admin/population/generate", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const parsed = populationGenerateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const raceIds = contentIdsOrFallback(gameSettings.content.races, "race");
+  const cultureIds = contentIdsOrFallback(gameSettings.content.cultures, "culture");
+  const religionIds = contentIdsOrFallback(gameSettings.content.religions, "religion");
+
+  const provinceIds =
+    parsed.data.target === "owned"
+      ? adm1ProvinceIndex.filter((province) => Boolean(worldBase.provinceOwner[province.id])).map((province) => province.id)
+      : adm1ProvinceIndex.map((province) => province.id);
+
+  const groupsPerProvince = parsed.data.groupsPerProvince;
+  const populationPerProvince = parsed.data.populationPerProvince;
+  const aggregate = new Map<string, PopulationGroup>();
+
+  if (!parsed.data.replaceExisting) {
+    for (const group of worldBase.population.groups) {
+      const key = `${group.provinceId}|${group.raceId}|${group.cultureId}|${group.religionId}`;
+      const existing = aggregate.get(key);
+      if (existing) {
+        existing.size += group.size;
+      } else {
+        aggregate.set(key, { ...group });
+      }
+    }
+  }
+
+  for (let provinceIdx = 0; provinceIdx < provinceIds.length; provinceIdx += 1) {
+    const provinceId = provinceIds[provinceIdx];
+    const weights: number[] = [];
+    let weightSum = 0;
+    for (let i = 0; i < groupsPerProvince; i += 1) {
+      const w = (i % 5) + 1;
+      weights.push(w);
+      weightSum += w;
+    }
+    let distributed = 0;
+    for (let i = 0; i < groupsPerProvince; i += 1) {
+      const isLast = i === groupsPerProvince - 1;
+      const size = isLast
+        ? Math.max(0, populationPerProvince - distributed)
+        : Math.floor((populationPerProvince * weights[i]) / Math.max(1, weightSum));
+      distributed += size;
+      if (size <= 0) continue;
+      const raceId = raceIds[(provinceIdx * 31 + i * 17) % raceIds.length];
+      const cultureId = cultureIds[(provinceIdx * 29 + i * 13) % cultureIds.length];
+      const religionId = religionIds[(provinceIdx * 23 + i * 11) % religionIds.length];
+      const key = `${provinceId}|${raceId}|${cultureId}|${religionId}`;
+      const existing = aggregate.get(key);
+      if (existing) {
+        existing.size += size;
+      } else {
+        aggregate.set(key, { id: randomUUID(), provinceId, raceId, cultureId, religionId, size });
+      }
+    }
+  }
+
+  const groups = [...aggregate.values()]
+    .filter((group) => group.size > 0)
+    .sort((a, b) => a.provinceId.localeCompare(b.provinceId) || b.size - a.size || a.id.localeCompare(b.id));
+  worldBase.population = makePopulationState(groups, worldBase.provinceOwner);
+  savePersistentState();
+  broadcastWorldBaseSync(wss);
+  broadcast(wss, {
+    type: "NEWS_EVENT",
+    event: makeOfficialNews({
+      turn: turnId,
+      category: "system",
+      title: "Население сгенерировано",
+      message: `Администратор сгенерировал население: групп ${groups.length}, население ${worldBase.population.totals.population}`,
+      countryId: auth.countryId,
+      priority: "low",
+      visibility: "public",
+    }),
+  });
+  return res.json({
+    ok: true,
+    totals: worldBase.population.totals,
+    provincesAffected: provinceIds.length,
+  });
 });
 
 const gameSettingsSchema = z.object({
@@ -3937,9 +4157,6 @@ startServer().catch((error) => {
   console.error("[startup] Failed to initialize server:", error);
   process.exit(1);
 });
-
-
-
 
 
 

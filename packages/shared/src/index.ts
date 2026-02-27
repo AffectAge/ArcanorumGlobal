@@ -67,6 +67,25 @@ export type WorldBase = {
   provinceNameById: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
+  population: {
+    groups: Array<{
+      id: string;
+      provinceId: string;
+      raceId: string;
+      cultureId: string;
+      religionId: string;
+      size: number;
+    }>;
+    totals: {
+      population: number;
+      groups: number;
+      byCountry: Record<string, number>;
+      byProvince: Record<string, number>;
+      byRace: Record<string, number>;
+      byCulture: Record<string, number>;
+      byReligion: Record<string, number>;
+    };
+  };
 };
 
 export type WorldPatch = {

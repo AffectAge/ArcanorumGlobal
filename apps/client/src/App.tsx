@@ -18,6 +18,7 @@ import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
+import { PopulationModal } from "./components/PopulationModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -71,6 +72,7 @@ export default function App() {
   const [countryCustomizationOpen, setCountryCustomizationOpen] = useState(false);
   const [clientSettingsOpen, setClientSettingsOpen] = useState(false);
   const [civilopediaOpen, setCivilopediaOpen] = useState(false);
+  const [populationModalOpen, setPopulationModalOpen] = useState(false);
   const [civilopediaIntent, setCivilopediaIntent] = useState<
     | { type: "open-entry"; entryId: string }
     | { type: "province"; provinceId: string; provinceName: string; createIfMissing: boolean }
@@ -994,7 +996,13 @@ export default function App() {
             countryDetails={currentCountryDetails}
             turnTimer={turnTimerUi}
           />
-          <SideNav />
+          <SideNav
+            onSelect={(key) => {
+              if (key === "population") {
+                setPopulationModalOpen(true);
+              }
+            }}
+          />
           <EventLogPanel
             entries={eventLog}
             currentCountryId={auth.countryId}
@@ -1124,6 +1132,15 @@ export default function App() {
         />
       )}
 
+      {auth?.token && (
+        <PopulationModal
+          open={populationModalOpen}
+          token={auth.token}
+          selectedProvinceId={selectedProvinceId}
+          onClose={() => setPopulationModalOpen(false)}
+        />
+      )}
+
       {auth?.isAdmin && (
         <RegistrationApprovalModal
           open={registrationApprovalModal.open}
@@ -1222,7 +1239,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 
