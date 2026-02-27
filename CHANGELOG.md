@@ -20,6 +20,16 @@
 - Сжат payload WS-дельт (`mask` + короткие ключи `c/o/n/p/z`) для уменьшения размера сообщений.
 - Стратегия синхронизации клиента: сначала replay, затем fallback на snapshot-resync.
 - `README.md` обновлен под текущую архитектуру WS-синхронизации и SQLite.
+- `savePersistentState` переведен на debounce-запись с принудительным flush в критичной точке резолва хода.
+- Prune журнала `WorldDeltaLog` вынесен из hot-path вставки в периодическую задачу.
+- `GET /admin/provinces` получил опциональную пагинацию (`limit`, `offset`) и метаданные (`total`).
+- Клиентский таймер ожидания автоперехода хода переведен с polling `setInterval` на одноразовый `setTimeout`.
+- Добавлен короткий in-memory TTL-кэш для частых `country.findMany` запросов с инвалидацией на мутациях страны.
+- WS broadcast ограничен авторизованными сокетами; `NEWS_EVENT` с `private` visibility отправляются только целевой стране и администраторам.
+- Убран `JSON.stringify` из сравнения `colonyProgressByProvince` в diff-пайплайне `WORLD_DELTA` (заменен на структурный compare map-данных).
+- Введен индекс активных колонизаций (`country -> provinces`) и инкрементальный resolve-проход по touched провинциям вместо полного сканирования прогресса.
+- `MapView` переведен с подписки на весь `worldBase` на точечные селекторы Zustand по веткам карты (`provinceOwner`, `provinceNameById`, `colonyProgressByProvince`, `provinceColonizationByProvince`) для снижения лишних ререндеров клиента.
+- Исправлено залипание overlay "Идет обработка хода" при входе: авто-таймер теперь отправляет `REQUEST_RESOLVE` без локального принудительного `processing`, добавлен guard от повторных авто-запросов в одном ходу, overlay сбрасывается в `idle` при `AUTH_OK` и logout.
 
 ### Удалено
 - Legacy-путь полного WS-синка мира (`WORLD_PATCH` / `WORLD_BASE_SYNC`).

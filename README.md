@@ -43,11 +43,16 @@ npm run dev
 - Клиент отправляет `WORLD_DELTA_ACK` после применения дельт.
 - При разрыве последовательности запрашивается `WORLD_DELTA_REPLAY_REQUEST`.
 - Если replay недоступен, используется `GET /world/snapshot` для мягкого ресинка.
+- Broadcast игровых WS-сообщений отправляется только авторизованным сокетам; `NEWS_EVENT` с `visibility=private` маршрутизируются только целевой стране и администраторам.
+- Серверный diff `WORLD_DELTA` для `colonyProgressByProvince` использует структурное сравнение map-объектов (без `JSON.stringify`) для снижения CPU-нагрузки.
+- В turn-resolve используется индекс активных колонизаций (`country -> provinces`), что уменьшает количество полных проходов по `colonyProgressByProvince`.
+- `MapView` на клиенте подписан на отдельные ветки `worldBase`, а не на весь объект, чтобы уменьшить лишние ререндеры при нерелевантных дельтах.
 
 ## Админ-диагностика
 - `GET /admin/ws-delta-metrics` — метрики размера WS-дельт (compact vs baseline).
 - `POST /admin/ws-delta-metrics/reset` — сброс метрик.
 - `GET /admin/world-delta-log/status` — состояние персистентного журнала дельт (БД и in-memory replay window).
+- `GET /admin/provinces?q=...&limit=...&offset=...` — список провинций с поиском и опциональной пагинацией.
 
 ## Важно для Windows
 В текущем окружении запуск Vite может ломаться из пути с пробелом (`...\Ages 3`) из-за `esbuild` (`spawn EFTYPE`).

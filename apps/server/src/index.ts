@@ -251,6 +251,8 @@ const wsDeltaSizeMetrics: WsDeltaSizeMetrics = {
 };
 const MAX_WORLD_DELTA_HISTORY = 512;
 const MAX_PERSISTED_WORLD_DELTA_LOG = 10_000;
+const PERSIST_STATE_DEBOUNCE_MS = 750;
+const WORLD_DELTA_LOG_PRUNE_INTERVAL_MS = 30_000;
 const worldDeltaHistory: WorldDelta[] = [];
 const onlinePlayers = new Set<string>();
 const lastLoginAtByCountryId = new Map<string, string>();
@@ -263,11 +265,30 @@ type QueuedUiNotification = {
 const uiNotificationQueue: QueuedUiNotification[] = [];
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
 const resolveReadyByTurn = new Map<number, Set<string>>();
+const activeColonizeProvincesByCountry = new Map<string, Set<string>>();
+const COUNTRY_QUERY_CACHE_TTL_MS = 2_000;
+const countryQueryCache = new Map<string, { expiresAtMs: number; value: unknown }>();
 const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
 const DEFAULT_COLONIZATION_POINTS_PER_TURN = 30;
 const COLONIZATION_GOAL = 100;
 const DEFAULT_PROVINCE_COLONIZATION_COST = 100;
 const SETTINGS_MAX_NUMBER = 1_000_000_000_000;
+
+function invalidateCountryQueryCache(): void {
+  countryQueryCache.clear();
+}
+
+async function getCachedCountryQuery<T>(params: { key: string; ttlMs?: number; loader: () => Promise<T> }): Promise<T> {
+  const ttlMs = params.ttlMs ?? COUNTRY_QUERY_CACHE_TTL_MS;
+  const nowMs = Date.now();
+  const cached = countryQueryCache.get(params.key);
+  if (cached && cached.expiresAtMs > nowMs) {
+    return cached.value as T;
+  }
+  const value = await params.loader();
+  countryQueryCache.set(params.key, { expiresAtMs: nowMs + ttlMs, value });
+  return value;
+}
 
 type GameSettings = {
   content: {
@@ -945,8 +966,39 @@ async function persistStateToDb(): Promise<void> {
 
 let persistStateQueue: Promise<void> = Promise.resolve();
 let persistWorldDeltaQueue: Promise<void> = Promise.resolve();
+let persistStateDebounceTimer: NodeJS.Timeout | null = null;
+let persistStateDirty = false;
 
 function savePersistentState(): void {
+  persistStateDirty = true;
+  if (persistStateDebounceTimer) {
+    return;
+  }
+  persistStateDebounceTimer = setTimeout(() => {
+    persistStateDebounceTimer = null;
+    if (!persistStateDirty) {
+      return;
+    }
+    persistStateDirty = false;
+    persistStateQueue = persistStateQueue
+      .then(async () => {
+        await persistStateToDb();
+      })
+      .catch((error) => {
+        console.error("[state] Failed to save game state to DB:", error);
+      });
+  }, PERSIST_STATE_DEBOUNCE_MS);
+}
+
+function flushPersistentStateNow(): Promise<void> {
+  if (persistStateDebounceTimer) {
+    clearTimeout(persistStateDebounceTimer);
+    persistStateDebounceTimer = null;
+  }
+  if (!persistStateDirty) {
+    return persistStateQueue;
+  }
+  persistStateDirty = false;
   persistStateQueue = persistStateQueue
     .then(async () => {
       await persistStateToDb();
@@ -954,6 +1006,7 @@ function savePersistentState(): void {
     .catch((error) => {
       console.error("[state] Failed to save game state to DB:", error);
     });
+  return persistStateQueue;
 }
 
 async function ensureWorldDeltaLogTable(): Promise<void> {
@@ -976,6 +1029,9 @@ async function persistWorldDeltaToDb(delta: WorldDelta): Promise<void> {
     INSERT OR IGNORE INTO WorldDeltaLog (worldStateVersion, turnId, payloadJson)
     VALUES (${delta.worldStateVersion}, ${delta.turnId}, ${JSON.stringify(delta)})
   `;
+}
+
+async function prunePersistedWorldDeltaLog(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     DELETE FROM WorldDeltaLog
     WHERE id NOT IN (
@@ -993,6 +1049,16 @@ function saveWorldDeltaPersistent(delta: WorldDelta): void {
     })
     .catch((error) => {
       console.error("[state] Failed to save world delta log:", error);
+    });
+}
+
+function schedulePersistedWorldDeltaLogPrune(): void {
+  persistWorldDeltaQueue = persistWorldDeltaQueue
+    .then(async () => {
+      await prunePersistedWorldDeltaLog();
+    })
+    .catch((error) => {
+      console.error("[state] Failed to prune world delta log:", error);
     });
 }
 
@@ -1253,6 +1319,49 @@ function normalizeProvinceColonizationMap(
   return normalized;
 }
 
+function rebuildActiveColonizationIndexFromWorldBase(): void {
+  activeColonizeProvincesByCountry.clear();
+  for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
+    if (worldBase.provinceOwner[provinceId] || getProvinceColonizationConfig(provinceId).disabled) {
+      continue;
+    }
+    for (const [countryId, value] of Object.entries(progressByCountry)) {
+      if (typeof value !== "number") continue;
+      const byCountry = activeColonizeProvincesByCountry.get(countryId) ?? new Set<string>();
+      byCountry.add(provinceId);
+      activeColonizeProvincesByCountry.set(countryId, byCountry);
+    }
+  }
+}
+
+function addActiveColonizationTarget(countryId: string, provinceId: string): void {
+  const byCountry = activeColonizeProvincesByCountry.get(countryId) ?? new Set<string>();
+  byCountry.add(provinceId);
+  activeColonizeProvincesByCountry.set(countryId, byCountry);
+}
+
+function removeActiveColonizationTarget(countryId: string, provinceId: string): void {
+  const byCountry = activeColonizeProvincesByCountry.get(countryId);
+  if (!byCountry) return;
+  byCountry.delete(provinceId);
+  if (byCountry.size === 0) {
+    activeColonizeProvincesByCountry.delete(countryId);
+  }
+}
+
+function removeProvinceFromActiveColonizationIndex(provinceId: string): void {
+  for (const [countryId, provinces] of activeColonizeProvincesByCountry.entries()) {
+    provinces.delete(provinceId);
+    if (provinces.size === 0) {
+      activeColonizeProvincesByCountry.delete(countryId);
+    }
+  }
+}
+
+function removeCountryFromActiveColonizationIndex(countryId: string): void {
+  activeColonizeProvincesByCountry.delete(countryId);
+}
+
 function migrateProvinceManualCostFlags(): number {
   let migrated = 0;
   for (const [provinceId, cfg] of Object.entries(worldBase.provinceColonizationByProvince ?? {})) {
@@ -1273,6 +1382,7 @@ function migrateProvinceManualCostFlags(): number {
 
 function cleanupProvinceColonizationProgress(provinceId: string): void {
   delete worldBase.colonyProgressByProvince[provinceId];
+  removeProvinceFromActiveColonizationIndex(provinceId);
   const turnOrders = ordersByTurn.get(turnId);
   if (!turnOrders) {
     return;
@@ -1300,9 +1410,19 @@ function createToken(player: { id: string; countryId: string; isAdmin: boolean }
 function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
   const payload = JSON.stringify(message);
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
+    if (client.readyState !== WebSocket.OPEN) return;
+    const meta = client as WebSocket & { __arcIsAdmin?: boolean; __arcCountryId?: string };
+    // WS broadcast path is gameplay-only: send only to authenticated sockets.
+    if (!meta.__arcCountryId) return;
+    if (message.type === "NEWS_EVENT" && message.event.visibility === "private") {
+      const targetCountryId = message.event.countryId ?? null;
+      const isTargetCountry = targetCountryId != null && meta.__arcCountryId === targetCountryId;
+      const isAdmin = Boolean(meta.__arcIsAdmin);
+      if (!isTargetCountry && !isAdmin) {
+        return;
+      }
     }
+    client.send(payload);
   });
 }
 
@@ -1399,17 +1519,21 @@ function broadcastUiNotification(
 }
 
 async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSocket, adminCountryId: string): Promise<void> {
-  const pending = await prisma.country.findMany({
-    where: { isRegistrationApproved: false },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      color: true,
-      flagUrl: true,
-      crestUrl: true,
-      createdAt: true,
-    },
+  const pending = await getCachedCountryQuery({
+    key: "country:pending-registration",
+    loader: () =>
+      prisma.country.findMany({
+        where: { isRegistrationApproved: false },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          name: true,
+          color: true,
+          flagUrl: true,
+          crestUrl: true,
+          createdAt: true,
+        },
+      }),
   });
   for (const country of pending) {
     const notification = makeRegistrationApprovalUiNotification(country);
@@ -1486,6 +1610,26 @@ function captureWsDeltaSizeMetrics(params: { compactPayload: WorldDelta; baselin
   wsDeltaSizeMetrics.updatedAtIso = new Date().toISOString();
 }
 
+function isEqualCountryProgressMap(
+  prevValue: Record<string, number> | undefined,
+  nextValue: Record<string, number>,
+): boolean {
+  if (!prevValue) {
+    return false;
+  }
+  const prevKeys = Object.keys(prevValue);
+  const nextKeys = Object.keys(nextValue);
+  if (prevKeys.length !== nextKeys.length) {
+    return false;
+  }
+  for (const key of nextKeys) {
+    if ((prevValue[key] ?? Number.NaN) !== nextValue[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> {
   const resourcesByCountry: Record<string, ResourceTotals | null> = {};
   const provinceOwner: Record<string, string | null> = {};
@@ -1544,7 +1688,7 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
       colonyProgressByProvince[key] = null;
       continue;
     }
-    if (JSON.stringify(prevValue ?? null) !== JSON.stringify(nextValue)) {
+    if (!isEqualCountryProgressMap(prevValue, nextValue)) {
       colonyProgressByProvince[key] = nextValue;
     }
   }
@@ -1661,7 +1805,7 @@ function getCountryBlockInfo(
 }
 
 async function cleanupExpiredPunishments(currentTurn: number, now: Date): Promise<void> {
-  await prisma.country.updateMany({
+  const clearedByTurn = await prisma.country.updateMany({
     where: {
       isLocked: false,
       blockedUntilTurn: { lt: currentTurn },
@@ -1669,13 +1813,16 @@ async function cleanupExpiredPunishments(currentTurn: number, now: Date): Promis
     data: { blockedUntilTurn: null },
   });
 
-  await prisma.country.updateMany({
+  const clearedByTime = await prisma.country.updateMany({
     where: {
       isLocked: false,
       blockedUntilAt: { lt: now },
     },
     data: { blockedUntilAt: null },
   });
+  if (clearedByTurn.count > 0 || clearedByTime.count > 0) {
+    invalidateCountryQueryCache();
+  }
 }
 function validateImageDimensions(file: Express.Multer.File, maxSize = 256): boolean {
   const dimensions = imageSize(readFileSync(file.path));
@@ -1741,16 +1888,11 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
   const news: EventLogEntry[] = [];
 
   const colonizeTargetsByCountry = new Map<string, Set<string>>();
-
-  for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
-    const provinceConfig = getProvinceColonizationConfig(provinceId);
-    if (worldBase.provinceOwner[provinceId] || provinceConfig.disabled) {
-      continue;
-    }
-    for (const countryId of Object.keys(progressByCountry)) {
-      const byCountry = colonizeTargetsByCountry.get(countryId) ?? new Set<string>();
-      byCountry.add(provinceId);
-      colonizeTargetsByCountry.set(countryId, byCountry);
+  const touchedProvinceIds = new Set<string>();
+  for (const [countryId, provinces] of activeColonizeProvincesByCountry.entries()) {
+    colonizeTargetsByCountry.set(countryId, new Set(provinces));
+    for (const provinceId of provinces) {
+      touchedProvinceIds.add(provinceId);
     }
   }
 
@@ -1780,6 +1922,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
         const byCountry = colonizeTargetsByCountry.get(order.countryId) ?? new Set<string>();
         byCountry.add(order.provinceId);
         colonizeTargetsByCountry.set(order.countryId, byCountry);
+        touchedProvinceIds.add(order.provinceId);
       }
     }
   });
@@ -1830,6 +1973,8 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
       spentSupportDucats += appliedDucats;
       remainingCountrySupportDucats = Math.max(0, remainingCountrySupportDucats - appliedDucats);
       worldBase.colonyProgressByProvince[provinceId] = byCountry;
+      addActiveColonizationTarget(countryId, provinceId);
+      touchedProvinceIds.add(provinceId);
     }
     if (countryResource) {
       countryResource.colonization = Math.max(0, countryResource.colonization - spentColonizationPoints);
@@ -1837,13 +1982,20 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
     }
 
   }
-  for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
+  for (const provinceId of touchedProvinceIds) {
+    const progressByCountry = worldBase.colonyProgressByProvince[provinceId];
+    if (!progressByCountry) {
+      removeProvinceFromActiveColonizationIndex(provinceId);
+      continue;
+    }
     if (worldBase.provinceOwner[provinceId]) {
       delete worldBase.colonyProgressByProvince[provinceId];
+      removeProvinceFromActiveColonizationIndex(provinceId);
       continue;
     }
     if (getProvinceColonizationConfig(provinceId).disabled) {
       delete worldBase.colonyProgressByProvince[provinceId];
+      removeProvinceFromActiveColonizationIndex(provinceId);
       continue;
     }
 
@@ -1858,6 +2010,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
     const previousOwnerId = worldBase.provinceOwner[provinceId] ?? null;
     worldBase.provinceOwner[provinceId] = winnerCountryId;
     delete worldBase.colonyProgressByProvince[provinceId];
+    removeProvinceFromActiveColonizationIndex(provinceId);
     news.push(
       makeOfficialNews({
         turn: turnId,
@@ -1889,7 +2042,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
 
   ordersByTurn.delete(turnId - 1);
   resolveReadyByTurn.delete(turnId - 1);
-  savePersistentState();
+  void flushPersistentStateNow();
 
   return {
     previousWorldBase,
@@ -2016,25 +2169,32 @@ app.post("/admin/ws-delta-metrics/reset", async (req, res) => {
 
 app.get("/countries", async (_req, res) => {
   await cleanupExpiredPunishments(turnId, new Date());
-  const countries = await prisma.country.findMany({ select: countrySelect, orderBy: { createdAt: "asc" } });
+  const countries = await getCachedCountryQuery({
+    key: "country:list",
+    loader: () => prisma.country.findMany({ select: countrySelect, orderBy: { createdAt: "asc" } }),
+  });
   res.json(countries.map(countryFromDb));
 });
 
 app.get("/turn/status", async (_req, res) => {
   const now = new Date();
   await cleanupExpiredPunishments(turnId, now);
-  const countries = await prisma.country.findMany({
-    select: {
-      id: true,
-      name: true,
-      color: true,
-      flagUrl: true,
-      isLocked: true,
-      blockedUntilTurn: true,
-      blockedUntilAt: true,
-      ignoreUntilTurn: true,
-    },
-    orderBy: { createdAt: "asc" },
+  const countries = await getCachedCountryQuery({
+    key: "country:turn-status",
+    loader: () =>
+      prisma.country.findMany({
+        select: {
+          id: true,
+          name: true,
+          color: true,
+          flagUrl: true,
+          isLocked: true,
+          blockedUntilTurn: true,
+          blockedUntilAt: true,
+          ignoreUntilTurn: true,
+        },
+        orderBy: { createdAt: "asc" },
+      }),
   });
 
   const readySet = getReadySetForTurn(turnId);
@@ -3018,12 +3178,7 @@ app.post("/country/colonization/start", async (req, res) => {
     return res.status(400).json({ error: "ALREADY_COLONIZING" });
   }
 
-  const activeColonizeTargets = new Set<string>();
-  for (const [pid, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
-    if (!worldBase.provinceOwner[pid] && !getProvinceColonizationConfig(pid).disabled && progressByCountry[auth.countryId] != null) {
-      activeColonizeTargets.add(pid);
-    }
-  }
+  const activeColonizeTargets = new Set<string>(activeColonizeProvincesByCountry.get(auth.countryId) ?? []);
   const turnOrders = ordersByTurn.get(turnId);
   if (turnOrders) {
     for (const list of turnOrders.values()) {
@@ -3048,6 +3203,7 @@ app.post("/country/colonization/start", async (req, res) => {
     ...existing,
     [auth.countryId]: 0,
   };
+  addActiveColonizationTarget(auth.countryId, provinceId);
 
   savePersistentState();
   broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
@@ -3088,8 +3244,10 @@ app.post("/country/colonization/cancel", async (req, res) => {
   delete progress[auth.countryId];
   if (Object.keys(progress).length === 0) {
     delete worldBase.colonyProgressByProvince[provinceId];
+    removeProvinceFromActiveColonizationIndex(provinceId);
   } else {
     worldBase.colonyProgressByProvince[provinceId] = progress;
+    removeActiveColonizationTarget(auth.countryId, provinceId);
   }
 
   const turnOrders = ordersByTurn.get(turnId);
@@ -3203,11 +3361,23 @@ app.get("/admin/provinces", async (req, res) => {
   }
 
   const searchQuery = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+  const requestedLimit =
+    typeof req.query.limit === "string" && Number.isFinite(Number(req.query.limit))
+      ? Math.floor(Number(req.query.limit))
+      : null;
+  const requestedOffset =
+    typeof req.query.offset === "string" && Number.isFinite(Number(req.query.offset))
+      ? Math.floor(Number(req.query.offset))
+      : 0;
+  const limit = requestedLimit == null ? null : Math.max(1, Math.min(5000, requestedLimit));
+  const offset = Math.max(0, requestedOffset);
   const source = searchQuery
     ? adm1ProvinceIndex.filter((province) => province.name.toLowerCase().includes(searchQuery) || province.id.toLowerCase().includes(searchQuery))
     : adm1ProvinceIndex;
+  const total = source.length;
+  const selected = limit == null ? source : source.slice(offset, offset + limit);
 
-  const provinces = source.map((province) => {
+  const provinces = selected.map((province) => {
     const provinceId = province.id;
     const provinceName = province.name;
     const cfg = getProvinceColonizationConfig(provinceId);
@@ -3223,7 +3393,12 @@ app.get("/admin/provinces", async (req, res) => {
     };
   });
 
-  return res.json({ provinces });
+  return res.json({
+    provinces,
+    total,
+    offset,
+    limit,
+  });
 });
 
 app.get("/provinces/index", async (_req, res) => {
@@ -3361,7 +3536,7 @@ app.patch("/admin/countries/:countryId/admin", async (req, res) => {
       data: { isAdmin: nextIsAdmin },
       select: countrySelect,
     });
-
+    invalidateCountryQueryCache();
     return res.json(countryFromDb(updated));
   } catch {
     return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
@@ -3453,7 +3628,7 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
     if (crestFile) {
       removeUploadedByUrl(target.crestUrl);
     }
-
+    invalidateCountryQueryCache();
     return res.json(countryFromDb(updated));
   } catch {
     removeUploadedFile(flagFile);
@@ -3481,6 +3656,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
 
   const previousWorldBase = cloneWorldBaseSnapshot();
   await prisma.country.delete({ where: { id: countryIdParam } });
+  invalidateCountryQueryCache();
 
   removeUploadedByUrl(target.flagUrl);
   removeUploadedByUrl(target.crestUrl);
@@ -3494,9 +3670,11 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   for (const progress of Object.values(worldBase.colonyProgressByProvince)) {
     delete progress[countryIdParam];
   }
+  removeCountryFromActiveColonizationIndex(countryIdParam);
   for (const [provinceId, progress] of Object.entries(worldBase.colonyProgressByProvince)) {
     if (Object.keys(progress).length === 0) {
       delete worldBase.colonyProgressByProvince[provinceId];
+      removeProvinceFromActiveColonizationIndex(provinceId);
     }
   }
 
@@ -3646,6 +3824,7 @@ app.patch("/country/customization", upload.fields([{ name: "flag", maxCount: 1 }
 
     countryResource.ducats = Math.max(0, countryResource.ducats - totalCost);
     savePersistentState();
+    invalidateCountryQueryCache();
 
     return res.json({
       country: countryFromDb(updated),
@@ -3718,6 +3897,7 @@ app.patch("/admin/countries/:countryId/punishments", async (req, res) => {
   }
 
   const updated = await prisma.country.update({ where: { id: countryIdParam }, data, select: countrySelect });
+  invalidateCountryQueryCache();
   const punishmentNewsMessageBase =
     input.action === "unlock"
       ? `С страны ${updated.name} сняты ограничения`
@@ -3784,6 +3964,7 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
       },
       select: countrySelect,
     });
+    invalidateCountryQueryCache();
 
     if (!worldBase.resourcesByCountry[country.id]) {
       worldBase.resourcesByCountry[country.id] = {
@@ -3916,6 +4097,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
       data: { isRegistrationApproved: true },
       select: countrySelect,
     });
+    invalidateCountryQueryCache();
     removeQueuedUiNotification(`registration-approval:${targetId}`);
     broadcast(wss, {
       type: "NEWS_EVENT",
@@ -3940,6 +4122,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
   removeUploadedByUrl(fullTarget.crestUrl);
   const previousWorldBase = cloneWorldBaseSnapshot();
   await prisma.country.delete({ where: { id: targetId } });
+  invalidateCountryQueryCache();
 
   delete worldBase.resourcesByCountry[targetId];
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
@@ -3951,6 +4134,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
       if (Object.keys(progressByCountry).length === 0) delete worldBase.colonyProgressByProvince[provinceId];
     }
   }
+  removeCountryFromActiveColonizationIndex(targetId);
   savePersistentState();
   removeQueuedUiNotification(`registration-approval:${targetId}`);
   broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
@@ -4187,13 +4371,7 @@ wss.on("connection", (socket) => {
           return;
         }
 
-        const activeColonizeTargets = new Set<string>();
-
-        for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
-          if (!worldBase.provinceOwner[provinceId] && !getProvinceColonizationConfig(provinceId).disabled && progressByCountry[delta.order.countryId] != null) {
-            activeColonizeTargets.add(provinceId);
-          }
-        }
+        const activeColonizeTargets = new Set<string>(activeColonizeProvincesByCountry.get(delta.order.countryId) ?? []);
 
         for (const list of turnOrders.values()) {
           for (const queued of list) {
@@ -4251,14 +4429,18 @@ wss.on("connection", (socket) => {
 
       const now = new Date();
       await cleanupExpiredPunishments(turnId, now);
-      const countries = await prisma.country.findMany({
-        select: {
-          id: true,
-          isLocked: true,
-          blockedUntilTurn: true,
-          blockedUntilAt: true,
-          ignoreUntilTurn: true,
-        },
+      const countries = await getCachedCountryQuery({
+        key: "country:resolve-status",
+        loader: () =>
+          prisma.country.findMany({
+            select: {
+              id: true,
+              isLocked: true,
+              blockedUntilTurn: true,
+              blockedUntilAt: true,
+              ignoreUntilTurn: true,
+            },
+          }),
       });
       const activeCountryIds = new Set(
         countries
@@ -4308,7 +4490,9 @@ wss.on("connection", (socket) => {
 async function startServer(): Promise<void> {
   await ensureWorldDeltaLogTable();
   await loadPersistentState();
+  rebuildActiveColonizationIndexFromWorldBase();
   await syncPersistedWorldDeltaLogWithCurrentState();
+  schedulePersistedWorldDeltaLogPrune();
   await loadPersistedWorldDeltaHistory();
   resetTurnTimerAnchor();
   setInterval(() => {
@@ -4337,6 +4521,9 @@ async function startServer(): Promise<void> {
       console.error("[turn-timer] Auto resolve failed:", error);
     }
   }, 1000);
+  setInterval(() => {
+    schedulePersistedWorldDeltaLogPrune();
+  }, WORLD_DELTA_LOG_PRUNE_INTERVAL_MS);
   server.listen(env.port, () => {
     console.log(`Arcanorum server running on http://localhost:${env.port}`);
   });

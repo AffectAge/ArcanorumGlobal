@@ -40,6 +40,7 @@ type RegistrationApprovalCountry = Extract<
 export default function App() {
   const worldResyncInFlightRef = useRef(false);
   const replayRequestInFlightRef = useRef(false);
+  const autoResolveRequestedTurnRef = useRef<number | null>(null);
   const [entryLoadingGate, setEntryLoadingGate] = useState<"hidden" | "loading" | "ready">("hidden");
   const [pendingDeltaAckVersion, setPendingDeltaAckVersion] = useState<number | null>(null);
   const [pendingReplayFromWorldStateVersion, setPendingReplayFromWorldStateVersion] = useState<number | null>(null);
@@ -180,9 +181,11 @@ export default function App() {
   const onWsMessage = useCallback(
     (msg: WsOutMessage) => {
       if (msg.type === "AUTH_OK") {
+        setTurnResolveOverlay({ phase: "idle" });
         setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
         setPendingDeltaAckVersion(msg.worldStateVersion);
         replayRequestInFlightRef.current = false;
+        autoResolveRequestedTurnRef.current = null;
         const currentAuth = useGameStore.getState().auth;
         if (currentAuth?.token) {
           setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
@@ -633,6 +636,7 @@ export default function App() {
 
   const logoutToAuth = () => {
     addEvent({ category: "system", title: "Выход", message: "Сессия игрока завершена", priority: "low", visibility: "private", countryId: auth?.countryId ?? null });
+    setTurnResolveOverlay({ phase: "idle" });
     setAuth(null);
     setCountry(null);
     setEntryLoadingGate("hidden");
@@ -730,21 +734,25 @@ export default function App() {
   }, [eventLogRetentionTurns, pruneLogEntries, turnId]);
 
   useEffect(() => {
+    autoResolveRequestedTurnRef.current = null;
+  }, [turnId]);
+
+  useEffect(() => {
     if (!auth) return;
     if (turnResolveOverlay.phase !== "idle") return;
     if (!turnTimerUi.enabled || !turnTimerUi.startedAtMs) return;
 
     const dueAtMs = turnTimerUi.startedAtMs + Math.max(10, turnTimerUi.secondsPerTurn) * 1000;
-    const tick = () => {
-      if (Date.now() >= dueAtMs) {
-        setTurnResolveOverlay((prev) => (prev.phase === "idle" ? { phase: "processing", startedAtMs: Date.now() } : prev));
+    const remainingMs = Math.max(0, dueAtMs - Date.now());
+    const timeoutId = window.setTimeout(() => {
+      if (autoResolveRequestedTurnRef.current === turnId) {
+        return;
       }
-    };
-
-    tick();
-    const id = window.setInterval(tick, 500);
-    return () => window.clearInterval(id);
-  }, [auth, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
+      autoResolveRequestedTurnRef.current = turnId;
+      send({ type: "REQUEST_RESOLVE" });
+    }, remainingMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [auth, send, turnId, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
 
   useEffect(() => {
     if (!auth) {
@@ -1284,8 +1292,6 @@ export default function App() {
     </div>
   );
 }
-
-
 
 
 

@@ -4,7 +4,7 @@ import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, Coins, Crosshair, Edit3, Grid3X3, Lock, LockOpen, LocateFixed, Map as MapIcon, Minus, Move, Plus, Search, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
-import type { Country } from "@arcanorum/shared";
+import type { Country, WorldBase } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 import { ColonizationModal } from "./ColonizationModal";
 import { ProvinceHoverTooltip } from "./ProvinceHoverTooltip";
@@ -48,6 +48,11 @@ const DEFAULT_CENTER: [number, number] = [0, 20];
 const DEFAULT_ZOOM = 1.2;
 const COLONIZE_EMPTY_PATTERN = "colonize-empty";
 const COLONIZE_STRIPES_PATTERN = "colonize-stripes";
+const EMPTY_PROVINCE_OWNER: WorldBase["provinceOwner"] = {};
+const EMPTY_PROVINCE_NAMES: WorldBase["provinceNameById"] = {};
+const EMPTY_COLONY_PROGRESS: WorldBase["colonyProgressByProvince"] = {};
+const EMPTY_PROVINCE_COLONIZATION: WorldBase["provinceColonizationByProvince"] = {};
+const EMPTY_COUNTRY_PROGRESS: Record<string, number> = {};
 
 function setInteractions(map: MapLibreMap, enabled: boolean) {
   const action = enabled ? "enable" : "disable";
@@ -258,7 +263,10 @@ export function MapView({
   const turnId = useGameStore((s) => s.turnId);
   const selectedProvinceId = useGameStore((s) => s.selectedProvinceId);
   const setSelectedProvince = useGameStore((s) => s.setSelectedProvince);
-  const worldBase = useGameStore((s) => s.worldBase);
+  const provinceOwnerById = useGameStore((s) => s.worldBase?.provinceOwner ?? EMPTY_PROVINCE_OWNER);
+  const provinceNameById = useGameStore((s) => s.worldBase?.provinceNameById ?? EMPTY_PROVINCE_NAMES);
+  const colonyProgressByProvince = useGameStore((s) => s.worldBase?.colonyProgressByProvince ?? EMPTY_COLONY_PROGRESS);
+  const provinceColonizationByProvince = useGameStore((s) => s.worldBase?.provinceColonizationByProvince ?? EMPTY_PROVINCE_COLONIZATION);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
   const addEvent = useGameStore((s) => s.addEvent);
   const updateCountryResources = useGameStore((s) => s.updateCountryResources);
@@ -280,10 +288,25 @@ export function MapView({
     countryByIdRef.current = countryById;
   }, [countryById]);
 
-  const worldBaseRef = useRef(worldBase);
+  const provinceOwnerByIdRef = useRef(provinceOwnerById);
   useEffect(() => {
-    worldBaseRef.current = worldBase;
-  }, [worldBase]);
+    provinceOwnerByIdRef.current = provinceOwnerById;
+  }, [provinceOwnerById]);
+
+  const provinceNameByIdRef = useRef(provinceNameById);
+  useEffect(() => {
+    provinceNameByIdRef.current = provinceNameById;
+  }, [provinceNameById]);
+
+  const colonyProgressByProvinceRef = useRef(colonyProgressByProvince);
+  useEffect(() => {
+    colonyProgressByProvinceRef.current = colonyProgressByProvince;
+  }, [colonyProgressByProvince]);
+
+  const provinceColonizationByProvinceRef = useRef(provinceColonizationByProvince);
+  useEffect(() => {
+    provinceColonizationByProvinceRef.current = provinceColonizationByProvince;
+  }, [provinceColonizationByProvince]);
 
   useEffect(() => {
     const scope = auth?.countryId ?? "guest";
@@ -366,9 +389,9 @@ export function MapView({
   };
   const getEffectiveProvinceColonizationConfig = (
     provinceId: string,
-    base: { provinceColonizationByProvince?: Record<string, { cost: number; disabled: boolean }> } | null | undefined,
+    configByProvince: Record<string, { cost: number; disabled: boolean }> | undefined,
   ) => {
-    const override = base?.provinceColonizationByProvince?.[provinceId];
+    const override = configByProvince?.[provinceId];
     const derived = getDerivedProvinceCosts(provinceId);
     if (!override) {
       return { cost: derived.points, disabled: false };
@@ -385,7 +408,7 @@ export function MapView({
     fallbackName?: string | null,
     fallbackProps?: Record<string, unknown> | undefined,
   ) => {
-    const override = worldBaseRef.current?.provinceNameById?.[provinceId] ?? worldBase?.provinceNameById?.[provinceId];
+    const override = provinceNameByIdRef.current[provinceId] ?? provinceNameById[provinceId];
     if (override && override.trim()) {
       return override;
     }
@@ -450,7 +473,7 @@ export function MapView({
   }, []);
 
   const selectedProvinceOrdersCount = selectedProvinceId ? (ordersCountByProvince.get(selectedProvinceId) ?? 0) : 0;
-  const selectedOwnerId = selectedProvinceId ? (worldBase?.provinceOwner[selectedProvinceId] ?? null) : null;
+  const selectedOwnerId = selectedProvinceId ? (provinceOwnerById[selectedProvinceId] ?? null) : null;
   const selectedProvinceDisplayName = selectedProvinceId
     ? getProvinceDisplayName(selectedProvinceId, selectedProvinceName)
     : null;
@@ -495,12 +518,12 @@ export function MapView({
   useEffect(() => {
     queuedColonizeCountriesByProvinceRef.current = queuedColonizeCountriesByProvince;
   }, [queuedColonizeCountriesByProvince]);
-  const selectedColonyProgress = selectedProvinceId ? (worldBase?.colonyProgressByProvince?.[selectedProvinceId] ?? {}) : {};
+  const selectedColonyProgress = selectedProvinceId ? (colonyProgressByProvince[selectedProvinceId] ?? EMPTY_COUNTRY_PROGRESS) : EMPTY_COUNTRY_PROGRESS;
   const selectedColonyProgressList = Object.entries(selectedColonyProgress).sort((a, b) => b[1] - a[1]);
   const selectedProvinceAreaKm2 = selectedProvinceId ? (provinceMetaByIdRef.current.get(selectedProvinceId)?.areaKm2 ?? null) : null;
-  const selectedIsNeutral = selectedProvinceId ? !worldBase?.provinceOwner[selectedProvinceId] : false;
+  const selectedIsNeutral = selectedProvinceId ? !provinceOwnerById[selectedProvinceId] : false;
   const selectedColonizationCfg = selectedProvinceId
-    ? getEffectiveProvinceColonizationConfig(selectedProvinceId, worldBase)
+    ? getEffectiveProvinceColonizationConfig(selectedProvinceId, provinceColonizationByProvince)
     : { cost: 100, disabled: false };
   const selectedIsColonizationDisabled = Boolean(selectedColonizationCfg.disabled);
   const selectedColonizationCost = Math.max(1, Math.floor(selectedColonizationCfg.cost ?? 100));
@@ -532,9 +555,9 @@ export function MapView({
       return new Set<string>();
     }
     const ids = new Set<string>();
-    const ownerByProvince = worldBase?.provinceOwner ?? {};
-    const cfgByProvince = worldBase?.provinceColonizationByProvince ?? {};
-    const progressByProvince = worldBase?.colonyProgressByProvince ?? {};
+    const ownerByProvince = provinceOwnerById;
+    const cfgByProvince = provinceColonizationByProvince;
+    const progressByProvince = colonyProgressByProvince;
     for (const [provinceId, byCountry] of Object.entries(progressByProvince)) {
       if (ownerByProvince[provinceId]) continue;
       if (cfgByProvince[provinceId]?.disabled) continue;
@@ -550,7 +573,7 @@ export function MapView({
       ids.add(order.provinceId);
     }
     return ids;
-  }, [auth, ordersByTurn, turnId, worldBase]);
+  }, [auth, ordersByTurn, turnId, provinceOwnerById, provinceColonizationByProvince, colonyProgressByProvince]);
   const colonizedProvinceOptions = useMemo(() => {
     return [...currentCountryActiveColonizationTargets]
       .sort((a, b) => a.localeCompare(b))
@@ -558,7 +581,7 @@ export function MapView({
         id,
         name: getProvinceDisplayName(id),
       }));
-  }, [currentCountryActiveColonizationTargets, worldBase?.provinceNameById]);
+  }, [currentCountryActiveColonizationTargets, provinceNameById]);
 
   useEffect(() => {
     if (!selectedProvinceId) return;
@@ -566,7 +589,7 @@ export function MapView({
     if (nextName !== selectedProvinceName) {
       setSelectedProvinceName(nextName);
     }
-  }, [selectedProvinceId, selectedProvinceName, worldBase?.provinceNameById]);
+  }, [selectedProvinceId, selectedProvinceName, provinceNameById]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) {
@@ -722,10 +745,10 @@ export function MapView({
       }
       const name = getProvinceDisplayName(id, rawName, props);
 
-      const ownerId = worldBaseRef.current?.provinceOwner[id] ?? null;
+      const ownerId = provinceOwnerByIdRef.current[id] ?? null;
       const ownerName = ownerId ? (countryByIdRef.current.get(ownerId)?.name ?? ownerId) : "Нейтральная";
-      const progressByCountry = worldBaseRef.current?.colonyProgressByProvince?.[id] ?? {};
-      const effectiveProvinceCfg = getEffectiveProvinceColonizationConfig(id, worldBaseRef.current);
+      const progressByCountry = colonyProgressByProvinceRef.current[id] ?? EMPTY_COUNTRY_PROGRESS;
+      const effectiveProvinceCfg = getEffectiveProvinceColonizationConfig(id, provinceColonizationByProvinceRef.current);
       const provinceColonizationCost = Math.max(
         1,
         Math.floor(effectiveProvinceCfg.cost),
@@ -908,13 +931,13 @@ export function MapView({
       return;
     }
 
-    const ownerByProvince = worldBase?.provinceOwner ?? {};
-    const progressByProvince = worldBase?.colonyProgressByProvince ?? {};
+    const ownerByProvince = provinceOwnerById;
+    const progressByProvince = colonyProgressByProvince;
 
     const nextOwnedIds = new Set(Object.keys(ownerByProvince));
     const nextColonizingIds = new Set(Object.keys(progressByProvince));
     const nextQueuedIds = new Set(queuedColonizeCountriesByProvince.keys());
-    const nextConfiguredIds = new Set(Object.keys(worldBase?.provinceColonizationByProvince ?? {}));
+    const nextConfiguredIds = new Set(Object.keys(provinceColonizationByProvince));
     const allTouchedIds = new Set<string>([
       ...prevOwnedProvinceIdsRef.current,
       ...prevColonizingProvinceIdsRef.current,
@@ -930,7 +953,7 @@ export function MapView({
       const ownerId = ownerByProvince[provinceId];
       const ownerColor = ownerId ? (countryById.get(ownerId)?.color ?? "#9ca3af") : "#C0C0C0";
       const ownerBorderColor = ownerId ? darkenHexColor(ownerColor, 0.42) : "#94a3b8";
-      const cfg = worldBase?.provinceColonizationByProvince?.[provinceId] ?? { cost: 100, disabled: false };
+      const cfg = provinceColonizationByProvince[provinceId] ?? { cost: 100, disabled: false };
       const hasQueuedOwnColonizeOrder = myQueuedColonizeProvinceIds.has(provinceId);
 
       let leadCountryId: string | null = null;
@@ -1137,7 +1160,18 @@ export function MapView({
     map.setPaintProperty("province-line", "line-color", "#C0C0C0");
     map.setPaintProperty("province-line", "line-width", 0.9);
     map.setPaintProperty("province-line", "line-opacity", showProvinceBorders ? 0.75 : 0);
-  }, [activeMode, auth?.countryId, countryById, effectivePoliticalFilterCountryId, myQueuedColonizeProvinceIds, queuedColonizeCountriesByProvince, showProvinceBorders, worldBase]);
+  }, [
+    activeMode,
+    auth?.countryId,
+    countryById,
+    effectivePoliticalFilterCountryId,
+    myQueuedColonizeProvinceIds,
+    queuedColonizeCountriesByProvince,
+    showProvinceBorders,
+    provinceOwnerById,
+    colonyProgressByProvince,
+    provinceColonizationByProvince,
+  ]);
 
   const zoomIn = () => {
     mapRef.current?.zoomIn({ duration: 220 });
