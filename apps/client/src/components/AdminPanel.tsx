@@ -1,23 +1,20 @@
 import { Dialog } from "@headlessui/react";
 import { Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useState } from "react";
-import { BellRing, Check, ChevronDown, Flag, Map as MapIcon, Palette, RotateCcw, Shield, Trash2, Upload, Users, X } from "lucide-react";
+import { BellRing, Check, ChevronDown, Flag, Map as MapIcon, Palette, RotateCcw, Shield, Trash2, Upload, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import {
   adminBroadcastUiNotification,
   adminDeleteCountry,
-  adminGeneratePopulation,
   adminResetProvinceColonizationCostToAuto,
   adminSetCountryPunishment,
   adminUpdateCountry,
   adminUpdateProvince,
-  fetchContentEntries,
   fetchAdminProvinces,
   fetchCountries,
   type AdminProvinceItem,
-  type ContentEntry,
 } from "../lib/api";
 
 type Props = {
@@ -32,7 +29,6 @@ type Props = {
 const categories = [
   { id: "countries", label: "Управление странами", icon: Flag },
   { id: "provinces", label: "Провинции / Колонизация", icon: MapIcon },
-  { id: "population", label: "Генератор населения", icon: Users },
   { id: "notifications", label: "Рассылка уведомлений", icon: BellRing },
 ] as const;
 
@@ -64,16 +60,6 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [broadcastCategory, setBroadcastCategory] = useState<"system" | "politics" | "economy">("system");
   const [broadcastTitle, setBroadcastTitle] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
-  const [populationPerProvince, setPopulationPerProvince] = useState(100000);
-  const [groupsPerProvince, setGroupsPerProvince] = useState(24);
-  const [populationTarget, setPopulationTarget] = useState<"all" | "owned">("all");
-  const [replacePopulation, setReplacePopulation] = useState(true);
-  const [races, setRaces] = useState<ContentEntry[]>([]);
-  const [cultures, setCultures] = useState<ContentEntry[]>([]);
-  const [religions, setReligions] = useState<ContentEntry[]>([]);
-  const [populationRaceId, setPopulationRaceId] = useState<string>("auto");
-  const [populationCultureId, setPopulationCultureId] = useState<string>("auto");
-  const [populationReligionId, setPopulationReligionId] = useState<string>("auto");
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
   const selectedProvince = useMemo(() => provinces.find((p) => p.id === selectedProvinceId) ?? null, [provinces, selectedProvinceId]);
@@ -141,24 +127,6 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       cancelled = true;
     };
   }, [open, token]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    Promise.all([fetchContentEntries("races"), fetchContentEntries("cultures"), fetchContentEntries("religions")])
-      .then(([raceItems, cultureItems, religionItems]) => {
-        if (cancelled) return;
-        setRaces(raceItems);
-        setCultures(cultureItems);
-        setReligions(religionItems);
-      })
-      .catch(() => {
-        if (!cancelled) toast.error("Не удалось загрузить список рас/культур/религий");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   useEffect(() => {
     if (!selectedCountry) {
@@ -369,26 +337,6 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       toast.success("Уведомление отправлено всем игрокам");
     } catch {
       toast.error("Не удалось отправить уведомление");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const runPopulationGenerate = async () => {
-    setSaving(true);
-    try {
-      const result = await adminGeneratePopulation(token, {
-        populationPerProvince: Math.max(1, Math.floor(populationPerProvince || 1)),
-        groupsPerProvince: Math.max(1, Math.floor(groupsPerProvince || 1)),
-        target: populationTarget,
-        replaceExisting: replacePopulation,
-        raceId: populationRaceId === "auto" ? null : populationRaceId,
-        cultureId: populationCultureId === "auto" ? null : populationCultureId,
-        religionId: populationReligionId === "auto" ? null : populationReligionId,
-      });
-      toast.success(`Население сгенерировано: ${new Intl.NumberFormat("ru-RU").format(result.totals.population)}`);
-    } catch {
-      toast.error("Не удалось сгенерировать население");
     } finally {
       setSaving(false);
     }
@@ -631,122 +579,6 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                         </div>
                       )}
                     </>
-                  )}
-
-                  {activeCategory === "population" && (
-                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-4">
-                      <div className="flex items-center gap-2 text-sm text-slate-200">
-                        <Users size={16} className="text-arc-accent" />
-                        Тестовый генератор населения
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-300">Население на провинцию</label>
-                          <input
-                            type="number"
-                            min={1}
-                            value={populationPerProvince}
-                            onChange={(e) => setPopulationPerProvince(Math.max(1, Number(e.target.value) || 1))}
-                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-300">Групп на провинцию</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={1000}
-                            value={groupsPerProvince}
-                            onChange={(e) => setGroupsPerProvince(Math.max(1, Number(e.target.value) || 1))}
-                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className="inline-flex items-center gap-2 text-xs text-slate-300">
-                          <input
-                            type="radio"
-                            checked={populationTarget === "all"}
-                            onChange={() => setPopulationTarget("all")}
-                            className="accent-arc-accent"
-                          />
-                          Все провинции
-                        </label>
-                        <label className="inline-flex items-center gap-2 text-xs text-slate-300">
-                          <input
-                            type="radio"
-                            checked={populationTarget === "owned"}
-                            onChange={() => setPopulationTarget("owned")}
-                            className="accent-arc-accent"
-                          />
-                          Только занятые провинции
-                        </label>
-                      </div>
-                      <label className="inline-flex items-center gap-2 text-xs text-slate-300">
-                        <input
-                          type="checkbox"
-                          checked={replacePopulation}
-                          onChange={(e) => setReplacePopulation(e.target.checked)}
-                          className="accent-arc-accent"
-                        />
-                        Заменить существующее население
-                      </label>
-                      <div className="grid gap-3 md:grid-cols-3">
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-300">Раса</label>
-                          <select
-                            value={populationRaceId}
-                            onChange={(e) => setPopulationRaceId(e.target.value)}
-                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
-                          >
-                            <option value="auto">Авто-распределение</option>
-                            {races.map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-300">Культура</label>
-                          <select
-                            value={populationCultureId}
-                            onChange={(e) => setPopulationCultureId(e.target.value)}
-                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
-                          >
-                            <option value="auto">Авто-распределение</option>
-                            {cultures.map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs text-slate-300">Религия</label>
-                          <select
-                            value={populationReligionId}
-                            onChange={(e) => setPopulationReligionId(e.target.value)}
-                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
-                          >
-                            <option value="auto">Авто-распределение</option>
-                            {religions.map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={runPopulationGenerate}
-                        disabled={saving}
-                        className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
-                      >
-                        Сгенерировать население
-                      </button>
-                    </div>
                   )}
 
                   {activeCategory === "notifications" && (
@@ -1082,3 +914,4 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     </Dialog>
   );
 }
+

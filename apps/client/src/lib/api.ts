@@ -15,39 +15,6 @@ export type ContentCulture = {
 };
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind = "cultures" | "religions" | "professions" | "ideologies" | "races";
-export type PopulationSummaryWorld = {
-  turnId: number;
-  totals: {
-    population: number;
-    groups: number;
-    byCountry: Record<string, number>;
-    byProvince: Record<string, number>;
-    byRace: Record<string, number>;
-    byCulture: Record<string, number>;
-    byReligion: Record<string, number>;
-  };
-  top: {
-    countries: Array<{ id: string; value: number }>;
-    races: Array<{ id: string; value: number }>;
-    cultures: Array<{ id: string; value: number }>;
-    religions: Array<{ id: string; value: number }>;
-    provinces: Array<{ id: string; value: number }>;
-  };
-};
-
-export type PopulationSummaryProvince = {
-  turnId: number;
-  provinceId: string;
-  totalPopulation: number;
-  groups: Array<{
-    id: string;
-    provinceId: string;
-    raceId: string;
-    cultureId: string;
-    religionId: string;
-    size: number;
-  }>;
-};
 
 
 function withAssetBase(url?: string | null): string | null | undefined {
@@ -256,55 +223,6 @@ export async function adminDeleteRacePortrait(token: string, entryId: string, sl
   }
   const data = (await response.json()) as { item: ContentEntry; items: ContentEntry[] };
   return { item: normalizeContentEntry(data.item), items: data.items.map(normalizeContentEntry) };
-}
-
-export async function fetchPopulationSummaryWorld(token: string): Promise<PopulationSummaryWorld> {
-  const response = await fetch(`${API}/population/summary/world`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error ?? "POPULATION_SUMMARY_WORLD_FAILED");
-  }
-  return (await response.json()) as PopulationSummaryWorld;
-}
-
-export async function fetchPopulationSummaryProvince(token: string, provinceId: string): Promise<PopulationSummaryProvince> {
-  const response = await fetch(`${API}/population/summary/province/${encodeURIComponent(provinceId)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error ?? "POPULATION_SUMMARY_PROVINCE_FAILED");
-  }
-  return (await response.json()) as PopulationSummaryProvince;
-}
-
-export async function adminGeneratePopulation(
-  token: string,
-  payload: {
-    populationPerProvince: number;
-    groupsPerProvince: number;
-    target: "all" | "owned";
-    replaceExisting: boolean;
-    raceId?: string | null;
-    cultureId?: string | null;
-    religionId?: string | null;
-  },
-): Promise<{ ok: true; totals: PopulationSummaryWorld["totals"]; provincesAffected: number }> {
-  const response = await fetch(`${API}/admin/population/generate`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error ?? "ADMIN_GENERATE_POPULATION_FAILED");
-  }
-  return (await response.json()) as { ok: true; totals: PopulationSummaryWorld["totals"]; provincesAffected: number };
 }
 
 export async function login(payload: LoginPayload): Promise<{ token: string; playerId: string; countryId: string; isAdmin: boolean; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }> {

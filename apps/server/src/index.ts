@@ -25,7 +25,7 @@ import {
   type ResourceTotals,
   type ServerStatus,
   type WorldBase,
-  type WorldPatch,
+  type WorldDelta,
   type WsInMessage,
   type WsOutMessage,
 } from "@arcanorum/shared";
@@ -46,56 +46,7 @@ const env = {
   jwtSecret: process.env.JWT_SECRET ?? "dev_secret_change_me",
   serverStatus: (process.env.SERVER_STATUS as ServerStatus) ?? "online",
   redisUrl: process.env.REDIS_URL,
-  perfLogs: process.env.PERF_LOGS !== "0",
 };
-
-type PerfMeta = Record<string, string | number | boolean | null | undefined>;
-
-function perfNowMs(): number {
-  return Number(process.hrtime.bigint()) / 1_000_000;
-}
-
-function formatMb(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
-
-function formatPerfMeta(meta?: PerfMeta): string {
-  if (!meta) return "";
-  const items = Object.entries(meta)
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `${key}=${String(value)}`);
-  return items.length > 0 ? ` | ${items.join(" ")}` : "";
-}
-
-function logPerf(name: string, startedAtMs: number, cpuStart: NodeJS.CpuUsage, meta?: PerfMeta): void {
-  if (!env.perfLogs) return;
-  const elapsedMs = perfNowMs() - startedAtMs;
-  const cpu = process.cpuUsage(cpuStart);
-  const mem = process.memoryUsage();
-  console.log(
-    `[perf] ${name} | wall=${elapsedMs.toFixed(2)}ms cpu_user=${(cpu.user / 1000).toFixed(2)}ms cpu_sys=${(cpu.system / 1000).toFixed(2)}ms rss=${formatMb(mem.rss)} heap=${formatMb(mem.heapUsed)}${formatPerfMeta(meta)}`,
-  );
-}
-
-async function withPerfAsync<T>(name: string, task: () => Promise<T>, meta?: PerfMeta): Promise<T> {
-  const startedAtMs = perfNowMs();
-  const cpuStart = process.cpuUsage();
-  try {
-    return await task();
-  } finally {
-    logPerf(name, startedAtMs, cpuStart, meta);
-  }
-}
-
-function withPerfSync<T>(name: string, task: () => T, meta?: PerfMeta): T {
-  const startedAtMs = perfNowMs();
-  const cpuStart = process.cpuUsage();
-  try {
-    return task();
-  } finally {
-    logPerf(name, startedAtMs, cpuStart, meta);
-  }
-}
 
 const uploadsRoot = resolve(__dirname, "../uploads");
 const flagsDir = resolve(uploadsRoot, "flags");
@@ -272,6 +223,7 @@ const countrySelect = {
 } as const;
 
 let turnId = 1;
+let worldStateVersion = 1;
 const onlinePlayers = new Set<string>();
 const lastLoginAtByCountryId = new Map<string, string>();
 const MAX_UI_NOTIFICATION_QUEUE = 500;
@@ -678,253 +630,6 @@ const defaultGameSettings = (): GameSettings => ({
   },
 });
 
-type PopulationGroup = WorldBase["population"]["groups"][number];
-type PopulationTotals = WorldBase["population"]["totals"];
-type PopulationColumnarPayload = {
-  provinceIds: string[];
-  raceIds: string[];
-  cultureIds: string[];
-  religionIds: string[];
-  provinceIdx: number[];
-  raceIdx: number[];
-  cultureIdx: number[];
-  religionIdx: number[];
-  size: number[];
-};
-
-type PopulationColumnStore = {
-  provinceIds: string[];
-  raceIds: string[];
-  cultureIds: string[];
-  religionIds: string[];
-  provinceIdx: Uint32Array;
-  raceIdx: Uint32Array;
-  cultureIdx: Uint32Array;
-  religionIdx: Uint32Array;
-  size: Uint32Array;
-  length: number;
-};
-
-function emptyPopulationStore(): PopulationColumnStore {
-  return {
-    provinceIds: [],
-    raceIds: [],
-    cultureIds: [],
-    religionIds: [],
-    provinceIdx: new Uint32Array(0),
-    raceIdx: new Uint32Array(0),
-    cultureIdx: new Uint32Array(0),
-    religionIdx: new Uint32Array(0),
-    size: new Uint32Array(0),
-    length: 0,
-  };
-}
-
-let populationStore: PopulationColumnStore = emptyPopulationStore();
-
-function buildPopulationStoreFromGroups(groups: PopulationGroup[]): PopulationColumnStore {
-  const provinceIds: string[] = [];
-  const raceIds: string[] = [];
-  const cultureIds: string[] = [];
-  const religionIds: string[] = [];
-  const provinceIndexById = new Map<string, number>();
-  const raceIndexById = new Map<string, number>();
-  const cultureIndexById = new Map<string, number>();
-  const religionIndexById = new Map<string, number>();
-  const length = groups.length;
-  const provinceIdx = new Uint32Array(length);
-  const raceIdx = new Uint32Array(length);
-  const cultureIdx = new Uint32Array(length);
-  const religionIdx = new Uint32Array(length);
-  const size = new Uint32Array(length);
-
-  const getOrInsert = (dict: string[], index: Map<string, number>, id: string): number => {
-    const existing = index.get(id);
-    if (existing != null) return existing;
-    const next = dict.length;
-    dict.push(id);
-    index.set(id, next);
-    return next;
-  };
-
-  for (let i = 0; i < length; i += 1) {
-    const row = groups[i];
-    provinceIdx[i] = getOrInsert(provinceIds, provinceIndexById, row.provinceId);
-    raceIdx[i] = getOrInsert(raceIds, raceIndexById, row.raceId);
-    cultureIdx[i] = getOrInsert(cultureIds, cultureIndexById, row.cultureId);
-    religionIdx[i] = getOrInsert(religionIds, religionIndexById, row.religionId);
-    size[i] = Math.max(0, Math.floor(Number(row.size) || 0));
-  }
-
-  return {
-    provinceIds,
-    raceIds,
-    cultureIds,
-    religionIds,
-    provinceIdx,
-    raceIdx,
-    cultureIdx,
-    religionIdx,
-    size,
-    length,
-  };
-}
-
-function buildPopulationStoreFromColumnarPayload(input: unknown): PopulationColumnStore | null {
-  if (!input || typeof input !== "object") return null;
-  const payload = input as Partial<PopulationColumnarPayload>;
-  if (
-    !Array.isArray(payload.provinceIds) ||
-    !Array.isArray(payload.raceIds) ||
-    !Array.isArray(payload.cultureIds) ||
-    !Array.isArray(payload.religionIds) ||
-    !Array.isArray(payload.provinceIdx) ||
-    !Array.isArray(payload.raceIdx) ||
-    !Array.isArray(payload.cultureIdx) ||
-    !Array.isArray(payload.religionIdx) ||
-    !Array.isArray(payload.size)
-  ) {
-    return null;
-  }
-
-  const provinceIds = payload.provinceIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
-  const raceIds = payload.raceIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
-  const cultureIds = payload.cultureIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
-  const religionIds = payload.religionIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
-  const length = payload.size.length;
-  if (
-    payload.provinceIdx.length !== length ||
-    payload.raceIdx.length !== length ||
-    payload.cultureIdx.length !== length ||
-    payload.religionIdx.length !== length
-  ) {
-    return null;
-  }
-
-  const provinceIdx = new Uint32Array(length);
-  const raceIdx = new Uint32Array(length);
-  const cultureIdx = new Uint32Array(length);
-  const religionIdx = new Uint32Array(length);
-  const size = new Uint32Array(length);
-  for (let i = 0; i < length; i += 1) {
-    const p = Math.max(0, Math.floor(Number(payload.provinceIdx[i]) || 0));
-    const r = Math.max(0, Math.floor(Number(payload.raceIdx[i]) || 0));
-    const c = Math.max(0, Math.floor(Number(payload.cultureIdx[i]) || 0));
-    const rel = Math.max(0, Math.floor(Number(payload.religionIdx[i]) || 0));
-    if (p >= provinceIds.length || r >= raceIds.length || c >= cultureIds.length || rel >= religionIds.length) {
-      return null;
-    }
-    provinceIdx[i] = p;
-    raceIdx[i] = r;
-    cultureIdx[i] = c;
-    religionIdx[i] = rel;
-    size[i] = Math.max(0, Math.floor(Number(payload.size[i]) || 0));
-  }
-
-  return {
-    provinceIds,
-    raceIds,
-    cultureIds,
-    religionIds,
-    provinceIdx,
-    raceIdx,
-    cultureIdx,
-    religionIdx,
-    size,
-    length,
-  };
-}
-
-function populationStoreToColumnarPayload(store: PopulationColumnStore): PopulationColumnarPayload {
-  return {
-    provinceIds: store.provinceIds,
-    raceIds: store.raceIds,
-    cultureIds: store.cultureIds,
-    religionIds: store.religionIds,
-    provinceIdx: Array.from(store.provinceIdx),
-    raceIdx: Array.from(store.raceIdx),
-    cultureIdx: Array.from(store.cultureIdx),
-    religionIdx: Array.from(store.religionIdx),
-    size: Array.from(store.size),
-  };
-}
-
-function summarizePopulationStore(store: PopulationColumnStore, provinceOwner: Record<string, string>): PopulationTotals {
-  const totals: PopulationTotals = {
-    population: 0,
-    groups: store.length,
-    byCountry: {},
-    byProvince: {},
-    byRace: {},
-    byCulture: {},
-    byReligion: {},
-  };
-  for (let i = 0; i < store.length; i += 1) {
-    const size = Math.max(0, Math.floor(Number(store.size[i]) || 0));
-    if (size <= 0) continue;
-    const provinceId = store.provinceIds[store.provinceIdx[i]];
-    const raceId = store.raceIds[store.raceIdx[i]];
-    const cultureId = store.cultureIds[store.cultureIdx[i]];
-    const religionId = store.religionIds[store.religionIdx[i]];
-    totals.population += size;
-    totals.byProvince[provinceId] = (totals.byProvince[provinceId] ?? 0) + size;
-    totals.byRace[raceId] = (totals.byRace[raceId] ?? 0) + size;
-    totals.byCulture[cultureId] = (totals.byCulture[cultureId] ?? 0) + size;
-    totals.byReligion[religionId] = (totals.byReligion[religionId] ?? 0) + size;
-  }
-  // byCountry derives from province totals so owner lookup scales with province count, not group count.
-  for (const [provinceId, provincePopulation] of Object.entries(totals.byProvince)) {
-    const owner = provinceOwner[provinceId];
-    if (owner) totals.byCountry[owner] = (totals.byCountry[owner] ?? 0) + provincePopulation;
-  }
-  totals.groups = store.length;
-  return totals;
-}
-
-function makePopulationState(groups: PopulationGroup[], provinceOwner: Record<string, string>): WorldBase["population"] {
-  populationStore = buildPopulationStoreFromGroups(groups);
-  const totals = summarizePopulationStore(populationStore, provinceOwner);
-  return {
-    // Internal storage is columnar; groups list is kept empty to avoid huge object payloads.
-    groups: [],
-    totals,
-  };
-}
-
-function normalizePopulation(input: unknown, provinceOwner: Record<string, string>): WorldBase["population"] {
-  if (!input || typeof input !== "object") return makePopulationState([], provinceOwner);
-  const state = input as Partial<{ groups: unknown; columnar: unknown }>;
-  const columnar = buildPopulationStoreFromColumnarPayload(state.columnar);
-  if (columnar) {
-    populationStore = columnar;
-    return {
-      groups: [],
-      totals: summarizePopulationStore(populationStore, provinceOwner),
-    };
-  }
-  if (!Array.isArray(state.groups)) return makePopulationState([], provinceOwner);
-  const groups: PopulationGroup[] = [];
-  for (const raw of state.groups) {
-    if (!raw || typeof raw !== "object") continue;
-    const row = raw as Partial<PopulationGroup>;
-    const provinceId = typeof row.provinceId === "string" ? row.provinceId.trim() : "";
-    const raceId = typeof row.raceId === "string" ? row.raceId.trim() : "";
-    const cultureId = typeof row.cultureId === "string" ? row.cultureId.trim() : "";
-    const religionId = typeof row.religionId === "string" ? row.religionId.trim() : "";
-    const size = Math.max(0, Math.floor(Number(row.size) || 0));
-    if (!provinceId || !raceId || !cultureId || !religionId || size <= 0) continue;
-    groups.push({
-      id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : `pop:${provinceId}|${raceId}|${cultureId}|${religionId}|${groups.length}`,
-      provinceId,
-      raceId,
-      cultureId,
-      religionId,
-      size,
-    });
-  }
-  return makePopulationState(groups, provinceOwner);
-}
-
 function defaultWorldBase(currentTurnId: number): WorldBase {
   return {
     turnId: currentTurnId,
@@ -940,11 +645,6 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
-    population: makePopulationState([], {
-      "p-north": "ARC",
-      "p-south": "ARC",
-      "p-east": "VAL",
-    }),
   };
 }
 
@@ -952,120 +652,6 @@ let gameSettings: GameSettings = defaultGameSettings();
 let worldBase: WorldBase = defaultWorldBase(turnId);
 let currentTurnStartedAtMs = Date.now();
 let isResolvingTurnNow = false;
-let populationRevision = 0;
-let provinceOwnerRevision = 0;
-
-type PopulationWorldSummaryResponse = {
-  turnId: number;
-  totals: PopulationTotals;
-  top: {
-    countries: Array<{ id: string; value: number }>;
-    races: Array<{ id: string; value: number }>;
-    cultures: Array<{ id: string; value: number }>;
-    religions: Array<{ id: string; value: number }>;
-    provinces: Array<{ id: string; value: number }>;
-  };
-};
-
-const populationCache: {
-  provinceIndexRevision: number;
-  topByProvince: Map<string, PopulationGroup[]>;
-  worldSummaryCacheKey: string;
-  worldSummary: PopulationWorldSummaryResponse | null;
-} = {
-  provinceIndexRevision: -1,
-  topByProvince: new Map(),
-  worldSummaryCacheKey: "",
-  worldSummary: null,
-};
-
-function invalidatePopulationCaches(): void {
-  populationRevision += 1;
-  populationCache.provinceIndexRevision = -1;
-  populationCache.topByProvince.clear();
-  populationCache.worldSummaryCacheKey = "";
-  populationCache.worldSummary = null;
-}
-
-function invalidateProvinceOwnerCaches(): void {
-  provinceOwnerRevision += 1;
-  populationCache.worldSummaryCacheKey = "";
-  populationCache.worldSummary = null;
-}
-
-function setPopulationState(next: WorldBase["population"]): void {
-  worldBase.population = next;
-  invalidatePopulationCaches();
-}
-
-function getPopulationStoreLength(): number {
-  return populationStore.length;
-}
-
-function forEachPopulationStoreRow(
-  cb: (row: PopulationGroup) => void,
-): void {
-  for (let i = 0; i < populationStore.length; i += 1) {
-    const size = Math.max(0, Math.floor(Number(populationStore.size[i]) || 0));
-    if (size <= 0) continue;
-    const provinceId = populationStore.provinceIds[populationStore.provinceIdx[i]];
-    const raceId = populationStore.raceIds[populationStore.raceIdx[i]];
-    const cultureId = populationStore.cultureIds[populationStore.cultureIdx[i]];
-    const religionId = populationStore.religionIds[populationStore.religionIdx[i]];
-    cb({
-      id: `pop:${provinceId}|${raceId}|${cultureId}|${religionId}|${i}`,
-      provinceId,
-      raceId,
-      cultureId,
-      religionId,
-      size,
-    });
-  }
-}
-
-function setProvinceOwner(provinceId: string, ownerCountryId: string | null): void {
-  const previous = worldBase.provinceOwner[provinceId] ?? null;
-  if (ownerCountryId) {
-    worldBase.provinceOwner[provinceId] = ownerCountryId;
-  } else {
-    delete worldBase.provinceOwner[provinceId];
-  }
-  const current = worldBase.provinceOwner[provinceId] ?? null;
-  if (previous !== current) {
-    invalidateProvinceOwnerCaches();
-  }
-}
-
-function buildByCountryFromProvinceTotals(
-  byProvince: Record<string, number>,
-  provinceOwner: Record<string, string>,
-): Record<string, number> {
-  const byCountry: Record<string, number> = {};
-  for (const [provinceId, provincePopulation] of Object.entries(byProvince)) {
-    const owner = provinceOwner[provinceId];
-    if (!owner) continue;
-    byCountry[owner] = (byCountry[owner] ?? 0) + Math.max(0, Math.floor(Number(provincePopulation) || 0));
-  }
-  return byCountry;
-}
-
-function populationTotalsForClient(base: WorldBase): PopulationTotals {
-  return {
-    ...base.population.totals,
-    byCountry: buildByCountryFromProvinceTotals(base.population.totals.byProvince, base.provinceOwner),
-  };
-}
-
-function worldBaseForClient(base: WorldBase): WorldBase {
-  return {
-    ...base,
-    turnId,
-    population: {
-      groups: [],
-      totals: populationTotalsForClient(base),
-    },
-  };
-}
 
 const persistedStatePath = resolve(__dirname, "../data/game-state.json");
 const GAME_STATE_ROW_ID = "primary";
@@ -1091,6 +677,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
 
   const parsed = input as Partial<{
     turnId: unknown;
+    worldStateVersion: unknown;
     gameSettings: unknown;
     worldBase: unknown;
     ordersByTurn: unknown;
@@ -1099,6 +686,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
 
   if (typeof parsed.turnId === "number" && Number.isFinite(parsed.turnId) && parsed.turnId >= 1) {
     turnId = Math.floor(parsed.turnId);
+  }
+  if (typeof parsed.worldStateVersion === "number" && Number.isFinite(parsed.worldStateVersion) && parsed.worldStateVersion >= 1) {
+    worldStateVersion = Math.floor(parsed.worldStateVersion);
   }
 
   if (parsed.gameSettings && typeof parsed.gameSettings === "object") {
@@ -1234,10 +824,6 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         provinceColonizationByProvince: normalizeProvinceColonizationMap(
           (candidate as Partial<WorldBase> & { provinceColonizationByProvince?: unknown }).provinceColonizationByProvince,
         ),
-        population: normalizePopulation(
-          (candidate as Partial<WorldBase> & { population?: unknown }).population,
-          candidate.provinceOwner as Record<string, string>,
-        ),
       };
     } else {
       worldBase = defaultWorldBase(turnId);
@@ -1245,8 +831,6 @@ function parseAndApplyPersistentState(input: unknown): boolean {
   } else {
     worldBase = defaultWorldBase(turnId);
   }
-  invalidatePopulationCaches();
-  invalidateProvinceOwnerCaches();
 
   ordersByTurn.clear();
   if (Array.isArray(parsed.ordersByTurn)) {
@@ -1306,11 +890,6 @@ async function persistStateToDb(): Promise<void> {
     worldBase: {
       ...worldBase,
       turnId,
-      population: {
-        ...worldBase.population,
-        columnar: populationStoreToColumnarPayload(populationStore),
-        totals: populationTotalsForClient(worldBase),
-      },
     },
     ordersByTurn: serializeOrdersByTurn(),
     resolveReadyByTurn: serializeResolveReadyByTurn(),
@@ -1377,37 +956,31 @@ async function tryImportPersistentStateFromFile(): Promise<boolean> {
 }
 
 async function loadPersistentState(): Promise<void> {
-  await withPerfAsync(
-    "state.loadPersistentState",
-    async () => {
-      try {
-        const row = await prisma.gameState.findUnique({ where: { id: GAME_STATE_ROW_ID } });
-        if (row) {
-          parseAndApplyPersistentState({
-            turnId: row.turnId,
-            gameSettings: row.gameSettingsJson,
-            worldBase: row.worldBaseJson,
-            ordersByTurn: row.ordersByTurnJson,
-            resolveReadyByTurn: row.resolveReadyByTurnJson,
-          });
-          const migratedManualFlags = migrateProvinceManualCostFlags();
-          const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
-          if (migratedManualFlags > 0 || migratedLegacyCosts > 0) {
-            console.log(
-              `[state] Migrated province colonization metadata from DB state: manualFlags=${migratedManualFlags}, legacyCosts=${migratedLegacyCosts}`,
-            );
-            await persistStateToDb();
-          }
-          return;
-        }
-
-        await tryImportPersistentStateFromFile();
-      } catch (error) {
-        console.error("[state] Failed to load persisted game state from DB, using defaults:", error);
+  try {
+    const row = await prisma.gameState.findUnique({ where: { id: GAME_STATE_ROW_ID } });
+    if (row) {
+      parseAndApplyPersistentState({
+        turnId: row.turnId,
+        gameSettings: row.gameSettingsJson,
+        worldBase: row.worldBaseJson,
+        ordersByTurn: row.ordersByTurnJson,
+        resolveReadyByTurn: row.resolveReadyByTurnJson,
+      });
+      const migratedManualFlags = migrateProvinceManualCostFlags();
+      const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
+      if (migratedManualFlags > 0 || migratedLegacyCosts > 0) {
+        console.log(
+          `[state] Migrated province colonization metadata from DB state: manualFlags=${migratedManualFlags}, legacyCosts=${migratedLegacyCosts}`,
+        );
+        await persistStateToDb();
       }
-    },
-    { turnId },
-  );
+      return;
+    }
+
+    await tryImportPersistentStateFromFile();
+  } catch (error) {
+    console.error("[state] Failed to load persisted game state from DB, using defaults:", error);
+  }
 }
 
 const redis = env.redisUrl ? new Redis(env.redisUrl, { lazyConnect: true }) : null;
@@ -1745,11 +1318,135 @@ async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSock
   }
 }
 
-function broadcastWorldBaseSync(wss: WebSocketServer): void {
-  broadcast(wss, {
-    type: "WORLD_BASE_SYNC",
-    worldBase: worldBaseForClient(worldBase),
+function cloneWorldBaseSnapshot(): WorldBase {
+  return structuredClone({
+    ...worldBase,
     turnId,
+  });
+}
+
+function buildWorldDeltaChanges(prev: WorldBase, next: WorldBase): WorldDelta["changes"] {
+  const resourcesByCountry: Record<string, ResourceTotals | null> = {};
+  const provinceOwner: Record<string, string | null> = {};
+  const provinceNameById: Record<string, string | null> = {};
+  const colonyProgressByProvince: Record<string, Record<string, number> | null> = {};
+  const provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null> = {};
+
+  for (const key of new Set([...Object.keys(prev.resourcesByCountry), ...Object.keys(next.resourcesByCountry)])) {
+    const prevValue = prev.resourcesByCountry[key];
+    const nextValue = next.resourcesByCountry[key];
+    if (!nextValue) {
+      resourcesByCountry[key] = null;
+      continue;
+    }
+    if (
+      !prevValue ||
+      prevValue.culture !== nextValue.culture ||
+      prevValue.science !== nextValue.science ||
+      prevValue.religion !== nextValue.religion ||
+      prevValue.colonization !== nextValue.colonization ||
+      prevValue.ducats !== nextValue.ducats ||
+      prevValue.gold !== nextValue.gold
+    ) {
+      resourcesByCountry[key] = nextValue;
+    }
+  }
+
+  for (const key of new Set([...Object.keys(prev.provinceOwner), ...Object.keys(next.provinceOwner)])) {
+    const prevValue = prev.provinceOwner[key];
+    const nextValue = next.provinceOwner[key];
+    if (typeof nextValue !== "string") {
+      provinceOwner[key] = null;
+      continue;
+    }
+    if (prevValue !== nextValue) {
+      provinceOwner[key] = nextValue;
+    }
+  }
+
+  for (const key of new Set([...Object.keys(prev.provinceNameById), ...Object.keys(next.provinceNameById)])) {
+    const prevValue = prev.provinceNameById[key];
+    const nextValue = next.provinceNameById[key];
+    if (typeof nextValue !== "string") {
+      provinceNameById[key] = null;
+      continue;
+    }
+    if (prevValue !== nextValue) {
+      provinceNameById[key] = nextValue;
+    }
+  }
+
+  for (const key of new Set([...Object.keys(prev.colonyProgressByProvince), ...Object.keys(next.colonyProgressByProvince)])) {
+    const prevValue = prev.colonyProgressByProvince[key];
+    const nextValue = next.colonyProgressByProvince[key];
+    if (!nextValue) {
+      colonyProgressByProvince[key] = null;
+      continue;
+    }
+    if (JSON.stringify(prevValue ?? null) !== JSON.stringify(nextValue)) {
+      colonyProgressByProvince[key] = nextValue;
+    }
+  }
+
+  for (const key of new Set([...Object.keys(prev.provinceColonizationByProvince), ...Object.keys(next.provinceColonizationByProvince)])) {
+    const prevValue = prev.provinceColonizationByProvince[key];
+    const nextValue = next.provinceColonizationByProvince[key];
+    if (!nextValue) {
+      provinceColonizationByProvince[key] = null;
+      continue;
+    }
+    if (
+      !prevValue ||
+      prevValue.cost !== nextValue.cost ||
+      prevValue.disabled !== nextValue.disabled ||
+      Boolean(prevValue.manualCost) !== Boolean(nextValue.manualCost)
+    ) {
+      provinceColonizationByProvince[key] = nextValue;
+    }
+  }
+
+  const changes: WorldDelta["changes"] = {};
+  if (Object.keys(resourcesByCountry).length > 0) {
+    changes.resourcesByCountry = resourcesByCountry;
+  }
+  if (Object.keys(provinceOwner).length > 0) {
+    changes.provinceOwner = provinceOwner;
+  }
+  if (Object.keys(provinceNameById).length > 0) {
+    changes.provinceNameById = provinceNameById;
+  }
+  if (Object.keys(colonyProgressByProvince).length > 0) {
+    changes.colonyProgressByProvince = colonyProgressByProvince;
+  }
+  if (Object.keys(provinceColonizationByProvince).length > 0) {
+    changes.provinceColonizationByProvince = provinceColonizationByProvince;
+  }
+  return changes;
+}
+
+function broadcastWorldDeltaFromSnapshot(wss: WebSocketServer, previous: WorldBase, rejectedOrders: WorldDelta["rejectedOrders"] = []): void {
+  const next = {
+    ...worldBase,
+    turnId,
+  };
+  const changes = buildWorldDeltaChanges(previous, next);
+  if (
+    !changes.resourcesByCountry &&
+    !changes.provinceOwner &&
+    !changes.provinceNameById &&
+    !changes.colonyProgressByProvince &&
+    !changes.provinceColonizationByProvince &&
+    rejectedOrders.length === 0
+  ) {
+    return;
+  }
+  worldStateVersion += 1;
+  broadcast(wss, {
+    type: "WORLD_DELTA",
+    turnId,
+    worldStateVersion,
+    changes,
+    rejectedOrders,
   });
 }
 
@@ -1853,9 +1550,10 @@ function resetTurnTimerAnchor(): void {
   currentTurnStartedAtMs = Date.now();
 }
 
-function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
+function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: EventLogEntry[]; previousWorldBase: WorldBase } {
+  const previousWorldBase = cloneWorldBaseSnapshot();
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
-  const rejectedOrders: WorldPatch["rejectedOrders"] = [];
+  const rejectedOrders: WorldDelta["rejectedOrders"] = [];
   const claimed = new Set<string>();
   const news: EventLogEntry[] = [];
 
@@ -1975,7 +1673,7 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
     candidates.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     const winnerCountryId = candidates[0][0];
     const previousOwnerId = worldBase.provinceOwner[provinceId] ?? null;
-    setProvinceOwner(provinceId, winnerCountryId);
+    worldBase.provinceOwner[provinceId] = winnerCountryId;
     delete worldBase.colonyProgressByProvince[provinceId];
     news.push(
       makeOfficialNews({
@@ -2011,12 +1709,8 @@ function resolveTurn(): { patch: WorldPatch; news: EventLogEntry[] } {
   savePersistentState();
 
   return {
-    patch: {
-      type: "WORLD_PATCH",
-      turnId,
-      worldBase: worldBaseForClient(worldBase),
-      rejectedOrders,
-    },
+    previousWorldBase,
+    rejectedOrders,
     news,
   };
 }
@@ -2027,24 +1721,12 @@ function resolveAndBroadcastCurrentTurn(wsServer: WebSocketServer): boolean {
   }
   isResolvingTurnNow = true;
   try {
-    return withPerfSync(
-      "turn.resolveAndBroadcast",
-      () => {
-        const { patch, news } = resolveTurn();
-        broadcast(wsServer, patch);
-        for (const event of news) {
-          broadcast(wsServer, { type: "NEWS_EVENT", event });
-        }
-        return true;
-      },
-      {
-        turnId,
-        ordersPlayers: (ordersByTurn.get(turnId) ?? new Map()).size,
-        ordersCount: [...(ordersByTurn.get(turnId) ?? new Map()).values()].reduce((sum, list) => sum + list.length, 0),
-        popGroups: getPopulationStoreLength(),
-        popTotal: worldBase.population.totals.population,
-      },
-    );
+    const { previousWorldBase, rejectedOrders, news } = resolveTurn();
+    broadcastWorldDeltaFromSnapshot(wsServer, previousWorldBase, rejectedOrders);
+    for (const event of news) {
+      broadcast(wsServer, { type: "NEWS_EVENT", event });
+    }
+    return true;
   } finally {
     isResolvingTurnNow = false;
   }
@@ -2174,213 +1856,6 @@ app.patch("/notifications/ui/:id/viewed", async (req, res) => {
   }
   target.viewedByCountryIds.add(auth.countryId);
   return res.json({ ok: true });
-});
-
-function topFromRecord(input: Record<string, number>, limit = 20): Array<{ id: string; value: number }> {
-  return Object.entries(input)
-    .map(([id, value]) => ({ id, value: Math.max(0, Math.floor(Number(value) || 0)) }))
-    .filter((item) => item.value > 0)
-    .sort((a, b) => b.value - a.value || a.id.localeCompare(b.id))
-    .slice(0, limit);
-}
-
-function buildPopulationProvinceIndexIfNeeded(): void {
-  if (populationCache.provinceIndexRevision === populationRevision) {
-    return;
-  }
-  populationCache.topByProvince.clear();
-  const groupsByProvince = new Map<string, PopulationGroup[]>();
-  forEachPopulationStoreRow((group) => {
-    const list = groupsByProvince.get(group.provinceId);
-    if (list) {
-      list.push(group);
-    } else {
-      groupsByProvince.set(group.provinceId, [group]);
-    }
-  });
-  for (const [provinceId, list] of groupsByProvince.entries()) {
-    const top = list
-      .slice()
-      .sort((a, b) => b.size - a.size || a.id.localeCompare(b.id))
-      .slice(0, 200);
-    populationCache.topByProvince.set(provinceId, top);
-  }
-  populationCache.provinceIndexRevision = populationRevision;
-}
-
-function getPopulationWorldSummaryCached(): PopulationWorldSummaryResponse {
-  const cacheKey = `${populationRevision}:${provinceOwnerRevision}:${turnId}`;
-  if (populationCache.worldSummaryCacheKey === cacheKey && populationCache.worldSummary) {
-    return populationCache.worldSummary;
-  }
-  const totals = populationTotalsForClient(worldBase);
-  const summary: PopulationWorldSummaryResponse = {
-    turnId,
-    totals,
-    top: {
-      countries: topFromRecord(totals.byCountry),
-      races: topFromRecord(totals.byRace),
-      cultures: topFromRecord(totals.byCulture),
-      religions: topFromRecord(totals.byReligion),
-      provinces: topFromRecord(totals.byProvince),
-    },
-  };
-  populationCache.worldSummaryCacheKey = cacheKey;
-  populationCache.worldSummary = summary;
-  return summary;
-}
-
-function contentIdsOrFallback(
-  rows: Array<{ id: string }>,
-  fallbackPrefix: string,
-): string[] {
-  const ids = rows.map((row) => row.id).filter(Boolean);
-  return ids.length > 0 ? ids : [`sys-${fallbackPrefix}-default`];
-}
-
-const populationGenerateSchema = z.object({
-  populationPerProvince: z.coerce.number().int().min(1).max(50_000_000).default(100_000),
-  groupsPerProvince: z.coerce.number().int().min(1).max(1000).default(24),
-  target: z.enum(["all", "owned"]).default("all"),
-  replaceExisting: z.boolean().default(true),
-  raceId: z.string().trim().min(1).max(200).nullable().optional(),
-  cultureId: z.string().trim().min(1).max(200).nullable().optional(),
-  religionId: z.string().trim().min(1).max(200).nullable().optional(),
-});
-
-app.get("/population/summary/world", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth) {
-    return res.status(401).json({ error: "UNAUTHORIZED" });
-  }
-  return res.json(getPopulationWorldSummaryCached());
-});
-
-app.get("/population/summary/province/:provinceId", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth) {
-    return res.status(401).json({ error: "UNAUTHORIZED" });
-  }
-  const provinceId = String(req.params.provinceId);
-  buildPopulationProvinceIndexIfNeeded();
-  const totalPopulation = Math.max(0, Math.floor(Number(worldBase.population.totals.byProvince[provinceId]) || 0));
-  const groups = populationCache.topByProvince.get(provinceId) ?? [];
-  return res.json({
-    turnId,
-    provinceId,
-    totalPopulation,
-    groups,
-  });
-});
-
-app.post("/admin/population/generate", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth || !(await isAdminCountry(auth.countryId))) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-  const parsed = populationGenerateSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
-  }
-  const raceIds = contentIdsOrFallback(gameSettings.content.races, "race");
-  const cultureIds = contentIdsOrFallback(gameSettings.content.cultures, "culture");
-  const religionIds = contentIdsOrFallback(gameSettings.content.religions, "religion");
-  const fixedRaceId = parsed.data.raceId?.trim() || null;
-  const fixedCultureId = parsed.data.cultureId?.trim() || null;
-  const fixedReligionId = parsed.data.religionId?.trim() || null;
-  if (fixedRaceId && !raceIds.includes(fixedRaceId)) {
-    return res.status(400).json({ error: "INVALID_RACE_ID" });
-  }
-  if (fixedCultureId && !cultureIds.includes(fixedCultureId)) {
-    return res.status(400).json({ error: "INVALID_CULTURE_ID" });
-  }
-  if (fixedReligionId && !religionIds.includes(fixedReligionId)) {
-    return res.status(400).json({ error: "INVALID_RELIGION_ID" });
-  }
-
-  const provinceIds =
-    parsed.data.target === "owned"
-      ? adm1ProvinceIndex.filter((province) => Boolean(worldBase.provinceOwner[province.id])).map((province) => province.id)
-      : adm1ProvinceIndex.map((province) => province.id);
-
-  const groupsPerProvince = parsed.data.groupsPerProvince;
-  const populationPerProvince = parsed.data.populationPerProvince;
-  const aggregate = new Map<string, PopulationGroup>();
-  const weightByIndex = Array.from({ length: groupsPerProvince }, (_v, i) => (i % 5) + 1);
-  const weightSum = weightByIndex.reduce((sum, value) => sum + value, 0);
-
-  if (!parsed.data.replaceExisting) {
-    forEachPopulationStoreRow((group) => {
-      const key = `${group.provinceId}|${group.raceId}|${group.cultureId}|${group.religionId}`;
-      const existing = aggregate.get(key);
-      if (existing) {
-        existing.size += group.size;
-      } else {
-        aggregate.set(key, { ...group });
-      }
-    });
-  }
-
-  for (let provinceIdx = 0; provinceIdx < provinceIds.length; provinceIdx += 1) {
-    const provinceId = provinceIds[provinceIdx];
-    let distributed = 0;
-    for (let i = 0; i < groupsPerProvince; i += 1) {
-      const isLast = i === groupsPerProvince - 1;
-      const size = isLast
-        ? Math.max(0, populationPerProvince - distributed)
-        : Math.floor((populationPerProvince * weightByIndex[i]) / Math.max(1, weightSum));
-      distributed += size;
-      if (size <= 0) continue;
-      const raceId = fixedRaceId ?? raceIds[(provinceIdx * 31 + i * 17) % raceIds.length];
-      const cultureId = fixedCultureId ?? cultureIds[(provinceIdx * 29 + i * 13) % cultureIds.length];
-      const religionId = fixedReligionId ?? religionIds[(provinceIdx * 23 + i * 11) % religionIds.length];
-      const key = `${provinceId}|${raceId}|${cultureId}|${religionId}`;
-      const existing = aggregate.get(key);
-      if (existing) {
-        existing.size += size;
-      } else {
-        aggregate.set(key, { id: `pop:${key}`, provinceId, raceId, cultureId, religionId, size });
-      }
-    }
-  }
-
-  return withPerfAsync(
-    "admin.population.generate",
-    async () => {
-      const groups = [...aggregate.values()].filter((group) => group.size > 0);
-      if (groups.length <= 200_000) {
-        groups.sort((a, b) => a.provinceId.localeCompare(b.provinceId) || b.size - a.size || a.id.localeCompare(b.id));
-      }
-      setPopulationState(makePopulationState(groups, worldBase.provinceOwner));
-      savePersistentState();
-      broadcastWorldBaseSync(wss);
-      broadcast(wss, {
-        type: "NEWS_EVENT",
-        event: makeOfficialNews({
-          turn: turnId,
-          category: "system",
-          title: "Население сгенерировано",
-          message: `Администратор сгенерировал население: групп ${groups.length}, население ${worldBase.population.totals.population}`,
-          countryId: auth.countryId,
-          priority: "low",
-          visibility: "public",
-        }),
-      });
-      return res.json({
-        ok: true,
-        totals: worldBase.population.totals,
-        provincesAffected: provinceIds.length,
-      });
-    },
-    {
-      turnId,
-      provinces: provinceIds.length,
-      groupsPerProvince,
-      populationPerProvince,
-      replace: parsed.data.replaceExisting,
-      target: parsed.data.target,
-    },
-  );
 });
 
 const gameSettingsSchema = z.object({
@@ -3112,6 +2587,7 @@ app.patch("/admin/game-settings", async (req, res) => {
   }
 
   const nextColonization = parsed.data.colonization;
+  const previousWorldBase = parsed.data.colonization ? cloneWorldBaseSnapshot() : null;
   let provinceColonizationCostsRecalculated = 0;
   if (nextColonization) {
     const prevPointsCostPer1000Km2 = gameSettings.colonization.pointsCostPer1000Km2;
@@ -3220,7 +2696,9 @@ app.patch("/admin/game-settings", async (req, res) => {
 
   savePersistentState();
   if (provinceColonizationCostsRecalculated > 0) {
-    broadcastWorldBaseSync(wss);
+    if (previousWorldBase) {
+      broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+    }
   }
   if (changedSections.length > 0) {
     broadcast(wss, {
@@ -3307,13 +2785,14 @@ app.post("/country/colonization/start", async (req, res) => {
     });
   }
 
+  const previousWorldBase = cloneWorldBaseSnapshot();
   worldBase.colonyProgressByProvince[provinceId] = {
     ...existing,
     [auth.countryId]: 0,
   };
 
   savePersistentState();
-  broadcastWorldBaseSync(wss);
+  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -3347,6 +2826,7 @@ app.post("/country/colonization/cancel", async (req, res) => {
     return res.status(404).json({ error: "COLONIZATION_NOT_FOUND" });
   }
 
+  const previousWorldBase = cloneWorldBaseSnapshot();
   delete progress[auth.countryId];
   if (Object.keys(progress).length === 0) {
     delete worldBase.colonyProgressByProvince[provinceId];
@@ -3372,7 +2852,7 @@ app.post("/country/colonization/cancel", async (req, res) => {
   }
 
   savePersistentState();
-  broadcastWorldBaseSync(wss);
+  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -3424,11 +2904,12 @@ app.patch("/country/province-rename", async (req, res) => {
     });
   }
 
+  const previousWorldBase = cloneWorldBaseSnapshot();
   resources.ducats = Math.max(0, resources.ducats - provinceRenameDucatsCost);
   worldBase.provinceNameById[provinceId] = provinceName;
 
   savePersistentState();
-  broadcastWorldBaseSync(wss);
+  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -3515,6 +2996,7 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
   }
 
   const cfg = getProvinceColonizationConfig(provinceId);
+  const previousWorldBase = cloneWorldBaseSnapshot();
   let clearedProgress = false;
 
   if (parsed.data.resetColonizationCostToAuto) {
@@ -3542,16 +3024,16 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
         return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
       }
       ensureCountryInWorldBase(nextOwner);
-      setProvinceOwner(provinceId, nextOwner);
+      worldBase.provinceOwner[provinceId] = nextOwner;
     } else {
-      setProvinceOwner(provinceId, null);
+      delete worldBase.provinceOwner[provinceId];
     }
     cleanupProvinceColonizationProgress(provinceId);
     clearedProgress = true;
   }
 
   savePersistentState();
-  broadcastWorldBaseSync(wss);
+  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
   if (parsed.data.colonizationDisabled !== undefined || parsed.data.colonizationCost !== undefined || parsed.data.ownerCountryId !== undefined) {
     broadcast(wss, {
       type: "NEWS_EVENT",
@@ -3586,10 +3068,11 @@ app.post("/admin/provinces/recalculate-auto-costs", async (req, res) => {
   if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
+  const previousWorldBase = cloneWorldBaseSnapshot();
   const updatedCount = recalculateAllProvinceColonizationCosts();
   savePersistentState();
   if (updatedCount > 0) {
-    broadcastWorldBaseSync(wss);
+    broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
     broadcast(wss, {
       type: "NEWS_EVENT",
       event: makeOfficialNews({
@@ -3738,6 +3221,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
     return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
   }
 
+  const previousWorldBase = cloneWorldBaseSnapshot();
   await prisma.country.delete({ where: { id: countryIdParam } });
 
   removeUploadedByUrl(target.flagUrl);
@@ -3746,7 +3230,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   delete worldBase.resourcesByCountry[countryIdParam];
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
     if (ownerId === countryIdParam) {
-      setProvinceOwner(provinceId, null);
+      delete worldBase.provinceOwner[provinceId];
     }
   }
   for (const progress of Object.values(worldBase.colonyProgressByProvince)) {
@@ -3759,7 +3243,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   }
 
   savePersistentState();
-  broadcastWorldBaseSync(wss);
+  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -4196,11 +3680,12 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
   }
   removeUploadedByUrl(fullTarget.flagUrl);
   removeUploadedByUrl(fullTarget.crestUrl);
+  const previousWorldBase = cloneWorldBaseSnapshot();
   await prisma.country.delete({ where: { id: targetId } });
 
   delete worldBase.resourcesByCountry[targetId];
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
-    if (ownerId === targetId) setProvinceOwner(provinceId, null);
+    if (ownerId === targetId) delete worldBase.provinceOwner[provinceId];
   }
   for (const [provinceId, progressByCountry] of Object.entries(worldBase.colonyProgressByProvince)) {
     if (progressByCountry[targetId] != null) {
@@ -4210,7 +3695,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
   }
   savePersistentState();
   removeQueuedUiNotification(`registration-approval:${targetId}`);
-  broadcastWorldBaseSync(wss);
+  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -4338,8 +3823,12 @@ wss.on("connection", (socket) => {
           playerId: payload.id,
           countryId: payload.countryId,
           isAdmin,
-          worldBase: worldBaseForClient(worldBase),
+          worldBase: {
+            ...worldBase,
+            turnId,
+          },
           turnId,
+          worldStateVersion,
           clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
         });
         if (isAdmin) {
@@ -4526,9 +4015,7 @@ wss.on("connection", (socket) => {
 });
 
 async function startServer(): Promise<void> {
-  await withPerfAsync("startup.loadPersistentState", async () => {
-    await loadPersistentState();
-  });
+  await loadPersistentState();
   resetTurnTimerAnchor();
   setInterval(() => {
     try {
@@ -4558,9 +4045,6 @@ async function startServer(): Promise<void> {
   }, 1000);
   server.listen(env.port, () => {
     console.log(`Arcanorum server running on http://localhost:${env.port}`);
-    if (env.perfLogs) {
-      console.log("[perf] PERF_LOGS enabled (set PERF_LOGS=0 to disable)");
-    }
   });
 }
 
@@ -4590,3 +4074,13 @@ startServer().catch((error) => {
   console.error("[startup] Failed to initialize server:", error);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+

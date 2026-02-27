@@ -18,7 +18,6 @@ import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
-import { PopulationModal } from "./components/PopulationModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -72,7 +71,6 @@ export default function App() {
   const [countryCustomizationOpen, setCountryCustomizationOpen] = useState(false);
   const [clientSettingsOpen, setClientSettingsOpen] = useState(false);
   const [civilopediaOpen, setCivilopediaOpen] = useState(false);
-  const [populationModalOpen, setPopulationModalOpen] = useState(false);
   const [civilopediaIntent, setCivilopediaIntent] = useState<
     | { type: "open-entry"; entryId: string }
     | { type: "province"; provinceId: string; provinceName: string; createIfMissing: boolean }
@@ -132,6 +130,7 @@ export default function App() {
   const selectedProvinceId = useGameStore((s) => s.selectedProvinceId);
   const setAuth = useGameStore((s) => s.setAuth);
   const setWorldBase = useGameStore((s) => s.setWorldBase);
+  const applyWorldDelta = useGameStore((s) => s.applyWorldDelta);
   const addOrder = useGameStore((s) => s.addOrder);
   const setPresence = useGameStore((s) => s.setPresence);
   const resetOverlay = useGameStore((s) => s.resetOverlay);
@@ -152,7 +151,7 @@ export default function App() {
   const onWsMessage = useCallback(
     (msg: WsOutMessage) => {
       if (msg.type === "AUTH_OK") {
-        setWorldBase(msg.worldBase, msg.turnId);
+        setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
         const currentAuth = useGameStore.getState().auth;
         if (currentAuth?.token) {
           setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
@@ -182,7 +181,13 @@ export default function App() {
         );
       }
 
-      if (msg.type === "WORLD_PATCH") {
+      if (msg.type === "WORLD_DELTA") {
+        const currentWorldStateVersion = useGameStore.getState().worldStateVersion;
+        if (msg.worldStateVersion !== currentWorldStateVersion + 1) {
+          toast.error("Состояние мира рассинхронизировано, выполняется переподключение");
+          window.location.reload();
+          return;
+        }
         setTurnResolveOverlay((prev) =>
           prev.phase === "processing"
             ? {
@@ -194,7 +199,7 @@ export default function App() {
               }
             : prev,
         );
-        setWorldBase(msg.worldBase, msg.turnId);
+        applyWorldDelta(msg.changes, msg.turnId, msg.worldStateVersion);
         setTurnTimerUi((prev) => ({ ...prev, startedAtMs: Date.now() }));
         resetOverlay(msg.turnId);
         pruneLogEntries(msg.turnId);
@@ -221,10 +226,6 @@ export default function App() {
         }
       }
 
-      if (msg.type === "WORLD_BASE_SYNC") {
-        setWorldBase(msg.worldBase, msg.turnId);
-      }
-
       if (msg.type === "NEWS_EVENT") {
         addEvent({
           ...msg.event,
@@ -239,9 +240,10 @@ export default function App() {
       }
 
       if (msg.type === "UI_NOTIFY") {
+        const currentTurnId = useGameStore.getState().turnId;
         const notification = {
           ...(msg.notification as InAppUiNotification),
-          receivedTurnId: (msg.notification as InAppUiNotification).receivedTurnId ?? turnId,
+          receivedTurnId: (msg.notification as InAppUiNotification).receivedTurnId ?? currentTurnId,
         } satisfies InAppUiNotification;
         setUiNotificationHistory((prev) => {
           const next = [notification, ...prev.filter((n) => n.id !== notification.id)];
@@ -264,7 +266,7 @@ export default function App() {
         addEvent({ category: "system", title: "Ошибка", message: msg.message, priority: "high", visibility: "private" });
       }
     },
-    [addEvent, addOrder, pruneLogEntries, resetOverlay, setEventLogRetentionTurns, setPresence, setWorldBase, turnId],
+    [addEvent, addOrder, applyWorldDelta, pruneLogEntries, resetOverlay, setEventLogRetentionTurns, setPresence, setWorldBase],
   );
 
   const { send } = useWs(onWsMessage, auth?.token);
@@ -996,13 +998,7 @@ export default function App() {
             countryDetails={currentCountryDetails}
             turnTimer={turnTimerUi}
           />
-          <SideNav
-            onSelect={(key) => {
-              if (key === "population") {
-                setPopulationModalOpen(true);
-              }
-            }}
-          />
+          <SideNav />
           <EventLogPanel
             entries={eventLog}
             currentCountryId={auth.countryId}
@@ -1132,16 +1128,6 @@ export default function App() {
         />
       )}
 
-      {auth?.token && (
-        <PopulationModal
-          open={populationModalOpen}
-          token={auth.token}
-          turnId={turnId}
-          selectedProvinceId={selectedProvinceId}
-          onClose={() => setPopulationModalOpen(false)}
-        />
-      )}
-
       {auth?.isAdmin && (
         <RegistrationApprovalModal
           open={registrationApprovalModal.open}
@@ -1240,7 +1226,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 

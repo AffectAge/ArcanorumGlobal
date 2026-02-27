@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { EventCategory, EventLogEntry, EventPriority, EventVisibility, Order, ResourceTotals, WorldBase } from "@arcanorum/shared";
+import type { EventCategory, EventLogEntry, EventPriority, EventVisibility, Order, ResourceTotals, WorldBase, WorldDelta } from "@arcanorum/shared";
 
 type OrdersByTurn = Map<number, Map<string, Order[]>>;
 
@@ -13,6 +13,7 @@ type AuthState = {
 type GameState = {
   auth: AuthState | null;
   turnId: number;
+  worldStateVersion: number;
   onlinePlayerIds: string[];
   selectedProvinceId: string | null;
   worldBase: WorldBase | null;
@@ -20,7 +21,8 @@ type GameState = {
   eventLog: EventLogEntry[];
   eventLogRetentionTurns: number;
   setAuth: (auth: AuthState | null) => void;
-  setWorldBase: (world: WorldBase, turnId: number) => void;
+  setWorldBase: (world: WorldBase, turnId: number, worldStateVersion: number) => void;
+  applyWorldDelta: (delta: WorldDelta["changes"], turnId: number, worldStateVersion: number) => void;
   addOrder: (order: Order) => void;
   setPresence: (ids: string[]) => void;
   setSelectedProvince: (id: string | null) => void;
@@ -38,6 +40,7 @@ const MAX_LOG_ENTRIES = 200;
 export const useGameStore = create<GameState>((set) => ({
   auth: null,
   turnId: 1,
+  worldStateVersion: 1,
   onlinePlayerIds: [],
   selectedProvinceId: null,
   worldBase: null,
@@ -45,7 +48,84 @@ export const useGameStore = create<GameState>((set) => ({
   eventLog: [],
   eventLogRetentionTurns: 3,
   setAuth: (auth) => set({ auth }),
-  setWorldBase: (world, nextTurnId) => set({ worldBase: world, turnId: nextTurnId }),
+  setWorldBase: (world, nextTurnId, nextWorldStateVersion) =>
+    set({
+      worldBase: world,
+      turnId: nextTurnId,
+      worldStateVersion: nextWorldStateVersion,
+    }),
+  applyWorldDelta: (delta, nextTurnId, nextWorldStateVersion) =>
+    set((state) => {
+      if (!state.worldBase) {
+        return state;
+      }
+
+      const nextWorldBase: WorldBase = {
+        ...state.worldBase,
+        turnId: nextTurnId,
+      };
+
+      if (delta.resourcesByCountry) {
+        nextWorldBase.resourcesByCountry = { ...nextWorldBase.resourcesByCountry };
+        for (const [countryId, value] of Object.entries(delta.resourcesByCountry)) {
+          if (!value) {
+            delete nextWorldBase.resourcesByCountry[countryId];
+            continue;
+          }
+          nextWorldBase.resourcesByCountry[countryId] = value;
+        }
+      }
+
+      if (delta.provinceOwner) {
+        nextWorldBase.provinceOwner = { ...nextWorldBase.provinceOwner };
+        for (const [provinceId, value] of Object.entries(delta.provinceOwner)) {
+          if (value == null) {
+            delete nextWorldBase.provinceOwner[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceOwner[provinceId] = value;
+        }
+      }
+
+      if (delta.provinceNameById) {
+        nextWorldBase.provinceNameById = { ...nextWorldBase.provinceNameById };
+        for (const [provinceId, value] of Object.entries(delta.provinceNameById)) {
+          if (value == null) {
+            delete nextWorldBase.provinceNameById[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceNameById[provinceId] = value;
+        }
+      }
+
+      if (delta.colonyProgressByProvince) {
+        nextWorldBase.colonyProgressByProvince = { ...nextWorldBase.colonyProgressByProvince };
+        for (const [provinceId, value] of Object.entries(delta.colonyProgressByProvince)) {
+          if (!value) {
+            delete nextWorldBase.colonyProgressByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.colonyProgressByProvince[provinceId] = value;
+        }
+      }
+
+      if (delta.provinceColonizationByProvince) {
+        nextWorldBase.provinceColonizationByProvince = { ...nextWorldBase.provinceColonizationByProvince };
+        for (const [provinceId, value] of Object.entries(delta.provinceColonizationByProvince)) {
+          if (!value) {
+            delete nextWorldBase.provinceColonizationByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceColonizationByProvince[provinceId] = value;
+        }
+      }
+
+      return {
+        worldBase: nextWorldBase,
+        turnId: nextTurnId,
+        worldStateVersion: nextWorldStateVersion,
+      };
+    }),
   addOrder: (order) =>
     set((state) => {
       const turnMap = new Map(state.ordersByTurn);

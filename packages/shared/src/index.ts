@@ -67,31 +67,19 @@ export type WorldBase = {
   provinceNameById: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
-  population: {
-    groups: Array<{
-      id: string;
-      provinceId: string;
-      raceId: string;
-      cultureId: string;
-      religionId: string;
-      size: number;
-    }>;
-    totals: {
-      population: number;
-      groups: number;
-      byCountry: Record<string, number>;
-      byProvince: Record<string, number>;
-      byRace: Record<string, number>;
-      byCulture: Record<string, number>;
-      byReligion: Record<string, number>;
-    };
-  };
 };
 
-export type WorldPatch = {
-  type: "WORLD_PATCH";
+export type WorldDelta = {
+  type: "WORLD_DELTA";
   turnId: number;
-  worldBase: WorldBase;
+  worldStateVersion: number;
+  changes: {
+    resourcesByCountry?: Record<string, ResourceTotals | null>;
+    provinceOwner?: Record<string, string | null>;
+    provinceNameById?: Record<string, string | null>;
+    colonyProgressByProvince?: Record<string, Record<string, number> | null>;
+    provinceColonizationByProvince?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
+  };
   rejectedOrders: Array<{ playerId: string; reason: string; tempOrderId?: string }>;
 };
 
@@ -104,9 +92,8 @@ export type WsInMessage =
 
 export type WsOutMessage =
   | { type: "CONNECTED"; serverTime: string }
-  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number; clientSettings?: { eventLogRetentionTurns: number } }
+  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number; worldStateVersion: number; clientSettings?: { eventLogRetentionTurns: number } }
   | { type: "ORDER_BROADCAST"; order: Order }
-  | { type: "WORLD_BASE_SYNC"; worldBase: WorldBase; turnId: number }
   | { type: "TURN_RESOLVE_STARTED"; turnId: number; reason: "manual" | "admin" | "auto" }
   | { type: "NEWS_EVENT"; event: EventLogEntry }
   | {
@@ -136,7 +123,7 @@ export type WsOutMessage =
   | { type: "ERROR"; code: string; message: string }
   | { type: "PONG" }
   | { type: "PRESENCE"; onlinePlayerIds: string[] }
-  | WorldPatch;
+  | WorldDelta;
 
 export type LoginPayload = {
   countryId: string;
