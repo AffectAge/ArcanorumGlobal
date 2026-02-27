@@ -46,7 +46,56 @@ const env = {
   jwtSecret: process.env.JWT_SECRET ?? "dev_secret_change_me",
   serverStatus: (process.env.SERVER_STATUS as ServerStatus) ?? "online",
   redisUrl: process.env.REDIS_URL,
+  perfLogs: process.env.PERF_LOGS !== "0",
 };
+
+type PerfMeta = Record<string, string | number | boolean | null | undefined>;
+
+function perfNowMs(): number {
+  return Number(process.hrtime.bigint()) / 1_000_000;
+}
+
+function formatMb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatPerfMeta(meta?: PerfMeta): string {
+  if (!meta) return "";
+  const items = Object.entries(meta)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`);
+  return items.length > 0 ? ` | ${items.join(" ")}` : "";
+}
+
+function logPerf(name: string, startedAtMs: number, cpuStart: NodeJS.CpuUsage, meta?: PerfMeta): void {
+  if (!env.perfLogs) return;
+  const elapsedMs = perfNowMs() - startedAtMs;
+  const cpu = process.cpuUsage(cpuStart);
+  const mem = process.memoryUsage();
+  console.log(
+    `[perf] ${name} | wall=${elapsedMs.toFixed(2)}ms cpu_user=${(cpu.user / 1000).toFixed(2)}ms cpu_sys=${(cpu.system / 1000).toFixed(2)}ms rss=${formatMb(mem.rss)} heap=${formatMb(mem.heapUsed)}${formatPerfMeta(meta)}`,
+  );
+}
+
+async function withPerfAsync<T>(name: string, task: () => Promise<T>, meta?: PerfMeta): Promise<T> {
+  const startedAtMs = perfNowMs();
+  const cpuStart = process.cpuUsage();
+  try {
+    return await task();
+  } finally {
+    logPerf(name, startedAtMs, cpuStart, meta);
+  }
+}
+
+function withPerfSync<T>(name: string, task: () => T, meta?: PerfMeta): T {
+  const startedAtMs = perfNowMs();
+  const cpuStart = process.cpuUsage();
+  try {
+    return task();
+  } finally {
+    logPerf(name, startedAtMs, cpuStart, meta);
+  }
+}
 
 const uploadsRoot = resolve(__dirname, "../uploads");
 const flagsDir = resolve(uploadsRoot, "flags");
@@ -1021,31 +1070,37 @@ async function tryImportPersistentStateFromFile(): Promise<boolean> {
 }
 
 async function loadPersistentState(): Promise<void> {
-  try {
-    const row = await prisma.gameState.findUnique({ where: { id: GAME_STATE_ROW_ID } });
-    if (row) {
-      parseAndApplyPersistentState({
-        turnId: row.turnId,
-        gameSettings: row.gameSettingsJson,
-        worldBase: row.worldBaseJson,
-        ordersByTurn: row.ordersByTurnJson,
-        resolveReadyByTurn: row.resolveReadyByTurnJson,
-      });
-      const migratedManualFlags = migrateProvinceManualCostFlags();
-      const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
-      if (migratedManualFlags > 0 || migratedLegacyCosts > 0) {
-        console.log(
-          `[state] Migrated province colonization metadata from DB state: manualFlags=${migratedManualFlags}, legacyCosts=${migratedLegacyCosts}`,
-        );
-        await persistStateToDb();
-      }
-      return;
-    }
+  await withPerfAsync(
+    "state.loadPersistentState",
+    async () => {
+      try {
+        const row = await prisma.gameState.findUnique({ where: { id: GAME_STATE_ROW_ID } });
+        if (row) {
+          parseAndApplyPersistentState({
+            turnId: row.turnId,
+            gameSettings: row.gameSettingsJson,
+            worldBase: row.worldBaseJson,
+            ordersByTurn: row.ordersByTurnJson,
+            resolveReadyByTurn: row.resolveReadyByTurnJson,
+          });
+          const migratedManualFlags = migrateProvinceManualCostFlags();
+          const migratedLegacyCosts = migrateLegacyProvinceColonizationCosts();
+          if (migratedManualFlags > 0 || migratedLegacyCosts > 0) {
+            console.log(
+              `[state] Migrated province colonization metadata from DB state: manualFlags=${migratedManualFlags}, legacyCosts=${migratedLegacyCosts}`,
+            );
+            await persistStateToDb();
+          }
+          return;
+        }
 
-    await tryImportPersistentStateFromFile();
-  } catch (error) {
-    console.error("[state] Failed to load persisted game state from DB, using defaults:", error);
-  }
+        await tryImportPersistentStateFromFile();
+      } catch (error) {
+        console.error("[state] Failed to load persisted game state from DB, using defaults:", error);
+      }
+    },
+    { turnId },
+  );
 }
 
 const redis = env.redisUrl ? new Redis(env.redisUrl, { lazyConnect: true }) : null;
@@ -1668,12 +1723,24 @@ function resolveAndBroadcastCurrentTurn(wsServer: WebSocketServer): boolean {
   }
   isResolvingTurnNow = true;
   try {
-    const { patch, news } = resolveTurn();
-    broadcast(wsServer, patch);
-    for (const event of news) {
-      broadcast(wsServer, { type: "NEWS_EVENT", event });
-    }
-    return true;
+    return withPerfSync(
+      "turn.resolveAndBroadcast",
+      () => {
+        const { patch, news } = resolveTurn();
+        broadcast(wsServer, patch);
+        for (const event of news) {
+          broadcast(wsServer, { type: "NEWS_EVENT", event });
+        }
+        return true;
+      },
+      {
+        turnId,
+        ordersPlayers: (ordersByTurn.get(turnId) ?? new Map()).size,
+        ordersCount: [...(ordersByTurn.get(turnId) ?? new Map()).values()].reduce((sum, list) => sum + list.length, 0),
+        popGroups: worldBase.population.groups.length,
+        popTotal: worldBase.population.totals.population,
+      },
+    );
   } finally {
     isResolvingTurnNow = false;
   }
@@ -1826,6 +1893,9 @@ const populationGenerateSchema = z.object({
   groupsPerProvince: z.coerce.number().int().min(1).max(1000).default(24),
   target: z.enum(["all", "owned"]).default("all"),
   replaceExisting: z.boolean().default(true),
+  raceId: z.string().trim().min(1).max(200).nullable().optional(),
+  cultureId: z.string().trim().min(1).max(200).nullable().optional(),
+  religionId: z.string().trim().min(1).max(200).nullable().optional(),
 });
 
 app.get("/population/summary/world", async (req, res) => {
@@ -1878,6 +1948,18 @@ app.post("/admin/population/generate", async (req, res) => {
   const raceIds = contentIdsOrFallback(gameSettings.content.races, "race");
   const cultureIds = contentIdsOrFallback(gameSettings.content.cultures, "culture");
   const religionIds = contentIdsOrFallback(gameSettings.content.religions, "religion");
+  const fixedRaceId = parsed.data.raceId?.trim() || null;
+  const fixedCultureId = parsed.data.cultureId?.trim() || null;
+  const fixedReligionId = parsed.data.religionId?.trim() || null;
+  if (fixedRaceId && !raceIds.includes(fixedRaceId)) {
+    return res.status(400).json({ error: "INVALID_RACE_ID" });
+  }
+  if (fixedCultureId && !cultureIds.includes(fixedCultureId)) {
+    return res.status(400).json({ error: "INVALID_CULTURE_ID" });
+  }
+  if (fixedReligionId && !religionIds.includes(fixedReligionId)) {
+    return res.status(400).json({ error: "INVALID_RELIGION_ID" });
+  }
 
   const provinceIds =
     parsed.data.target === "owned"
@@ -1917,9 +1999,9 @@ app.post("/admin/population/generate", async (req, res) => {
         : Math.floor((populationPerProvince * weights[i]) / Math.max(1, weightSum));
       distributed += size;
       if (size <= 0) continue;
-      const raceId = raceIds[(provinceIdx * 31 + i * 17) % raceIds.length];
-      const cultureId = cultureIds[(provinceIdx * 29 + i * 13) % cultureIds.length];
-      const religionId = religionIds[(provinceIdx * 23 + i * 11) % religionIds.length];
+      const raceId = fixedRaceId ?? raceIds[(provinceIdx * 31 + i * 17) % raceIds.length];
+      const cultureId = fixedCultureId ?? cultureIds[(provinceIdx * 29 + i * 13) % cultureIds.length];
+      const religionId = fixedReligionId ?? religionIds[(provinceIdx * 23 + i * 11) % religionIds.length];
       const key = `${provinceId}|${raceId}|${cultureId}|${religionId}`;
       const existing = aggregate.get(key);
       if (existing) {
@@ -1930,29 +2012,42 @@ app.post("/admin/population/generate", async (req, res) => {
     }
   }
 
-  const groups = [...aggregate.values()]
-    .filter((group) => group.size > 0)
-    .sort((a, b) => a.provinceId.localeCompare(b.provinceId) || b.size - a.size || a.id.localeCompare(b.id));
-  worldBase.population = makePopulationState(groups, worldBase.provinceOwner);
-  savePersistentState();
-  broadcastWorldBaseSync(wss);
-  broadcast(wss, {
-    type: "NEWS_EVENT",
-    event: makeOfficialNews({
-      turn: turnId,
-      category: "system",
-      title: "Население сгенерировано",
-      message: `Администратор сгенерировал население: групп ${groups.length}, население ${worldBase.population.totals.population}`,
-      countryId: auth.countryId,
-      priority: "low",
-      visibility: "public",
-    }),
-  });
-  return res.json({
-    ok: true,
-    totals: worldBase.population.totals,
-    provincesAffected: provinceIds.length,
-  });
+  return withPerfAsync(
+    "admin.population.generate",
+    async () => {
+      const groups = [...aggregate.values()]
+        .filter((group) => group.size > 0)
+        .sort((a, b) => a.provinceId.localeCompare(b.provinceId) || b.size - a.size || a.id.localeCompare(b.id));
+      worldBase.population = makePopulationState(groups, worldBase.provinceOwner);
+      savePersistentState();
+      broadcastWorldBaseSync(wss);
+      broadcast(wss, {
+        type: "NEWS_EVENT",
+        event: makeOfficialNews({
+          turn: turnId,
+          category: "system",
+          title: "Население сгенерировано",
+          message: `Администратор сгенерировал население: групп ${groups.length}, население ${worldBase.population.totals.population}`,
+          countryId: auth.countryId,
+          priority: "low",
+          visibility: "public",
+        }),
+      });
+      return res.json({
+        ok: true,
+        totals: worldBase.population.totals,
+        provincesAffected: provinceIds.length,
+      });
+    },
+    {
+      turnId,
+      provinces: provinceIds.length,
+      groupsPerProvince,
+      populationPerProvince,
+      replace: parsed.data.replaceExisting,
+      target: parsed.data.target,
+    },
+  );
 });
 
 const gameSettingsSchema = z.object({
@@ -4098,7 +4193,9 @@ wss.on("connection", (socket) => {
 });
 
 async function startServer(): Promise<void> {
-  await loadPersistentState();
+  await withPerfAsync("startup.loadPersistentState", async () => {
+    await loadPersistentState();
+  });
   resetTurnTimerAnchor();
   setInterval(() => {
     try {
@@ -4128,6 +4225,9 @@ async function startServer(): Promise<void> {
   }, 1000);
   server.listen(env.port, () => {
     console.log(`Arcanorum server running on http://localhost:${env.port}`);
+    if (env.perfLogs) {
+      console.log("[perf] PERF_LOGS enabled (set PERF_LOGS=0 to disable)");
+    }
   });
 }
 
@@ -4157,10 +4257,6 @@ startServer().catch((error) => {
   console.error("[startup] Failed to initialize server:", error);
   process.exit(1);
 });
-
-
-
-
 
 
 

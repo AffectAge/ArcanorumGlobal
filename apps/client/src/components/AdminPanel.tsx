@@ -13,9 +13,11 @@ import {
   adminSetCountryPunishment,
   adminUpdateCountry,
   adminUpdateProvince,
+  fetchContentEntries,
   fetchAdminProvinces,
   fetchCountries,
   type AdminProvinceItem,
+  type ContentEntry,
 } from "../lib/api";
 
 type Props = {
@@ -66,6 +68,12 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [groupsPerProvince, setGroupsPerProvince] = useState(24);
   const [populationTarget, setPopulationTarget] = useState<"all" | "owned">("all");
   const [replacePopulation, setReplacePopulation] = useState(true);
+  const [races, setRaces] = useState<ContentEntry[]>([]);
+  const [cultures, setCultures] = useState<ContentEntry[]>([]);
+  const [religions, setReligions] = useState<ContentEntry[]>([]);
+  const [populationRaceId, setPopulationRaceId] = useState<string>("auto");
+  const [populationCultureId, setPopulationCultureId] = useState<string>("auto");
+  const [populationReligionId, setPopulationReligionId] = useState<string>("auto");
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
   const selectedProvince = useMemo(() => provinces.find((p) => p.id === selectedProvinceId) ?? null, [provinces, selectedProvinceId]);
@@ -133,6 +141,24 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       cancelled = true;
     };
   }, [open, token]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.all([fetchContentEntries("races"), fetchContentEntries("cultures"), fetchContentEntries("religions")])
+      .then(([raceItems, cultureItems, religionItems]) => {
+        if (cancelled) return;
+        setRaces(raceItems);
+        setCultures(cultureItems);
+        setReligions(religionItems);
+      })
+      .catch(() => {
+        if (!cancelled) toast.error("Не удалось загрузить список рас/культур/религий");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!selectedCountry) {
@@ -356,6 +382,9 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
         groupsPerProvince: Math.max(1, Math.floor(groupsPerProvince || 1)),
         target: populationTarget,
         replaceExisting: replacePopulation,
+        raceId: populationRaceId === "auto" ? null : populationRaceId,
+        cultureId: populationCultureId === "auto" ? null : populationCultureId,
+        religionId: populationReligionId === "auto" ? null : populationReligionId,
       });
       toast.success(`Население сгенерировано: ${new Intl.NumberFormat("ru-RU").format(result.totals.population)}`);
     } catch {
@@ -662,6 +691,53 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                         />
                         Заменить существующее население
                       </label>
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Раса</label>
+                          <select
+                            value={populationRaceId}
+                            onChange={(e) => setPopulationRaceId(e.target.value)}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                          >
+                            <option value="auto">Авто-распределение</option>
+                            {races.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Культура</label>
+                          <select
+                            value={populationCultureId}
+                            onChange={(e) => setPopulationCultureId(e.target.value)}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                          >
+                            <option value="auto">Авто-распределение</option>
+                            {cultures.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Религия</label>
+                          <select
+                            value={populationReligionId}
+                            onChange={(e) => setPopulationReligionId(e.target.value)}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                          >
+                            <option value="auto">Авто-распределение</option>
+                            {religions.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
                       <button
                         type="button"
                         onClick={runPopulationGenerate}

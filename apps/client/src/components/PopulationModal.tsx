@@ -14,6 +14,7 @@ import {
 type Props = {
   open: boolean;
   token: string;
+  turnId: number;
   selectedProvinceId: string | null;
   onClose: () => void;
 };
@@ -22,7 +23,7 @@ function fmt(value: number): string {
   return new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.floor(value || 0)));
 }
 
-export function PopulationModal({ open, token, selectedProvinceId, onClose }: Props) {
+export function PopulationModal({ open, token, turnId, selectedProvinceId, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [world, setWorld] = useState<PopulationSummaryWorld | null>(null);
   const [province, setProvince] = useState<PopulationSummaryProvince | null>(null);
@@ -58,7 +59,7 @@ export function PopulationModal({ open, token, selectedProvinceId, onClose }: Pr
     return () => {
       cancelled = true;
     };
-  }, [open, selectedProvinceId, token]);
+  }, [open, selectedProvinceId, token, turnId]);
 
   const topProvinceGroups = useMemo(() => {
     if (!province) return [];
@@ -179,4 +180,3 @@ export function PopulationModal({ open, token, selectedProvinceId, onClose }: Pr
     </Dialog>
   );
 }
-

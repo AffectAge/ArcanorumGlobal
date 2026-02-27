@@ -287,6 +287,9 @@ export async function adminGeneratePopulation(
     groupsPerProvince: number;
     target: "all" | "owned";
     replaceExisting: boolean;
+    raceId?: string | null;
+    cultureId?: string | null;
+    religionId?: string | null;
   },
 ): Promise<{ ok: true; totals: PopulationSummaryWorld["totals"]; provincesAffected: number }> {
   const response = await fetch(`${API}/admin/population/generate`, {

@@ -1136,6 +1136,7 @@ export default function App() {
         <PopulationModal
           open={populationModalOpen}
           token={auth.token}
+          turnId={turnId}
           selectedProvinceId={selectedProvinceId}
           onClose={() => setPopulationModalOpen(false)}
         />
@@ -1239,7 +1240,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 
