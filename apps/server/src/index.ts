@@ -680,45 +680,228 @@ const defaultGameSettings = (): GameSettings => ({
 
 type PopulationGroup = WorldBase["population"]["groups"][number];
 type PopulationTotals = WorldBase["population"]["totals"];
+type PopulationColumnarPayload = {
+  provinceIds: string[];
+  raceIds: string[];
+  cultureIds: string[];
+  religionIds: string[];
+  provinceIdx: number[];
+  raceIdx: number[];
+  cultureIdx: number[];
+  religionIdx: number[];
+  size: number[];
+};
 
-function summarizePopulation(groups: PopulationGroup[], provinceOwner: Record<string, string>): PopulationTotals {
+type PopulationColumnStore = {
+  provinceIds: string[];
+  raceIds: string[];
+  cultureIds: string[];
+  religionIds: string[];
+  provinceIdx: Uint32Array;
+  raceIdx: Uint32Array;
+  cultureIdx: Uint32Array;
+  religionIdx: Uint32Array;
+  size: Uint32Array;
+  length: number;
+};
+
+function emptyPopulationStore(): PopulationColumnStore {
+  return {
+    provinceIds: [],
+    raceIds: [],
+    cultureIds: [],
+    religionIds: [],
+    provinceIdx: new Uint32Array(0),
+    raceIdx: new Uint32Array(0),
+    cultureIdx: new Uint32Array(0),
+    religionIdx: new Uint32Array(0),
+    size: new Uint32Array(0),
+    length: 0,
+  };
+}
+
+let populationStore: PopulationColumnStore = emptyPopulationStore();
+
+function buildPopulationStoreFromGroups(groups: PopulationGroup[]): PopulationColumnStore {
+  const provinceIds: string[] = [];
+  const raceIds: string[] = [];
+  const cultureIds: string[] = [];
+  const religionIds: string[] = [];
+  const provinceIndexById = new Map<string, number>();
+  const raceIndexById = new Map<string, number>();
+  const cultureIndexById = new Map<string, number>();
+  const religionIndexById = new Map<string, number>();
+  const length = groups.length;
+  const provinceIdx = new Uint32Array(length);
+  const raceIdx = new Uint32Array(length);
+  const cultureIdx = new Uint32Array(length);
+  const religionIdx = new Uint32Array(length);
+  const size = new Uint32Array(length);
+
+  const getOrInsert = (dict: string[], index: Map<string, number>, id: string): number => {
+    const existing = index.get(id);
+    if (existing != null) return existing;
+    const next = dict.length;
+    dict.push(id);
+    index.set(id, next);
+    return next;
+  };
+
+  for (let i = 0; i < length; i += 1) {
+    const row = groups[i];
+    provinceIdx[i] = getOrInsert(provinceIds, provinceIndexById, row.provinceId);
+    raceIdx[i] = getOrInsert(raceIds, raceIndexById, row.raceId);
+    cultureIdx[i] = getOrInsert(cultureIds, cultureIndexById, row.cultureId);
+    religionIdx[i] = getOrInsert(religionIds, religionIndexById, row.religionId);
+    size[i] = Math.max(0, Math.floor(Number(row.size) || 0));
+  }
+
+  return {
+    provinceIds,
+    raceIds,
+    cultureIds,
+    religionIds,
+    provinceIdx,
+    raceIdx,
+    cultureIdx,
+    religionIdx,
+    size,
+    length,
+  };
+}
+
+function buildPopulationStoreFromColumnarPayload(input: unknown): PopulationColumnStore | null {
+  if (!input || typeof input !== "object") return null;
+  const payload = input as Partial<PopulationColumnarPayload>;
+  if (
+    !Array.isArray(payload.provinceIds) ||
+    !Array.isArray(payload.raceIds) ||
+    !Array.isArray(payload.cultureIds) ||
+    !Array.isArray(payload.religionIds) ||
+    !Array.isArray(payload.provinceIdx) ||
+    !Array.isArray(payload.raceIdx) ||
+    !Array.isArray(payload.cultureIdx) ||
+    !Array.isArray(payload.religionIdx) ||
+    !Array.isArray(payload.size)
+  ) {
+    return null;
+  }
+
+  const provinceIds = payload.provinceIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+  const raceIds = payload.raceIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+  const cultureIds = payload.cultureIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+  const religionIds = payload.religionIds.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+  const length = payload.size.length;
+  if (
+    payload.provinceIdx.length !== length ||
+    payload.raceIdx.length !== length ||
+    payload.cultureIdx.length !== length ||
+    payload.religionIdx.length !== length
+  ) {
+    return null;
+  }
+
+  const provinceIdx = new Uint32Array(length);
+  const raceIdx = new Uint32Array(length);
+  const cultureIdx = new Uint32Array(length);
+  const religionIdx = new Uint32Array(length);
+  const size = new Uint32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    const p = Math.max(0, Math.floor(Number(payload.provinceIdx[i]) || 0));
+    const r = Math.max(0, Math.floor(Number(payload.raceIdx[i]) || 0));
+    const c = Math.max(0, Math.floor(Number(payload.cultureIdx[i]) || 0));
+    const rel = Math.max(0, Math.floor(Number(payload.religionIdx[i]) || 0));
+    if (p >= provinceIds.length || r >= raceIds.length || c >= cultureIds.length || rel >= religionIds.length) {
+      return null;
+    }
+    provinceIdx[i] = p;
+    raceIdx[i] = r;
+    cultureIdx[i] = c;
+    religionIdx[i] = rel;
+    size[i] = Math.max(0, Math.floor(Number(payload.size[i]) || 0));
+  }
+
+  return {
+    provinceIds,
+    raceIds,
+    cultureIds,
+    religionIds,
+    provinceIdx,
+    raceIdx,
+    cultureIdx,
+    religionIdx,
+    size,
+    length,
+  };
+}
+
+function populationStoreToColumnarPayload(store: PopulationColumnStore): PopulationColumnarPayload {
+  return {
+    provinceIds: store.provinceIds,
+    raceIds: store.raceIds,
+    cultureIds: store.cultureIds,
+    religionIds: store.religionIds,
+    provinceIdx: Array.from(store.provinceIdx),
+    raceIdx: Array.from(store.raceIdx),
+    cultureIdx: Array.from(store.cultureIdx),
+    religionIdx: Array.from(store.religionIdx),
+    size: Array.from(store.size),
+  };
+}
+
+function summarizePopulationStore(store: PopulationColumnStore, provinceOwner: Record<string, string>): PopulationTotals {
   const totals: PopulationTotals = {
     population: 0,
-    groups: groups.length,
+    groups: store.length,
     byCountry: {},
     byProvince: {},
     byRace: {},
     byCulture: {},
     byReligion: {},
   };
-  for (const group of groups) {
-    const size = Math.max(0, Math.floor(Number(group.size) || 0));
+  for (let i = 0; i < store.length; i += 1) {
+    const size = Math.max(0, Math.floor(Number(store.size[i]) || 0));
     if (size <= 0) continue;
+    const provinceId = store.provinceIds[store.provinceIdx[i]];
+    const raceId = store.raceIds[store.raceIdx[i]];
+    const cultureId = store.cultureIds[store.cultureIdx[i]];
+    const religionId = store.religionIds[store.religionIdx[i]];
     totals.population += size;
-    totals.byProvince[group.provinceId] = (totals.byProvince[group.provinceId] ?? 0) + size;
-    totals.byRace[group.raceId] = (totals.byRace[group.raceId] ?? 0) + size;
-    totals.byCulture[group.cultureId] = (totals.byCulture[group.cultureId] ?? 0) + size;
-    totals.byReligion[group.religionId] = (totals.byReligion[group.religionId] ?? 0) + size;
+    totals.byProvince[provinceId] = (totals.byProvince[provinceId] ?? 0) + size;
+    totals.byRace[raceId] = (totals.byRace[raceId] ?? 0) + size;
+    totals.byCulture[cultureId] = (totals.byCulture[cultureId] ?? 0) + size;
+    totals.byReligion[religionId] = (totals.byReligion[religionId] ?? 0) + size;
   }
   // byCountry derives from province totals so owner lookup scales with province count, not group count.
   for (const [provinceId, provincePopulation] of Object.entries(totals.byProvince)) {
     const owner = provinceOwner[provinceId];
     if (owner) totals.byCountry[owner] = (totals.byCountry[owner] ?? 0) + provincePopulation;
   }
-  totals.groups = groups.length;
+  totals.groups = store.length;
   return totals;
 }
 
 function makePopulationState(groups: PopulationGroup[], provinceOwner: Record<string, string>): WorldBase["population"] {
+  populationStore = buildPopulationStoreFromGroups(groups);
+  const totals = summarizePopulationStore(populationStore, provinceOwner);
   return {
-    groups,
-    totals: summarizePopulation(groups, provinceOwner),
+    // Internal storage is columnar; groups list is kept empty to avoid huge object payloads.
+    groups: [],
+    totals,
   };
 }
 
 function normalizePopulation(input: unknown, provinceOwner: Record<string, string>): WorldBase["population"] {
   if (!input || typeof input !== "object") return makePopulationState([], provinceOwner);
-  const state = input as Partial<{ groups: unknown }>;
+  const state = input as Partial<{ groups: unknown; columnar: unknown }>;
+  const columnar = buildPopulationStoreFromColumnarPayload(state.columnar);
+  if (columnar) {
+    populationStore = columnar;
+    return {
+      groups: [],
+      totals: summarizePopulationStore(populationStore, provinceOwner),
+    };
+  }
   if (!Array.isArray(state.groups)) return makePopulationState([], provinceOwner);
   const groups: PopulationGroup[] = [];
   for (const raw of state.groups) {
@@ -731,7 +914,7 @@ function normalizePopulation(input: unknown, provinceOwner: Record<string, strin
     const size = Math.max(0, Math.floor(Number(row.size) || 0));
     if (!provinceId || !raceId || !cultureId || !religionId || size <= 0) continue;
     groups.push({
-      id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : randomUUID(),
+      id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : `pop:${provinceId}|${raceId}|${cultureId}|${religionId}|${groups.length}`,
       provinceId,
       raceId,
       cultureId,
@@ -813,6 +996,31 @@ function invalidateProvinceOwnerCaches(): void {
 function setPopulationState(next: WorldBase["population"]): void {
   worldBase.population = next;
   invalidatePopulationCaches();
+}
+
+function getPopulationStoreLength(): number {
+  return populationStore.length;
+}
+
+function forEachPopulationStoreRow(
+  cb: (row: PopulationGroup) => void,
+): void {
+  for (let i = 0; i < populationStore.length; i += 1) {
+    const size = Math.max(0, Math.floor(Number(populationStore.size[i]) || 0));
+    if (size <= 0) continue;
+    const provinceId = populationStore.provinceIds[populationStore.provinceIdx[i]];
+    const raceId = populationStore.raceIds[populationStore.raceIdx[i]];
+    const cultureId = populationStore.cultureIds[populationStore.cultureIdx[i]];
+    const religionId = populationStore.religionIds[populationStore.religionIdx[i]];
+    cb({
+      id: `pop:${provinceId}|${raceId}|${cultureId}|${religionId}|${i}`,
+      provinceId,
+      raceId,
+      cultureId,
+      religionId,
+      size,
+    });
+  }
 }
 
 function setProvinceOwner(provinceId: string, ownerCountryId: string | null): void {
@@ -1100,6 +1308,7 @@ async function persistStateToDb(): Promise<void> {
       turnId,
       population: {
         ...worldBase.population,
+        columnar: populationStoreToColumnarPayload(populationStore),
         totals: populationTotalsForClient(worldBase),
       },
     },
@@ -1832,7 +2041,7 @@ function resolveAndBroadcastCurrentTurn(wsServer: WebSocketServer): boolean {
         turnId,
         ordersPlayers: (ordersByTurn.get(turnId) ?? new Map()).size,
         ordersCount: [...(ordersByTurn.get(turnId) ?? new Map()).values()].reduce((sum, list) => sum + list.length, 0),
-        popGroups: worldBase.population.groups.length,
+        popGroups: getPopulationStoreLength(),
         popTotal: worldBase.population.totals.population,
       },
     );
@@ -1981,14 +2190,14 @@ function buildPopulationProvinceIndexIfNeeded(): void {
   }
   populationCache.topByProvince.clear();
   const groupsByProvince = new Map<string, PopulationGroup[]>();
-  for (const group of worldBase.population.groups) {
+  forEachPopulationStoreRow((group) => {
     const list = groupsByProvince.get(group.provinceId);
     if (list) {
       list.push(group);
     } else {
       groupsByProvince.set(group.provinceId, [group]);
     }
-  }
+  });
   for (const [provinceId, list] of groupsByProvince.entries()) {
     const top = list
       .slice()
@@ -2101,7 +2310,7 @@ app.post("/admin/population/generate", async (req, res) => {
   const weightSum = weightByIndex.reduce((sum, value) => sum + value, 0);
 
   if (!parsed.data.replaceExisting) {
-    for (const group of worldBase.population.groups) {
+    forEachPopulationStoreRow((group) => {
       const key = `${group.provinceId}|${group.raceId}|${group.cultureId}|${group.religionId}`;
       const existing = aggregate.get(key);
       if (existing) {
@@ -2109,7 +2318,7 @@ app.post("/admin/population/generate", async (req, res) => {
       } else {
         aggregate.set(key, { ...group });
       }
-    }
+    });
   }
 
   for (let provinceIdx = 0; provinceIdx < provinceIds.length; provinceIdx += 1) {
