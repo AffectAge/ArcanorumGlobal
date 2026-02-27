@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { motion } from "framer-motion";
-import { Palette, Plus, ScrollText, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { FileText, Palette, Plus, ScrollText, Sparkles, Sticker, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
@@ -28,8 +28,8 @@ const CONTENT_UI_SCHEMA = {
       icon: Palette,
       enabled: true,
       sections: [
-        { id: "general", label: "Основная информация" },
-        { id: "branding", label: "Логотип и стиль" },
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
     { id: "religions", label: "Религии (скоро)", icon: ScrollText, enabled: false, sections: [] as const },
@@ -366,18 +366,24 @@ export function ContentPanel({ open, token, onClose }: Props) {
                   {CONTENT_UI_SCHEMA.categories
                     .find((c) => c.id === "cultures")
                     ?.sections.map((section) => (
+                      (() => {
+                        const SectionIcon = section.icon;
+                        return (
                       <button
                         key={section.id}
                         type="button"
                         onClick={() => setCultureSection(section.id)}
-                        className={`pb-2 text-sm transition ${
+                        className={`inline-flex items-center gap-1.5 pb-2 text-sm transition ${
                           cultureSection === section.id
                             ? "border-b-2 border-arc-accent text-arc-accent"
                             : "border-b-2 border-transparent text-white/60 hover:text-white"
                         }`}
                       >
+                        <SectionIcon size={14} />
                         {section.label}
                       </button>
+                        );
+                      })()
                     ))}
                 </div>
 
