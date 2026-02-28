@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { useEffect, useState } from "react";
-import { Coins, Flag, Image as ImageIcon, Palette, RefreshCcw, Save, ScrollText, Timer, Wallet, X, Monitor } from "lucide-react";
+import { Coins, Flag, Image as ImageIcon, Palette, RefreshCcw, Save, ScrollText, Timer, Wallet, X, Monitor, Users } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { adminRecalculateAutoProvinceCosts, adminUploadResourceIcons, adminUploadUiBackground, fetchGameSettings, type GameSettings, type ResourceIconsMap, updateGameSettings } from "../lib/api";
@@ -15,6 +15,7 @@ type Props = {
 
 const categories = [
   { id: "economy", label: "Экономика", icon: Wallet },
+  { id: "population", label: "Население", icon: Users },
   { id: "turnTimer", label: "Таймер хода", icon: Timer },
   { id: "colonization", label: "Колонизация", icon: Flag },
   { id: "registration", label: "Регистрация", icon: Flag },
@@ -48,6 +49,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [baseDucatsPerTurn, setBaseDucatsPerTurn] = useState(5);
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
+  const [populationMaxGroupsPerProvince, setPopulationMaxGroupsPerProvince] = useState(25);
   const [colonizationPointsPerTurn, setColonizationPointsPerTurn] = useState(30);
   const [colonizationPointsCostPer1000Km2, setColonizationPointsCostPer1000Km2] = useState(5);
   const [colonizationDucatsCostPer1000Km2, setColonizationDucatsCostPer1000Km2] = useState(5);
@@ -86,6 +88,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         if (cancelled) return;
         setBaseDucatsPerTurn(settings.economy.baseDucatsPerTurn);
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
+        setPopulationMaxGroupsPerProvince(settings.population?.maxGroupsPerProvince ?? 25);
         setMaxActiveColonizations(settings.colonization.maxActiveColonizations);
         setColonizationPointsPerTurn(settings.colonization.pointsPerTurn);
         setColonizationPointsCostPer1000Km2(settings.colonization.pointsCostPer1000Km2);
@@ -160,6 +163,24 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       toast.success("Настройки колонизации сохранены");
     } catch {
       toast.error("Не удалось сохранить настройки колонизации");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const savePopulation = async () => {
+    setSaving(true);
+    try {
+      const updated = await updateGameSettings(token, {
+        population: {
+          maxGroupsPerProvince: Math.max(1, Math.floor(populationMaxGroupsPerProvince)),
+        },
+      });
+      setPopulationMaxGroupsPerProvince(updated.population?.maxGroupsPerProvince ?? 25);
+      onSettingsUpdated?.(updated);
+      toast.success("Настройки населения сохранены");
+    } catch {
+      toast.error("Не удалось сохранить настройки населения");
     } finally {
       setSaving(false);
     }
@@ -468,6 +489,33 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         </div>
                       </div>
                       <button onClick={saveTurnTimer} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                        <Save size={14} />
+                        Сохранить
+                      </button>
+                    </div>
+                  )}
+
+                  {activeCategory === "population" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/20 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <Users size={15} className="text-arc-accent" />
+                        Отображение групп населения
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-300">Лимит групп в статистике (top N)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={200}
+                          value={populationMaxGroupsPerProvince}
+                          onChange={(e) => setPopulationMaxGroupsPerProvince(Math.min(200, Math.max(1, Number(e.target.value) || 1)))}
+                          className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                        />
+                        <div className="mt-1 text-xs text-slate-500">
+                          Показываются крупнейшие N групп, остальные объединяются в категорию «Другие ...» только в отображении.
+                        </div>
+                      </div>
+                      <button onClick={savePopulation} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>

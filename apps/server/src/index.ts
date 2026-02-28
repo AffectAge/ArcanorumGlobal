@@ -277,6 +277,7 @@ const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
 const DEFAULT_COLONIZATION_POINTS_PER_TURN = 30;
 const COLONIZATION_GOAL = 100;
 const DEFAULT_PROVINCE_COLONIZATION_COST = 100;
+const DEFAULT_POPULATION_MAX_GROUPS_PER_PROVINCE = 25;
 const SETTINGS_MAX_NUMBER = 1_000_000_000_000;
 
 function invalidateCountryQueryCache(): void {
@@ -366,6 +367,8 @@ type GameSettings = {
     }>;
   };
   population: {
+    nextPopId: number;
+    maxGroupsPerProvince: number;
     pops: PopulationPop[];
   };
   economy: {
@@ -633,15 +636,25 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
   return [...base];
 }
 
-function normalizePopulationPops(input: unknown): PopulationPop[] {
-  if (!Array.isArray(input)) return [];
+function normalizePopulationPops(input: unknown, startId = 1): { pops: PopulationPop[]; nextPopId: number } {
+  if (!Array.isArray(input)) {
+    return { pops: [], nextPopId: Math.max(1, Math.floor(startId)) };
+  }
   const next: PopulationPop[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<number>();
+  let nextPopId = Math.max(1, Math.floor(startId));
   for (const raw of input) {
     if (!raw || typeof raw !== "object") continue;
-    const row = raw as Partial<PopulationPop>;
-    const id = typeof row.id === "string" && row.id.trim() ? row.id.trim() : "";
-    if (!id || seen.has(id)) continue;
+    const row = raw as Record<string, unknown>;
+    const rawId = row.id;
+    const parsedId =
+      typeof rawId === "number" && Number.isFinite(rawId)
+        ? Math.max(1, Math.floor(rawId))
+        : typeof rawId === "string" && /^\d+$/.test(rawId.trim())
+          ? Math.max(1, Number(rawId.trim()))
+          : nextPopId;
+    const id = parsedId;
+    if (seen.has(id)) continue;
     const countryId = typeof row.countryId === "string" && row.countryId.trim() ? row.countryId.trim() : "";
     const provinceId = typeof row.provinceId === "string" && row.provinceId.trim() ? row.provinceId.trim() : "";
     const cultureId = typeof row.cultureId === "string" && row.cultureId.trim() ? row.cultureId.trim() : "";
@@ -669,8 +682,9 @@ function normalizePopulationPops(input: unknown): PopulationPop[] {
       updatedAt,
     });
     seen.add(id);
+    nextPopId = Math.max(nextPopId, id + 1);
   }
-  return next;
+  return { pops: next, nextPopId };
 }
 
 const defaultGameSettings = (): GameSettings => ({
@@ -687,6 +701,8 @@ const defaultGameSettings = (): GameSettings => ({
     entries: defaultCivilopediaEntries(),
   },
   population: {
+    nextPopId: 1,
+    maxGroupsPerProvince: DEFAULT_POPULATION_MAX_GROUPS_PER_PROVINCE,
     pops: [],
   },
   economy: {
@@ -752,17 +768,17 @@ let gameSettings: GameSettings = defaultGameSettings();
 let worldBase: WorldBase = defaultWorldBase(turnId);
 let currentTurnStartedAtMs = Date.now();
 let isResolvingTurnNow = false;
-const populationById = new Map<string, PopulationPop>();
-const populationPopIdsByCountry = new Map<string, Set<string>>();
-const populationPopIdsByProvince = new Map<string, Set<string>>();
+const populationById = new Map<number, PopulationPop>();
+const populationPopIdsByCountry = new Map<string, Set<number>>();
+const populationPopIdsByProvince = new Map<string, Set<number>>();
 const populationTotalSizeByCountry = new Map<string, number>();
 
 function indexPopulationPop(pop: PopulationPop): void {
   populationById.set(pop.id, pop);
-  const byCountry = populationPopIdsByCountry.get(pop.countryId) ?? new Set<string>();
+  const byCountry = populationPopIdsByCountry.get(pop.countryId) ?? new Set<number>();
   byCountry.add(pop.id);
   populationPopIdsByCountry.set(pop.countryId, byCountry);
-  const byProvince = populationPopIdsByProvince.get(pop.provinceId) ?? new Set<string>();
+  const byProvince = populationPopIdsByProvince.get(pop.provinceId) ?? new Set<number>();
   byProvince.add(pop.id);
   populationPopIdsByProvince.set(pop.provinceId, byProvince);
   populationTotalSizeByCountry.set(
@@ -813,7 +829,7 @@ function upsertPopulationPop(pop: PopulationPop): void {
   indexPopulationPop(pop);
 }
 
-function removePopulationPop(popId: string): PopulationPop | null {
+function removePopulationPop(popId: number): PopulationPop | null {
   const prev = populationById.get(popId);
   if (!prev) return null;
   unindexPopulationPop(prev);
@@ -822,6 +838,7 @@ function removePopulationPop(popId: string): PopulationPop | null {
 
 function replaceAllPopulationPops(pops: PopulationPop[]): void {
   gameSettings.population.pops = pops;
+  gameSettings.population.nextPopId = pops.reduce((maxId, pop) => Math.max(maxId, pop.id + 1), 1);
   rebuildPopulationIndexes();
 }
 
@@ -868,6 +885,12 @@ function parseAndApplyPersistentState(input: unknown): boolean {
   if (parsed.gameSettings && typeof parsed.gameSettings === "object") {
     const next = parsed.gameSettings as Partial<GameSettings>;
     const defaults = defaultGameSettings();
+    const normalizedPopulation = normalizePopulationPops(
+      (next as Partial<{ population?: { pops?: unknown } }>).population?.pops,
+      typeof (next as Partial<{ population?: { nextPopId?: unknown } }>).population?.nextPopId === "number"
+        ? Number((next as Partial<{ population?: { nextPopId?: unknown } }>).population?.nextPopId)
+        : defaults.population.nextPopId,
+    );
     const civilopediaEntries = normalizeCivilopediaEntries((next as Partial<{ civilopedia?: { entries?: unknown } }>).civilopedia?.entries);
     gameSettings = {
       content: {
@@ -883,7 +906,12 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         entries: civilopediaEntries,
       },
       population: {
-        pops: normalizePopulationPops((next as Partial<{ population?: { pops?: unknown } }>).population?.pops),
+        nextPopId: normalizedPopulation.nextPopId,
+        maxGroupsPerProvince:
+          typeof next.population?.maxGroupsPerProvince === "number"
+            ? Math.max(1, Math.floor(next.population.maxGroupsPerProvince))
+            : defaults.population.maxGroupsPerProvince,
+        pops: normalizedPopulation.pops,
       },
       economy: {
         baseDucatsPerTurn:
@@ -2587,6 +2615,11 @@ const gameSettingsSchema = z.object({
       ducatsCostPer1000Km2: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
     .optional(),
+  population: z
+    .object({
+      maxGroupsPerProvince: z.coerce.number().int().min(1).max(200).optional(),
+    })
+    .optional(),
   customization: z
     .object({
       renameDucats: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
@@ -3365,7 +3398,27 @@ function getCountryPopulationStats(countryId: string): {
   byRace: Array<{ id: string; popCount: number; totalSize: number }>;
   byProvince: Array<{ id: string; popCount: number; totalSize: number }>;
 } {
-  const ids = populationPopIdsByCountry.get(countryId) ?? new Set<string>();
+  const topNLimit = Math.max(1, Math.floor(gameSettings.population.maxGroupsPerProvince || DEFAULT_POPULATION_MAX_GROUPS_PER_PROVINCE));
+  const applyTopNWithOther = (
+    rows: Array<{ id: string; popCount: number; totalSize: number }>,
+    otherId: string,
+  ): Array<{ id: string; popCount: number; totalSize: number }> => {
+    if (rows.length <= topNLimit) return rows;
+    const kept = rows.slice(0, topNLimit);
+    const folded = rows.slice(topNLimit).reduce(
+      (acc, row) => {
+        acc.popCount += row.popCount;
+        acc.totalSize += row.totalSize;
+        return acc;
+      },
+      { id: otherId, popCount: 0, totalSize: 0 },
+    );
+    if (folded.popCount > 0 || folded.totalSize > 0) {
+      kept.push(folded);
+    }
+    return kept;
+  };
+  const ids = populationPopIdsByCountry.get(countryId) ?? new Set<number>();
   const aggregate = <K extends string>(rows: Map<K, { popCount: number; totalSize: number }>) =>
     [...rows.entries()]
       .map(([id, value]) => ({ id, ...value }))
@@ -3399,10 +3452,10 @@ function getCountryPopulationStats(countryId: string): {
     countryId,
     totalSize,
     popCount,
-    byCulture: aggregate(byCulture),
-    byReligion: aggregate(byReligion),
-    byRace: aggregate(byRace),
-    byProvince: aggregate(byProvince),
+    byCulture: applyTopNWithOther(aggregate(byCulture), "__other_cultures__"),
+    byReligion: applyTopNWithOther(aggregate(byReligion), "__other_religions__"),
+    byRace: applyTopNWithOther(aggregate(byRace), "__other_races__"),
+    byProvince: applyTopNWithOther(aggregate(byProvince), "__other_provinces__"),
   };
 }
 
@@ -3415,7 +3468,7 @@ function readPopulationRows(params: {
   const byCountry = params.countryId ? populationPopIdsByCountry.get(params.countryId) ?? null : null;
   const byProvince = params.provinceId ? populationPopIdsByProvince.get(params.provinceId) ?? null : null;
 
-  let candidateIds: string[];
+  let candidateIds: number[];
   if (byCountry && byProvince) {
     const [small, large] = byCountry.size <= byProvince.size ? [byCountry, byProvince] : [byProvince, byCountry];
     candidateIds = [];
@@ -3532,7 +3585,7 @@ app.post("/admin/population/pops", async (req, res) => {
 
   const now = new Date().toISOString();
   const pop: PopulationPop = {
-    id: randomUUID(),
+    id: gameSettings.population.nextPopId++,
     countryId: parsed.data.countryId,
     provinceId: parsed.data.provinceId,
     size: Math.max(1, Math.floor(parsed.data.size)),
@@ -3560,7 +3613,10 @@ app.patch("/admin/population/pops/:popId", async (req, res) => {
   if (Object.keys(parsed.data).length === 0) {
     return res.status(400).json({ error: "EMPTY_PAYLOAD" });
   }
-  const popId = String(req.params.popId);
+  const popId = Number(req.params.popId);
+  if (!Number.isInteger(popId) || popId < 1) {
+    return res.status(400).json({ error: "INVALID_POP_ID" });
+  }
   const popIndex = gameSettings.population.pops.findIndex((item) => item.id === popId);
   if (popIndex < 0) {
     return res.status(404).json({ error: "POP_NOT_FOUND" });
@@ -3604,7 +3660,10 @@ app.delete("/admin/population/pops/:popId", async (req, res) => {
   if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
-  const popId = String(req.params.popId);
+  const popId = Number(req.params.popId);
+  if (!Number.isInteger(popId) || popId < 1) {
+    return res.status(400).json({ error: "INVALID_POP_ID" });
+  }
   const popIndex = gameSettings.population.pops.findIndex((item) => item.id === popId);
   if (popIndex < 0) {
     return res.status(404).json({ error: "POP_NOT_FOUND" });
@@ -3663,7 +3722,7 @@ app.post("/admin/population/generate", async (req, res) => {
   const generated: PopulationPop[] = [];
   for (let i = 0; i < parsed.data.count; i += 1) {
     const pop: PopulationPop = {
-      id: randomUUID(),
+      id: gameSettings.population.nextPopId++,
       countryId: countryPool[randomIntInclusive(0, countryPool.length - 1)]!,
       provinceId: provincePool[randomIntInclusive(0, provincePool.length - 1)]!,
       size: randomIntInclusive(minSize, maxSize),
@@ -3680,6 +3739,23 @@ app.post("/admin/population/generate", async (req, res) => {
   savePersistentState();
   return res.json({
     createdCount: generated.length,
+    total: gameSettings.population.pops.length,
+    summaryByCountry: getPopulationSummary(),
+  });
+});
+
+app.post("/admin/population/clear", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const removedCount = gameSettings.population.pops.length;
+  replaceAllPopulationPops([]);
+  savePersistentState();
+  return res.json({
+    ok: true,
+    removedCount,
     total: gameSettings.population.pops.length,
     summaryByCountry: getPopulationSummary(),
   });
@@ -3776,6 +3852,13 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
   }
 
+  const nextPopulation = parsed.data.population;
+  if (nextPopulation) {
+    if (typeof nextPopulation.maxGroupsPerProvince === "number") {
+      gameSettings.population.maxGroupsPerProvince = nextPopulation.maxGroupsPerProvince;
+    }
+  }
+
   const nextRegistration = parsed.data.registration;
   if (nextRegistration) {
     if (typeof nextRegistration.requireAdminApproval === "boolean") {
@@ -3830,6 +3913,7 @@ app.patch("/admin/game-settings", async (req, res) => {
   const changedSections = [
     parsed.data.economy ? "экономика" : null,
     parsed.data.colonization ? "колонизация" : null,
+    parsed.data.population ? "население" : null,
     parsed.data.customization ? "кастомизация" : null,
     parsed.data.eventLog ? "журнал событий" : null,
     parsed.data.turnTimer ? "таймер хода" : null,

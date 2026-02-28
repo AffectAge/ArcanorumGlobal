@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import {
   adminBroadcastUiNotification,
+  adminClearPopulation,
   adminCreatePopulationPop,
   adminDeletePopulationPop,
   adminDeleteCountry,
@@ -83,7 +84,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [populationGenerateRaceId, setPopulationGenerateRaceId] = useState("");
   const [populationItems, setPopulationItems] = useState<PopulationItem[]>([]);
   const [populationSearch, setPopulationSearch] = useState("");
-  const [selectedPopulationId, setSelectedPopulationId] = useState("");
+  const [selectedPopulationId, setSelectedPopulationId] = useState<number | null>(null);
   const [populationDraft, setPopulationDraft] = useState<{
     countryId: string;
     provinceId: string;
@@ -122,7 +123,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       const countryName = countries.find((country) => country.id === item.countryId)?.name ?? item.countryId;
       const provinceName = provinces.find((province) => province.id === item.provinceId)?.name ?? item.provinceId;
       return (
-        item.id.toLowerCase().includes(q) ||
+        String(item.id).toLowerCase().includes(q) ||
         countryName.toLowerCase().includes(q) ||
         provinceName.toLowerCase().includes(q)
       );
@@ -465,7 +466,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       setSelectedPopulationId(data.items[0].id);
     }
     if (!data.items?.length) {
-      setSelectedPopulationId("");
+      setSelectedPopulationId(null);
     }
   };
 
@@ -496,6 +497,24 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       toast.success(`Сгенерировано POP: ${result.createdCount}`);
     } catch {
       toast.error("Не удалось сгенерировать население");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearPopulation = async () => {
+    const confirmed = window.confirm("Удалить всё население (все POP) из мира?");
+    if (!confirmed) return;
+    setSaving(true);
+    try {
+      const result = await adminClearPopulation(token);
+      setPopulationSummary(result.summaryByCountry ?? []);
+      setPopulationTotal(result.total ?? 0);
+      setPopulationItems([]);
+      setSelectedPopulationId(null);
+      toast.success(`Удалено POP: ${result.removedCount}`);
+    } catch {
+      toast.error("Не удалось удалить всё население");
     } finally {
       setSaving(false);
     }
@@ -1076,6 +1095,14 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                           className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
                         >
                           Сгенерировать население
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearPopulation}
+                          disabled={saving}
+                          className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
+                        >
+                          Удалить всё население
                         </button>
                         <button
                           type="button"

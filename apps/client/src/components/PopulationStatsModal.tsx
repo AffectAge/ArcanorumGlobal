@@ -34,6 +34,12 @@ const OVERVIEW_SUBSECTIONS: Array<{ id: StatsSubsection; label: string; icon: ty
   { id: "religions", label: "Религии", icon: ScrollText },
   { id: "races", label: "Расы", icon: UserRound },
 ];
+const DERIVED_OTHER_LABELS = new Map<string, string>([
+  ["__other_provinces__", "Другие провинции"],
+  ["__other_cultures__", "Другие культуры"],
+  ["__other_religions__", "Другие религии"],
+  ["__other_races__", "Другие расы"],
+]);
 
 function SectionList({
   title,
@@ -52,7 +58,7 @@ function SectionList({
       <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1">
         {rows.map((row) => (
           <div key={row.id} className="rounded-md border border-white/10 bg-black/25 px-2 py-2 text-xs text-slate-200">
-            <div className="text-slate-100">{nameById.get(row.id) ?? row.id}</div>
+            <div className="text-slate-100">{DERIVED_OTHER_LABELS.get(row.id) ?? nameById.get(row.id) ?? row.id}</div>
             <div className="mt-1 text-slate-400">POP: {new Intl.NumberFormat("ru-RU").format(row.popCount)}</div>
             <div className="text-slate-400">Население: {new Intl.NumberFormat("ru-RU").format(row.totalSize)}</div>
             <div className="mt-2">

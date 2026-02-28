@@ -280,7 +280,7 @@ export async function adminCreatePopulationPop(
 
 export async function adminUpdatePopulationPop(
   token: string,
-  popId: string,
+  popId: number,
   payload: Partial<{
     countryId: string;
     provinceId: string;
@@ -304,7 +304,7 @@ export async function adminUpdatePopulationPop(
 
 export async function adminDeletePopulationPop(
   token: string,
-  popId: string,
+  popId: number,
 ): Promise<{ ok: true; total: number; summaryByCountry: PopulationSummaryItem[] }> {
   const response = await fetch(`${API}/admin/population/pops/${encodeURIComponent(popId)}`, {
     method: "DELETE",
@@ -340,6 +340,20 @@ export async function adminGeneratePopulation(
     throw new Error(err.error ?? "ADMIN_POPULATION_GENERATE_FAILED");
   }
   return (await response.json()) as { createdCount: number; total: number; summaryByCountry: PopulationSummaryItem[] };
+}
+
+export async function adminClearPopulation(
+  token: string,
+): Promise<{ ok: true; removedCount: number; total: number; summaryByCountry: PopulationSummaryItem[] }> {
+  const response = await fetch(`${API}/admin/population/clear`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "ADMIN_POPULATION_CLEAR_FAILED");
+  }
+  return (await response.json()) as { ok: true; removedCount: number; total: number; summaryByCountry: PopulationSummaryItem[] };
 }
 
 export async function fetchPopulationCountryStats(
@@ -606,6 +620,9 @@ export async function markUiNotificationViewed(token: string, notificationId: st
 }
 
 export type GameSettings = {
+  population: {
+    maxGroupsPerProvince: number;
+  };
   economy: {
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
@@ -829,6 +846,7 @@ export async function updateGameSettings(
   payload: {
     economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
+    population?: { maxGroupsPerProvince?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
     registration?: { requireAdminApproval?: boolean };
     eventLog?: { retentionTurns?: number };

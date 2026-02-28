@@ -26,7 +26,7 @@ export type ResourceTotals = {
 };
 
 export type PopulationPop = {
-  id: string;
+  id: number;
   countryId: string;
   provinceId: string;
   size: number;
