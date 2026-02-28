@@ -39,20 +39,43 @@ function SectionList({
   title,
   rows,
   nameById,
+  totalPopulation,
 }: {
   title: string;
   rows: StatsRow[];
   nameById: Map<string, string>;
+  totalPopulation: number;
 }) {
   return (
-    <div className="panel-border rounded-xl bg-black/20 p-3">
+    <div className="panel-border flex h-full min-h-0 flex-col rounded-xl bg-black/20 p-3">
       <div className="mb-2 text-xs uppercase tracking-wide text-white/50">{title}</div>
-      <div className="space-y-2">
-        {rows.slice(0, 16).map((row) => (
+      <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+        {rows.map((row) => (
           <div key={row.id} className="rounded-md border border-white/10 bg-black/25 px-2 py-2 text-xs text-slate-200">
             <div className="text-slate-100">{nameById.get(row.id) ?? row.id}</div>
-            <div className="text-slate-400">POP: {new Intl.NumberFormat("ru-RU").format(row.popCount)}</div>
+            <div className="mt-1 text-slate-400">POP: {new Intl.NumberFormat("ru-RU").format(row.popCount)}</div>
             <div className="text-slate-400">Население: {new Intl.NumberFormat("ru-RU").format(row.totalSize)}</div>
+            <div className="mt-2">
+              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                <span>Доля населения</span>
+                <span className="font-medium text-arc-accent">
+                  {totalPopulation > 0
+                    ? `${((row.totalSize / totalPopulation) * 100).toFixed(1)}%`
+                    : "0.0%"}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-white/10">
+                <div
+                  className="h-1.5 rounded-full bg-arc-accent/80 transition-all"
+                  style={{
+                    width: `${Math.max(
+                      0,
+                      Math.min(100, totalPopulation > 0 ? (row.totalSize / totalPopulation) * 100 : 0),
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
           </div>
         ))}
         {rows.length === 0 && <div className="text-xs text-slate-500">Нет данных</div>}
@@ -123,24 +146,52 @@ export function PopulationStatsModal({ open, token, countryId, onClose }: Props)
 
     if (activeSubsection === "provinces") {
       return (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid h-full min-h-0 gap-3 md:grid-cols-2">
           <div className="panel-border rounded-xl bg-black/20 p-4 text-sm text-slate-300">
             <div className="mb-2 text-xs uppercase tracking-wide text-white/50">Общая статистика</div>
             <div>Страна: <span className="text-slate-100">{countryNameById.get(countryId) ?? countryId}</span></div>
             <div className="mt-1">POP: <span className="text-slate-100">{new Intl.NumberFormat("ru-RU").format(stats.popCount)}</span></div>
             <div className="mt-1">Население: <span className="text-slate-100">{new Intl.NumberFormat("ru-RU").format(stats.totalSize)}</span></div>
           </div>
-          <SectionList title="Распределение по провинциям" rows={stats.byProvince} nameById={provinceNameById} />
+          <div className="min-h-0">
+            <SectionList
+              title="Распределение по провинциям"
+              rows={stats.byProvince}
+              nameById={provinceNameById}
+              totalPopulation={stats.totalSize}
+            />
+          </div>
         </div>
       );
     }
     if (activeSubsection === "cultures") {
-      return <SectionList title="Распределение по культурам" rows={stats.byCulture} nameById={cultureNameById} />;
+      return (
+        <SectionList
+          title="Распределение по культурам"
+          rows={stats.byCulture}
+          nameById={cultureNameById}
+          totalPopulation={stats.totalSize}
+        />
+      );
     }
     if (activeSubsection === "religions") {
-      return <SectionList title="Распределение по религиям" rows={stats.byReligion} nameById={religionNameById} />;
+      return (
+        <SectionList
+          title="Распределение по религиям"
+          rows={stats.byReligion}
+          nameById={religionNameById}
+          totalPopulation={stats.totalSize}
+        />
+      );
     }
-    return <SectionList title="Распределение по расам" rows={stats.byRace} nameById={raceNameById} />;
+    return (
+      <SectionList
+        title="Распределение по расам"
+        rows={stats.byRace}
+        nameById={raceNameById}
+        totalPopulation={stats.totalSize}
+      />
+    );
   };
 
   return (
@@ -177,7 +228,35 @@ export function PopulationStatsModal({ open, token, countryId, onClose }: Props)
             </div>
 
             {loading ? (
-              <div className="text-sm text-slate-300">Загрузка статистики...</div>
+              <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[260px_1fr]">
+                <aside className="arc-scrollbar panel-border rounded-xl bg-black/25 p-2 overflow-auto">
+                  <div className="mb-2 h-4 w-24 animate-pulse rounded bg-white/10" />
+                  <div className="space-y-2">
+                    {[0, 1, 2].map((i) => (
+                      <div key={i} className="h-10 w-full animate-pulse rounded-lg border border-white/10 bg-black/20" />
+                    ))}
+                  </div>
+                </aside>
+                <section className="arc-scrollbar panel-border min-h-0 rounded-xl bg-black/25 p-4 overflow-auto">
+                  <div className="mb-4 flex items-center gap-5 border-b border-white/10 px-1 pb-2">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div key={i} className="h-4 w-20 animate-pulse rounded bg-white/10" />
+                    ))}
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div key={i} className="panel-border rounded-xl bg-black/20 p-3">
+                        <div className="space-y-2">
+                          <div className="h-3 w-24 animate-pulse rounded bg-white/10" />
+                          <div className="h-3 w-40 animate-pulse rounded bg-white/10" />
+                          <div className="h-3 w-32 animate-pulse rounded bg-white/10" />
+                          <div className="h-1.5 w-full animate-pulse rounded bg-white/10" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
             ) : (
               <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[260px_1fr]">
                 <aside className="arc-scrollbar panel-border rounded-xl bg-black/25 p-2 overflow-auto">
@@ -199,7 +278,7 @@ export function PopulationStatsModal({ open, token, countryId, onClose }: Props)
                   ))}
                 </aside>
 
-                <section className="arc-scrollbar panel-border min-h-0 rounded-xl bg-black/25 p-4 overflow-auto">
+                <section className="panel-border flex min-h-0 flex-col rounded-xl bg-black/25 p-4 overflow-hidden">
                   <div className="mb-4 flex items-center gap-5 border-b border-white/10 px-1">
                     {OVERVIEW_SUBSECTIONS.map((subsection) => (
                       <button
@@ -217,7 +296,7 @@ export function PopulationStatsModal({ open, token, countryId, onClose }: Props)
                       </button>
                     ))}
                   </div>
-                  {renderSection()}
+                  <div className="min-h-0 flex-1">{renderSection()}</div>
                 </section>
               </div>
             )}
