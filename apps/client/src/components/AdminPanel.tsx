@@ -75,6 +75,12 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [populationGenerateCount, setPopulationGenerateCount] = useState(100);
   const [populationGenerateMinSize, setPopulationGenerateMinSize] = useState(100);
   const [populationGenerateMaxSize, setPopulationGenerateMaxSize] = useState(2000);
+  const [populationGenerateProvinceMode, setPopulationGenerateProvinceMode] = useState<"all" | "single">("all");
+  const [populationGenerateProvinceId, setPopulationGenerateProvinceId] = useState("");
+  const [populationGenerateTraitsMode, setPopulationGenerateTraitsMode] = useState<"random" | "fixed">("random");
+  const [populationGenerateCultureId, setPopulationGenerateCultureId] = useState("");
+  const [populationGenerateReligionId, setPopulationGenerateReligionId] = useState("");
+  const [populationGenerateRaceId, setPopulationGenerateRaceId] = useState("");
   const [populationItems, setPopulationItems] = useState<PopulationItem[]>([]);
   const [populationSearch, setPopulationSearch] = useState("");
   const [selectedPopulationId, setSelectedPopulationId] = useState("");
@@ -235,6 +241,30 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       raceId: selectedPopulation.raceId,
     });
   }, [contentCultures, contentRaces, contentReligions, countries, provinces, selectedPopulation]);
+
+  useEffect(() => {
+    if (!populationGenerateProvinceId && provinces.length > 0) {
+      setPopulationGenerateProvinceId(provinces[0].id);
+    }
+    if (!populationGenerateCultureId && contentCultures.length > 0) {
+      setPopulationGenerateCultureId(contentCultures[0].id);
+    }
+    if (!populationGenerateReligionId && contentReligions.length > 0) {
+      setPopulationGenerateReligionId(contentReligions[0].id);
+    }
+    if (!populationGenerateRaceId && contentRaces.length > 0) {
+      setPopulationGenerateRaceId(contentRaces[0].id);
+    }
+  }, [
+    contentCultures,
+    contentReligions,
+    contentRaces,
+    populationGenerateCultureId,
+    populationGenerateProvinceId,
+    populationGenerateRaceId,
+    populationGenerateReligionId,
+    provinces,
+  ]);
 
   useEffect(() => {
     if (!open || !initialProvinceId) {
@@ -440,15 +470,29 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   };
 
   const generatePopulation = async () => {
+    if (populationGenerateProvinceMode === "single" && !populationGenerateProvinceId) {
+      toast.error("Выберите провинцию для генерации");
+      return;
+    }
+    if (
+      populationGenerateTraitsMode === "fixed" &&
+      (!populationGenerateCultureId || !populationGenerateReligionId || !populationGenerateRaceId)
+    ) {
+      toast.error("Для фиксированных атрибутов выберите культуру, религию и расу");
+      return;
+    }
     setSaving(true);
     try {
       const result = await adminGeneratePopulation(token, {
         count: Math.max(1, Math.floor(populationGenerateCount)),
         minSize: Math.max(1, Math.floor(populationGenerateMinSize)),
         maxSize: Math.max(1, Math.floor(populationGenerateMaxSize)),
+        provinceId: populationGenerateProvinceMode === "single" ? populationGenerateProvinceId : undefined,
+        cultureId: populationGenerateTraitsMode === "fixed" ? populationGenerateCultureId : undefined,
+        religionId: populationGenerateTraitsMode === "fixed" ? populationGenerateReligionId : undefined,
+        raceId: populationGenerateTraitsMode === "fixed" ? populationGenerateRaceId : undefined,
       });
-      setPopulationSummary(result.summaryByCountry ?? []);
-      setPopulationTotal(result.total ?? 0);
+      await refreshPopulationSummary();
       toast.success(`Сгенерировано POP: ${result.createdCount}`);
     } catch {
       toast.error("Не удалось сгенерировать население");
@@ -878,6 +922,116 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
 
                       <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300">
                         Всего POP: <span className="text-slate-100">{new Intl.NumberFormat("ru-RU").format(populationTotal)}</span>
+                      </div>
+
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Охват провинций</div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPopulationGenerateProvinceMode("all")}
+                            className={`rounded-lg border px-3 py-1.5 text-xs transition ${
+                              populationGenerateProvinceMode === "all"
+                                ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
+                                : "border-white/10 bg-black/25 text-slate-300 hover:text-white"
+                            }`}
+                          >
+                            Все провинции мира
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPopulationGenerateProvinceMode("single")}
+                            className={`rounded-lg border px-3 py-1.5 text-xs transition ${
+                              populationGenerateProvinceMode === "single"
+                                ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
+                                : "border-white/10 bg-black/25 text-slate-300 hover:text-white"
+                            }`}
+                          >
+                            Одна провинция
+                          </button>
+                        </div>
+                        {populationGenerateProvinceMode === "single" && (
+                          <div className="mt-3">
+                            <label className="mb-1 block text-xs text-slate-300">Провинция для генерации</label>
+                            <select
+                              value={populationGenerateProvinceId}
+                              onChange={(e) => setPopulationGenerateProvinceId(e.target.value)}
+                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                            >
+                              {provinces.map((province) => (
+                                <option key={province.id} value={province.id}>{province.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Комбинации культуры / религии / расы</div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPopulationGenerateTraitsMode("random")}
+                            className={`rounded-lg border px-3 py-1.5 text-xs transition ${
+                              populationGenerateTraitsMode === "random"
+                                ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
+                                : "border-white/10 bg-black/25 text-slate-300 hover:text-white"
+                            }`}
+                          >
+                            Случайные комбинации
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPopulationGenerateTraitsMode("fixed")}
+                            className={`rounded-lg border px-3 py-1.5 text-xs transition ${
+                              populationGenerateTraitsMode === "fixed"
+                                ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
+                                : "border-white/10 bg-black/25 text-slate-300 hover:text-white"
+                            }`}
+                          >
+                            Фиксированные атрибуты
+                          </button>
+                        </div>
+                        {populationGenerateTraitsMode === "fixed" && (
+                          <div className="mt-3 grid gap-3 md:grid-cols-3">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Культура</label>
+                              <select
+                                value={populationGenerateCultureId}
+                                onChange={(e) => setPopulationGenerateCultureId(e.target.value)}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {contentCultures.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>{entry.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Религия</label>
+                              <select
+                                value={populationGenerateReligionId}
+                                onChange={(e) => setPopulationGenerateReligionId(e.target.value)}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {contentReligions.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>{entry.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Раса</label>
+                              <select
+                                value={populationGenerateRaceId}
+                                onChange={(e) => setPopulationGenerateRaceId(e.target.value)}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {contentRaces.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>{entry.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="grid gap-3 md:grid-cols-3">
