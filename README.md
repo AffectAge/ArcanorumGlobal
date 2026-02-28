@@ -59,11 +59,12 @@ npm run dev
 
 ## Население (POP)
 - Базовый контракт POP: `countryId`, `provinceId`, `size`, `cultureId`, `religionId`, `raceId`.
-- Пользовательская панель населения открывается из левой навигации (`Население`).
+- Кнопка `Население` в левой навигации открывает статистику населения текущей страны.
 - Админ-инструменты:
   - `GET /admin/population/pops` — просмотр POP с фильтрами/лимитом.
   - `POST /admin/population/pops` / `PATCH /admin/population/pops/:popId` / `DELETE /admin/population/pops/:popId` — управление POP.
   - `POST /admin/population/generate` — массовая генерация POP.
+  - `GET /population/country-stats` — агрегированная статистика по стране (по культурам/религиям/расам/провинциям).
 
 ## Важно для Windows
 В текущем окружении запуск Vite может ломаться из пути с пробелом (`...\Ages 3`) из-за `esbuild` (`spawn EFTYPE`).
