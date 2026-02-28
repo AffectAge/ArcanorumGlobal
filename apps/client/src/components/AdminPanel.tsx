@@ -1,20 +1,29 @@
 import { Dialog } from "@headlessui/react";
 import { Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useState } from "react";
-import { BellRing, Check, ChevronDown, Flag, Map as MapIcon, Palette, RotateCcw, Shield, Trash2, Upload, X } from "lucide-react";
+import { BellRing, Check, ChevronDown, Flag, Map as MapIcon, Palette, RotateCcw, Shield, Trash2, Upload, Users, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { Country } from "@arcanorum/shared";
 import {
   adminBroadcastUiNotification,
+  adminCreatePopulationPop,
+  adminDeletePopulationPop,
   adminDeleteCountry,
+  adminFetchPopulation,
+  adminGeneratePopulation,
   adminResetProvinceColonizationCostToAuto,
   adminSetCountryPunishment,
   adminUpdateCountry,
+  adminUpdatePopulationPop,
   adminUpdateProvince,
+  fetchContentEntries,
   fetchAdminProvinces,
   fetchCountries,
   type AdminProvinceItem,
+  type ContentEntry,
+  type PopulationItem,
+  type PopulationSummaryItem,
 } from "../lib/api";
 
 type Props = {
@@ -29,6 +38,7 @@ type Props = {
 const categories = [
   { id: "countries", label: "Управление странами", icon: Flag },
   { id: "provinces", label: "Провинции / Колонизация", icon: MapIcon },
+  { id: "population", label: "Управление населением", icon: Users },
   { id: "notifications", label: "Рассылка уведомлений", icon: BellRing },
 ] as const;
 
@@ -60,6 +70,32 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [broadcastCategory, setBroadcastCategory] = useState<"system" | "politics" | "economy">("system");
   const [broadcastTitle, setBroadcastTitle] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
+  const [populationSummary, setPopulationSummary] = useState<PopulationSummaryItem[]>([]);
+  const [populationTotal, setPopulationTotal] = useState(0);
+  const [populationGenerateCount, setPopulationGenerateCount] = useState(100);
+  const [populationGenerateMinSize, setPopulationGenerateMinSize] = useState(100);
+  const [populationGenerateMaxSize, setPopulationGenerateMaxSize] = useState(2000);
+  const [populationItems, setPopulationItems] = useState<PopulationItem[]>([]);
+  const [populationSearch, setPopulationSearch] = useState("");
+  const [selectedPopulationId, setSelectedPopulationId] = useState("");
+  const [populationDraft, setPopulationDraft] = useState<{
+    countryId: string;
+    provinceId: string;
+    size: number;
+    cultureId: string;
+    religionId: string;
+    raceId: string;
+  }>({
+    countryId: "",
+    provinceId: "",
+    size: 1000,
+    cultureId: "",
+    religionId: "",
+    raceId: "",
+  });
+  const [contentCultures, setContentCultures] = useState<ContentEntry[]>([]);
+  const [contentReligions, setContentReligions] = useState<ContentEntry[]>([]);
+  const [contentRaces, setContentRaces] = useState<ContentEntry[]>([]);
 
   const selectedCountry = useMemo(() => countries.find((c) => c.id === selectedCountryId) ?? null, [countries, selectedCountryId]);
   const selectedProvince = useMemo(() => provinces.find((p) => p.id === selectedProvinceId) ?? null, [provinces, selectedProvinceId]);
@@ -69,6 +105,23 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     if (!q) return provinces;
     return provinces.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
   }, [provinceSearch, provinces]);
+  const selectedPopulation = useMemo(
+    () => populationItems.find((item) => item.id === selectedPopulationId) ?? null,
+    [populationItems, selectedPopulationId],
+  );
+  const filteredPopulation = useMemo(() => {
+    const q = populationSearch.trim().toLowerCase();
+    if (!q) return populationItems;
+    return populationItems.filter((item) => {
+      const countryName = countries.find((country) => country.id === item.countryId)?.name ?? item.countryId;
+      const provinceName = provinces.find((province) => province.id === item.provinceId)?.name ?? item.provinceId;
+      return (
+        item.id.toLowerCase().includes(q) ||
+        countryName.toLowerCase().includes(q) ||
+        provinceName.toLowerCase().includes(q)
+      );
+    });
+  }, [countries, populationItems, populationSearch, provinces]);
 
   const punishmentStatus = useMemo(() => {
     if (!selectedCountry) {
@@ -103,13 +156,22 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     let cancelled = false;
     setLoading(true);
 
-    Promise.all([fetchCountries(), fetchAdminProvinces(token)])
-      .then(([countryList, provinceList]) => {
+    Promise.all([
+      fetchCountries(),
+      fetchAdminProvinces(token),
+      fetchContentEntries("cultures"),
+      fetchContentEntries("religions"),
+      fetchContentEntries("races"),
+    ])
+      .then(([countryList, provinceList, culturesList, religionsList, racesList]) => {
         if (cancelled) {
           return;
         }
         setCountries(countryList);
         setProvinces(provinceList);
+        setContentCultures(culturesList);
+        setContentReligions(religionsList);
+        setContentRaces(racesList);
         if (!selectedCountryId && countryList.length > 0) {
           setSelectedCountryId(countryList[0].id);
         }
@@ -151,6 +213,28 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     setProvinceColonizationCost(selectedProvince.colonizationCost);
     setProvinceColonizationDisabled(selectedProvince.colonizationDisabled);
   }, [selectedProvince]);
+
+  useEffect(() => {
+    if (!selectedPopulation) {
+      setPopulationDraft((prev) => ({
+        ...prev,
+        countryId: countries[0]?.id ?? "",
+        provinceId: provinces[0]?.id ?? "",
+        cultureId: contentCultures[0]?.id ?? "",
+        religionId: contentReligions[0]?.id ?? "",
+        raceId: contentRaces[0]?.id ?? "",
+      }));
+      return;
+    }
+    setPopulationDraft({
+      countryId: selectedPopulation.countryId,
+      provinceId: selectedPopulation.provinceId,
+      size: selectedPopulation.size,
+      cultureId: selectedPopulation.cultureId,
+      religionId: selectedPopulation.religionId,
+      raceId: selectedPopulation.raceId,
+    });
+  }, [contentCultures, contentRaces, contentReligions, countries, provinces, selectedPopulation]);
 
   useEffect(() => {
     if (!open || !initialProvinceId) {
@@ -341,6 +425,117 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
       setSaving(false);
     }
   };
+
+  const refreshPopulationSummary = async () => {
+    const data = await adminFetchPopulation(token, { limit: 500, offset: 0 });
+    setPopulationSummary(data.summaryByCountry ?? []);
+    setPopulationTotal(data.total ?? 0);
+    setPopulationItems(data.items ?? []);
+    if (data.items?.length && !data.items.some((item) => item.id === selectedPopulationId)) {
+      setSelectedPopulationId(data.items[0].id);
+    }
+    if (!data.items?.length) {
+      setSelectedPopulationId("");
+    }
+  };
+
+  const generatePopulation = async () => {
+    setSaving(true);
+    try {
+      const result = await adminGeneratePopulation(token, {
+        count: Math.max(1, Math.floor(populationGenerateCount)),
+        minSize: Math.max(1, Math.floor(populationGenerateMinSize)),
+        maxSize: Math.max(1, Math.floor(populationGenerateMaxSize)),
+      });
+      setPopulationSummary(result.summaryByCountry ?? []);
+      setPopulationTotal(result.total ?? 0);
+      toast.success(`Сгенерировано POP: ${result.createdCount}`);
+    } catch {
+      toast.error("Не удалось сгенерировать население");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createPopulationPop = async () => {
+    if (
+      !populationDraft.countryId ||
+      !populationDraft.provinceId ||
+      !populationDraft.cultureId ||
+      !populationDraft.religionId ||
+      !populationDraft.raceId
+    ) {
+      toast.error("Заполните все поля POP");
+      return;
+    }
+    setSaving(true);
+    try {
+      await adminCreatePopulationPop(token, {
+        countryId: populationDraft.countryId,
+        provinceId: populationDraft.provinceId,
+        size: Math.max(1, Math.floor(populationDraft.size)),
+        cultureId: populationDraft.cultureId,
+        religionId: populationDraft.religionId,
+        raceId: populationDraft.raceId,
+      });
+      await refreshPopulationSummary();
+      toast.success("POP создан");
+    } catch {
+      toast.error("Не удалось создать POP");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const savePopulationPop = async () => {
+    if (!selectedPopulation) return;
+    setSaving(true);
+    try {
+      await adminUpdatePopulationPop(token, selectedPopulation.id, {
+        countryId: populationDraft.countryId,
+        provinceId: populationDraft.provinceId,
+        size: Math.max(1, Math.floor(populationDraft.size)),
+        cultureId: populationDraft.cultureId,
+        religionId: populationDraft.religionId,
+        raceId: populationDraft.raceId,
+      });
+      await refreshPopulationSummary();
+      toast.success("POP обновлен");
+    } catch {
+      toast.error("Не удалось обновить POP");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deletePopulationPop = async () => {
+    if (!selectedPopulation) return;
+    const confirmed = window.confirm("Удалить выбранный POP?");
+    if (!confirmed) return;
+    setSaving(true);
+    try {
+      await adminDeletePopulationPop(token, selectedPopulation.id);
+      await refreshPopulationSummary();
+      toast.success("POP удален");
+    } catch {
+      toast.error("Не удалось удалить POP");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open || activeCategory !== "population") return;
+    let cancelled = false;
+    refreshPopulationSummary().catch(() => {
+      if (!cancelled) {
+        toast.error("Не удалось загрузить население");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCategory, open, token]);
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[120]">
@@ -671,6 +866,216 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                     </div>
                   )}
 
+                  {activeCategory === "population" && (
+                    <div className="space-y-4 rounded-lg border border-white/10 bg-black/25 p-4">
+                      <div className="flex items-center gap-2 text-sm text-slate-200">
+                        <Users size={16} className="text-arc-accent" />
+                        Управление населением
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        Полное управление POP: генерация, создание, редактирование и удаление.
+                      </div>
+
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300">
+                        Всего POP: <span className="text-slate-100">{new Intl.NumberFormat("ru-RU").format(populationTotal)}</span>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Количество</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={5000}
+                            value={populationGenerateCount}
+                            onChange={(e) => setPopulationGenerateCount(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Min размер</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={populationGenerateMinSize}
+                            onChange={(e) => setPopulationGenerateMinSize(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Max размер</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={populationGenerateMaxSize}
+                            onChange={(e) => setPopulationGenerateMaxSize(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={generatePopulation}
+                          disabled={saving}
+                          className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+                        >
+                          Сгенерировать население
+                        </button>
+                        <button
+                          type="button"
+                          onClick={createPopulationPop}
+                          disabled={saving}
+                          className="rounded-lg border border-arc-accent/30 bg-arc-accent/10 px-4 py-2 text-sm font-semibold text-arc-accent disabled:opacity-60"
+                        >
+                          Создать POP
+                        </button>
+                      </div>
+
+                      <div className="grid gap-3 lg:grid-cols-[360px_1fr]">
+                        <div className="space-y-3">
+                          <input
+                            value={populationSearch}
+                            onChange={(e) => setPopulationSearch(e.target.value)}
+                            placeholder="Поиск POP по стране/провинции/ID"
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-slate-100"
+                          />
+                          <div className="arc-scrollbar max-h-[420px] space-y-2 overflow-auto rounded-lg border border-white/10 bg-black/20 p-2">
+                            {filteredPopulation.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => setSelectedPopulationId(item.id)}
+                                className={`w-full rounded-md border px-2 py-2 text-left text-xs transition ${
+                                  selectedPopulationId === item.id
+                                    ? "border-arc-accent/50 bg-arc-accent/10 text-arc-accent"
+                                    : "border-white/10 bg-black/25 text-slate-200 hover:border-white/25"
+                                }`}
+                              >
+                                <div className="text-slate-100">{countries.find((country) => country.id === item.countryId)?.name ?? item.countryId}</div>
+                                <div className="text-slate-400">{provinces.find((province) => province.id === item.provinceId)?.name ?? item.provinceId}</div>
+                                <div className="text-slate-500">Размер: {new Intl.NumberFormat("ru-RU").format(item.size)}</div>
+                              </button>
+                            ))}
+                            {filteredPopulation.length === 0 && <div className="text-xs text-slate-500">POP не найден</div>}
+                          </div>
+                        </div>
+
+                        <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Страна</label>
+                              <select
+                                value={populationDraft.countryId}
+                                onChange={(e) => setPopulationDraft((prev) => ({ ...prev, countryId: e.target.value }))}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {countries.map((country) => (
+                                  <option key={country.id} value={country.id}>{country.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Провинция</label>
+                              <select
+                                value={populationDraft.provinceId}
+                                onChange={(e) => setPopulationDraft((prev) => ({ ...prev, provinceId: e.target.value }))}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {provinces.map((province) => (
+                                  <option key={province.id} value={province.id}>{province.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Культура</label>
+                              <select
+                                value={populationDraft.cultureId}
+                                onChange={(e) => setPopulationDraft((prev) => ({ ...prev, cultureId: e.target.value }))}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {contentCultures.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>{entry.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Религия</label>
+                              <select
+                                value={populationDraft.religionId}
+                                onChange={(e) => setPopulationDraft((prev) => ({ ...prev, religionId: e.target.value }))}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {contentReligions.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>{entry.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Раса</label>
+                              <select
+                                value={populationDraft.raceId}
+                                onChange={(e) => setPopulationDraft((prev) => ({ ...prev, raceId: e.target.value }))}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              >
+                                {contentRaces.map((entry) => (
+                                  <option key={entry.id} value={entry.id}>{entry.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Размер POP</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={populationDraft.size}
+                                onChange={(e) => setPopulationDraft((prev) => ({ ...prev, size: Math.max(1, Number(e.target.value) || 1) }))}
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={savePopulationPop}
+                              disabled={saving || !selectedPopulation}
+                              className="rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+                            >
+                              Сохранить POP
+                            </button>
+                            <button
+                              type="button"
+                              onClick={deletePopulationPop}
+                              disabled={saving || !selectedPopulation}
+                              className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-300 disabled:opacity-60"
+                            >
+                              Удалить POP
+                            </button>
+                          </div>
+
+                          <div className="space-y-2 border-t border-white/10 pt-3">
+                            {populationSummary.map((row) => (
+                              <div key={row.countryId} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-slate-300">
+                                <div className="text-slate-100">{countries.find((c) => c.id === row.countryId)?.name ?? row.countryId}</div>
+                                <div>POP: {new Intl.NumberFormat("ru-RU").format(row.popCount)}</div>
+                                <div>Население: {new Intl.NumberFormat("ru-RU").format(row.totalSize)}</div>
+                              </div>
+                            ))}
+                            {populationSummary.length === 0 && <div className="text-xs text-slate-500">Нет данных по населению</div>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {activeCategory === "countries" && (
                   <>
                   <div>
@@ -914,4 +1319,3 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     </Dialog>
   );
 }
-

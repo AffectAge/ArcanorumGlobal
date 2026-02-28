@@ -57,6 +57,14 @@ npm run dev
 - `GET /admin/world-delta-log/status` — состояние персистентного журнала дельт (БД и in-memory replay window).
 - `GET /admin/provinces?q=...&limit=...&offset=...` — список провинций с поиском и опциональной пагинацией.
 
+## Население (POP)
+- Базовый контракт POP: `countryId`, `provinceId`, `size`, `cultureId`, `religionId`, `raceId`.
+- Пользовательская панель населения открывается из левой навигации (`Население`).
+- Админ-инструменты:
+  - `GET /admin/population/pops` — просмотр POP с фильтрами/лимитом.
+  - `POST /admin/population/pops` / `PATCH /admin/population/pops/:popId` / `DELETE /admin/population/pops/:popId` — управление POP.
+  - `POST /admin/population/generate` — массовая генерация POP.
+
 ## Важно для Windows
 В текущем окружении запуск Vite может ломаться из пути с пробелом (`...\Ages 3`) из-за `esbuild` (`spawn EFTYPE`).
 Решение: перенести проект в путь без пробелов (например `C:\arcanorum`) и запускать оттуда.

@@ -18,6 +18,7 @@ import { EventLogPanel } from "./components/EventLogPanel";
 import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
+import { PopulationStatsModal } from "./components/PopulationStatsModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -73,6 +74,7 @@ export default function App() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [contentPanelOpen, setContentPanelOpen] = useState(false);
+  const [populationStatsOpen, setPopulationStatsOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
@@ -1115,7 +1117,13 @@ export default function App() {
             countryDetails={currentCountryDetails}
             turnTimer={turnTimerUi}
           />
-          <SideNav />
+          <SideNav
+            onSelect={(key) => {
+              if (key === "population") {
+                setPopulationStatsOpen(true);
+              }
+            }}
+          />
           <EventLogPanel
             entries={eventLog}
             currentCountryId={auth.countryId}
@@ -1132,6 +1140,15 @@ export default function App() {
           open={contentPanelOpen}
           token={auth.token}
           onClose={() => setContentPanelOpen(false)}
+        />
+      )}
+
+      {auth?.token && auth?.countryId && (
+        <PopulationStatsModal
+          open={populationStatsOpen}
+          token={auth.token}
+          countryId={auth.countryId}
+          onClose={() => setPopulationStatsOpen(false)}
         />
       )}
 
@@ -1343,9 +1360,6 @@ export default function App() {
     </div>
   );
 }
-
-
-
 
 
 

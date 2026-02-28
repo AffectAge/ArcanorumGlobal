@@ -1,4 +1,4 @@
-import type { Country, LoginPayload, ServerStatus, WorldBase, WsOutMessage } from "@arcanorum/shared";
+import type { Country, LoginPayload, PopulationCountrySummary, PopulationPop, ServerStatus, WorldBase, WsOutMessage } from "@arcanorum/shared";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -15,6 +15,17 @@ export type ContentCulture = {
 };
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind = "cultures" | "religions" | "professions" | "ideologies" | "races";
+export type PopulationItem = PopulationPop;
+export type PopulationSummaryItem = PopulationCountrySummary;
+export type PopulationCountryStats = {
+  countryId: string;
+  totalSize: number;
+  popCount: number;
+  byCulture: Array<{ id: string; popCount: number; totalSize: number }>;
+  byReligion: Array<{ id: string; popCount: number; totalSize: number }>;
+  byRace: Array<{ id: string; popCount: number; totalSize: number }>;
+  byProvince: Array<{ id: string; popCount: number; totalSize: number }>;
+};
 
 
 function withAssetBase(url?: string | null): string | null | undefined {
@@ -194,6 +205,158 @@ export async function adminDeleteContentEntry(token: string, kind: ContentEntryK
   }
   const data = (await response.json()) as { items: ContentEntry[] };
   return { items: data.items.map(normalizeContentEntry) };
+}
+
+export async function fetchPopulation(
+  token: string,
+  query?: { countryId?: string; provinceId?: string; limit?: number; offset?: number },
+): Promise<{ total: number; items: PopulationItem[]; summaryByCountry: PopulationSummaryItem[] }> {
+  const params = new URLSearchParams();
+  if (query?.countryId) params.set("countryId", query.countryId);
+  if (query?.provinceId) params.set("provinceId", query.provinceId);
+  if (query?.limit != null) params.set("limit", String(query.limit));
+  if (query?.offset != null) params.set("offset", String(query.offset));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API}/population/pops${suffix}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "POPULATION_FETCH_FAILED");
+  }
+  return (await response.json()) as {
+    total: number;
+    items: PopulationItem[];
+    summaryByCountry: PopulationSummaryItem[];
+  };
+}
+
+export async function adminFetchPopulation(
+  token: string,
+  query?: { countryId?: string; provinceId?: string; limit?: number; offset?: number },
+): Promise<{ total: number; items: PopulationItem[]; summaryByCountry: PopulationSummaryItem[] }> {
+  const params = new URLSearchParams();
+  if (query?.countryId) params.set("countryId", query.countryId);
+  if (query?.provinceId) params.set("provinceId", query.provinceId);
+  if (query?.limit != null) params.set("limit", String(query.limit));
+  if (query?.offset != null) params.set("offset", String(query.offset));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API}/admin/population/pops${suffix}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "ADMIN_POPULATION_FETCH_FAILED");
+  }
+  return (await response.json()) as {
+    total: number;
+    items: PopulationItem[];
+    summaryByCountry: PopulationSummaryItem[];
+  };
+}
+
+export async function adminCreatePopulationPop(
+  token: string,
+  payload: {
+    countryId: string;
+    provinceId: string;
+    size: number;
+    cultureId: string;
+    religionId: string;
+    raceId: string;
+  },
+): Promise<{ item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] }> {
+  const response = await fetch(`${API}/admin/population/pops`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "ADMIN_POPULATION_CREATE_FAILED");
+  }
+  return (await response.json()) as { item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] };
+}
+
+export async function adminUpdatePopulationPop(
+  token: string,
+  popId: string,
+  payload: Partial<{
+    countryId: string;
+    provinceId: string;
+    size: number;
+    cultureId: string;
+    religionId: string;
+    raceId: string;
+  }>,
+): Promise<{ item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] }> {
+  const response = await fetch(`${API}/admin/population/pops/${encodeURIComponent(popId)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "ADMIN_POPULATION_UPDATE_FAILED");
+  }
+  return (await response.json()) as { item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] };
+}
+
+export async function adminDeletePopulationPop(
+  token: string,
+  popId: string,
+): Promise<{ ok: true; total: number; summaryByCountry: PopulationSummaryItem[] }> {
+  const response = await fetch(`${API}/admin/population/pops/${encodeURIComponent(popId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "ADMIN_POPULATION_DELETE_FAILED");
+  }
+  return (await response.json()) as { ok: true; total: number; summaryByCountry: PopulationSummaryItem[] };
+}
+
+export async function adminGeneratePopulation(
+  token: string,
+  payload: Partial<{
+    countryId: string;
+    provinceId: string;
+    count: number;
+    minSize: number;
+    maxSize: number;
+    cultureId: string;
+    religionId: string;
+    raceId: string;
+  }>,
+): Promise<{ createdCount: number; total: number; summaryByCountry: PopulationSummaryItem[] }> {
+  const response = await fetch(`${API}/admin/population/generate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "ADMIN_POPULATION_GENERATE_FAILED");
+  }
+  return (await response.json()) as { createdCount: number; total: number; summaryByCountry: PopulationSummaryItem[] };
+}
+
+export async function fetchPopulationCountryStats(
+  token: string,
+  countryId?: string,
+): Promise<PopulationCountryStats> {
+  const params = new URLSearchParams();
+  if (countryId) params.set("countryId", countryId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API}/population/country-stats${suffix}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error ?? "POPULATION_COUNTRY_STATS_FAILED");
+  }
+  return (await response.json()) as PopulationCountryStats;
 }
 
 export async function adminUploadRacePortrait(

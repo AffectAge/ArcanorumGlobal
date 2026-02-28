@@ -25,6 +25,24 @@ export type ResourceTotals = {
   gold: number;
 };
 
+export type PopulationPop = {
+  id: string;
+  countryId: string;
+  provinceId: string;
+  size: number;
+  cultureId: string;
+  religionId: string;
+  raceId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PopulationCountrySummary = {
+  countryId: string;
+  totalSize: number;
+  popCount: number;
+};
+
 export type EventCategory = "system" | "colonization" | "politics" | "economy" | "military" | "diplomacy";
 export type EventPriority = "low" | "medium" | "high";
 export type EventVisibility = "public" | "private";
