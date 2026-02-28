@@ -266,6 +266,9 @@ const uiNotificationQueue: QueuedUiNotification[] = [];
 const ordersByTurn = new Map<number, Map<string, Order[]>>();
 const resolveReadyByTurn = new Map<number, Set<string>>();
 const activeColonizeProvincesByCountry = new Map<string, Set<string>>();
+const queuedColonizeProvincesByCountryByTurn = new Map<number, Map<string, Set<string>>>();
+const queuedBuildProvincesByCountryByTurn = new Map<number, Map<string, Set<string>>>();
+const economyTickCountryIds = new Set<string>();
 const COUNTRY_QUERY_CACHE_TTL_MS = 2_000;
 const countryQueryCache = new Map<string, { expiresAtMs: number; value: unknown }>();
 const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
@@ -929,6 +932,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     }
   }
 
+  rebuildTurnOrderIndexes();
+  rebuildEconomyTickCountryIndexFromWorldBase();
+
   return true;
 }
 
@@ -1180,8 +1186,26 @@ function ensureCountryInWorldBase(countryId: string): void {
       ducats: 20,
       gold: 80,
     };
+    economyTickCountryIds.add(countryId);
     savePersistentState();
+    return;
   }
+  economyTickCountryIds.add(countryId);
+}
+
+function rebuildEconomyTickCountryIndexFromWorldBase(): void {
+  economyTickCountryIds.clear();
+  for (const countryId of Object.keys(worldBase.resourcesByCountry)) {
+    economyTickCountryIds.add(countryId);
+  }
+}
+
+function addCountryToEconomyTick(countryId: string): void {
+  economyTickCountryIds.add(countryId);
+}
+
+function removeCountryFromEconomyTick(countryId: string): void {
+  economyTickCountryIds.delete(countryId);
 }
 
 function getProvinceAreaKm2(provinceId: string): number {
@@ -1362,6 +1386,75 @@ function removeCountryFromActiveColonizationIndex(countryId: string): void {
   activeColonizeProvincesByCountry.delete(countryId);
 }
 
+function addQueuedProvinceIndexEntry(
+  indexByTurn: Map<number, Map<string, Set<string>>>,
+  turn: number,
+  countryId: string,
+  provinceId: string,
+): void {
+  const byCountry = indexByTurn.get(turn) ?? new Map<string, Set<string>>();
+  const provinces = byCountry.get(countryId) ?? new Set<string>();
+  provinces.add(provinceId);
+  byCountry.set(countryId, provinces);
+  indexByTurn.set(turn, byCountry);
+}
+
+function removeQueuedProvinceIndexEntry(
+  indexByTurn: Map<number, Map<string, Set<string>>>,
+  turn: number,
+  countryId: string,
+  provinceId: string,
+): void {
+  const byCountry = indexByTurn.get(turn);
+  if (!byCountry) return;
+  const provinces = byCountry.get(countryId);
+  if (!provinces) return;
+  provinces.delete(provinceId);
+  if (provinces.size === 0) {
+    byCountry.delete(countryId);
+  }
+  if (byCountry.size === 0) {
+    indexByTurn.delete(turn);
+  }
+}
+
+function addOrderToTurnIndexes(order: Order): void {
+  if (order.type === "COLONIZE") {
+    addQueuedProvinceIndexEntry(queuedColonizeProvincesByCountryByTurn, order.turnId, order.countryId, order.provinceId);
+    return;
+  }
+  if (order.type === "BUILD") {
+    addQueuedProvinceIndexEntry(queuedBuildProvincesByCountryByTurn, order.turnId, order.countryId, order.provinceId);
+  }
+}
+
+function removeOrderFromTurnIndexes(order: Order): void {
+  if (order.type === "COLONIZE") {
+    removeQueuedProvinceIndexEntry(queuedColonizeProvincesByCountryByTurn, order.turnId, order.countryId, order.provinceId);
+    return;
+  }
+  if (order.type === "BUILD") {
+    removeQueuedProvinceIndexEntry(queuedBuildProvincesByCountryByTurn, order.turnId, order.countryId, order.provinceId);
+  }
+}
+
+function rebuildTurnOrderIndexes(): void {
+  queuedColonizeProvincesByCountryByTurn.clear();
+  queuedBuildProvincesByCountryByTurn.clear();
+  for (const players of ordersByTurn.values()) {
+    for (const playerOrders of players.values()) {
+      for (const order of playerOrders) {
+        addOrderToTurnIndexes(order);
+      }
+    }
+  }
+}
+
+function dropTurnOrderIndexes(turn: number): void {
+  queuedColonizeProvincesByCountryByTurn.delete(turn);
+  queuedBuildProvincesByCountryByTurn.delete(turn);
+}
+
 function migrateProvinceManualCostFlags(): number {
   let migrated = 0;
   for (const [provinceId, cfg] of Object.entries(worldBase.provinceColonizationByProvince ?? {})) {
@@ -1388,8 +1481,16 @@ function cleanupProvinceColonizationProgress(provinceId: string): void {
     return;
   }
   for (const [playerId, orders] of turnOrders.entries()) {
-    const nextOrders = orders.filter((order) => !(order.type === "COLONIZE" && order.provinceId === provinceId));
+    const removed: Order[] = [];
+    const nextOrders = orders.filter((order) => {
+      const shouldRemove = order.type === "COLONIZE" && order.provinceId === provinceId;
+      if (shouldRemove) removed.push(order);
+      return !shouldRemove;
+    });
     if (nextOrders.length !== orders.length) {
+      for (const order of removed) {
+        removeOrderFromTurnIndexes(order);
+      }
       if (nextOrders.length > 0) {
         turnOrders.set(playerId, nextOrders);
       } else {
@@ -1399,6 +1500,7 @@ function cleanupProvinceColonizationProgress(provinceId: string): void {
   }
   if (turnOrders.size === 0) {
     ordersByTurn.delete(turnId);
+    dropTurnOrderIndexes(turnId);
   }
 }
 
@@ -2027,7 +2129,11 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
     );
   }
 
-  for (const resource of Object.values(worldBase.resourcesByCountry)) {
+  for (const countryId of economyTickCountryIds) {
+    const resource = worldBase.resourcesByCountry[countryId];
+    if (!resource) {
+      continue;
+    }
     resource.colonization += gameSettings.colonization.pointsPerTurn;
     resource.ducats += gameSettings.economy.baseDucatsPerTurn;
     resource.gold += gameSettings.economy.baseGoldPerTurn;
@@ -2041,6 +2147,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
   resetTurnTimerAnchor();
 
   ordersByTurn.delete(turnId - 1);
+  dropTurnOrderIndexes(turnId - 1);
   resolveReadyByTurn.delete(turnId - 1);
   void flushPersistentStateNow();
 
@@ -3179,14 +3286,10 @@ app.post("/country/colonization/start", async (req, res) => {
   }
 
   const activeColonizeTargets = new Set<string>(activeColonizeProvincesByCountry.get(auth.countryId) ?? []);
-  const turnOrders = ordersByTurn.get(turnId);
-  if (turnOrders) {
-    for (const list of turnOrders.values()) {
-      for (const order of list) {
-        if (order.type === "COLONIZE" && order.countryId === auth.countryId) {
-          activeColonizeTargets.add(order.provinceId);
-        }
-      }
+  const queuedColonizeByCountry = queuedColonizeProvincesByCountryByTurn.get(turnId)?.get(auth.countryId);
+  if (queuedColonizeByCountry) {
+    for (const provinceId of queuedColonizeByCountry) {
+      activeColonizeTargets.add(provinceId);
     }
   }
 
@@ -3253,8 +3356,16 @@ app.post("/country/colonization/cancel", async (req, res) => {
   const turnOrders = ordersByTurn.get(turnId);
   if (turnOrders) {
     for (const [playerId, orders] of turnOrders.entries()) {
-      const filtered = orders.filter((order) => !(order.type === "COLONIZE" && order.countryId === auth.countryId && order.provinceId === provinceId));
+      const removed: Order[] = [];
+      const filtered = orders.filter((order) => {
+        const shouldRemove = order.type === "COLONIZE" && order.countryId === auth.countryId && order.provinceId === provinceId;
+        if (shouldRemove) removed.push(order);
+        return !shouldRemove;
+      });
       if (filtered.length !== orders.length) {
+        for (const order of removed) {
+          removeOrderFromTurnIndexes(order);
+        }
         if (filtered.length > 0) {
           turnOrders.set(playerId, filtered);
         } else {
@@ -3264,6 +3375,7 @@ app.post("/country/colonization/cancel", async (req, res) => {
     }
     if (turnOrders.size === 0) {
       ordersByTurn.delete(turnId);
+      dropTurnOrderIndexes(turnId);
     }
   }
 
@@ -3662,6 +3774,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   removeUploadedByUrl(target.crestUrl);
 
   delete worldBase.resourcesByCountry[countryIdParam];
+  removeCountryFromEconomyTick(countryIdParam);
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
     if (ownerId === countryIdParam) {
       delete worldBase.provinceOwner[provinceId];
@@ -3966,16 +4079,19 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
     });
     invalidateCountryQueryCache();
 
-    if (!worldBase.resourcesByCountry[country.id]) {
-      worldBase.resourcesByCountry[country.id] = {
-        culture: 5,
-        science: 5,
-        religion: 5,
-        colonization: gameSettings.colonization.pointsPerTurn,
-        ducats: 20,
-        gold: 80,
-      };
-    }
+  if (!worldBase.resourcesByCountry[country.id]) {
+    worldBase.resourcesByCountry[country.id] = {
+      culture: 5,
+      science: 5,
+      religion: 5,
+      colonization: gameSettings.colonization.pointsPerTurn,
+      ducats: 20,
+      gold: 80,
+    };
+    addCountryToEconomyTick(country.id);
+  } else {
+    addCountryToEconomyTick(country.id);
+  }
 
     savePersistentState();
     if (requiresApproval) {
@@ -4125,6 +4241,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
   invalidateCountryQueryCache();
 
   delete worldBase.resourcesByCountry[targetId];
+  removeCountryFromEconomyTick(targetId);
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
     if (ownerId === targetId) delete worldBase.provinceOwner[provinceId];
   }
@@ -4372,12 +4489,10 @@ wss.on("connection", (socket) => {
         }
 
         const activeColonizeTargets = new Set<string>(activeColonizeProvincesByCountry.get(delta.order.countryId) ?? []);
-
-        for (const list of turnOrders.values()) {
-          for (const queued of list) {
-            if (queued.type === "COLONIZE" && queued.countryId === delta.order.countryId) {
-              activeColonizeTargets.add(queued.provinceId);
-            }
+        const queuedByCountry = queuedColonizeProvincesByCountryByTurn.get(turnId)?.get(delta.order.countryId);
+        if (queuedByCountry) {
+          for (const provinceId of queuedByCountry) {
+            activeColonizeTargets.add(provinceId);
           }
         }
 
@@ -4403,6 +4518,7 @@ wss.on("connection", (socket) => {
       }
 
       playerOrders.push(order);
+      addOrderToTurnIndexes(order);
       turnOrders.set(playerId, playerOrders);
       ordersByTurn.set(turnId, turnOrders);
       savePersistentState();
@@ -4490,7 +4606,9 @@ wss.on("connection", (socket) => {
 async function startServer(): Promise<void> {
   await ensureWorldDeltaLogTable();
   await loadPersistentState();
+  rebuildTurnOrderIndexes();
   rebuildActiveColonizationIndexFromWorldBase();
+  rebuildEconomyTickCountryIndexFromWorldBase();
   await syncPersistedWorldDeltaLogWithCurrentState();
   schedulePersistedWorldDeltaLogPrune();
   await loadPersistedWorldDeltaHistory();

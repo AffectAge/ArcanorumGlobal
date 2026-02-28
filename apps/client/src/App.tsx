@@ -37,10 +37,13 @@ type RegistrationApprovalCountry = Extract<
   { type: "registration-approval" }
 >["country"];
 
+const RESOLVE_START_TIMEOUT_MS = 12_000;
+
 export default function App() {
   const worldResyncInFlightRef = useRef(false);
   const replayRequestInFlightRef = useRef(false);
   const autoResolveRequestedTurnRef = useRef<number | null>(null);
+  const resolveStartTimeoutRef = useRef<number | null>(null);
   const [entryLoadingGate, setEntryLoadingGate] = useState<"hidden" | "loading" | "ready">("hidden");
   const [pendingDeltaAckVersion, setPendingDeltaAckVersion] = useState<number | null>(null);
   const [pendingReplayFromWorldStateVersion, setPendingReplayFromWorldStateVersion] = useState<number | null>(null);
@@ -152,6 +155,41 @@ export default function App() {
   const clearEventLog = useGameStore((s) => s.clearEventLog);
   const eventLogRetentionTurns = useGameStore((s) => s.eventLogRetentionTurns);
   const setEventLogRetentionTurns = useGameStore((s) => s.setEventLogRetentionTurns);
+  const turnResolveOverlayRef = useRef(turnResolveOverlay);
+
+  useEffect(() => {
+    turnResolveOverlayRef.current = turnResolveOverlay;
+  }, [turnResolveOverlay]);
+
+  const clearResolveStartTimeout = useCallback(() => {
+    if (resolveStartTimeoutRef.current != null) {
+      window.clearTimeout(resolveStartTimeoutRef.current);
+      resolveStartTimeoutRef.current = null;
+    }
+  }, []);
+
+  const armResolveStartTimeout = useCallback(
+    (source: "auto" | "manual") => {
+      clearResolveStartTimeout();
+      resolveStartTimeoutRef.current = window.setTimeout(() => {
+        if (turnResolveOverlayRef.current.phase === "processing") {
+          return;
+        }
+        toast.warning(
+          source === "auto"
+            ? "Авто-резолв не подтвержден сервером"
+            : "Резолв не подтвержден сервером",
+          {
+            description:
+              source === "auto"
+                ? "TURN_RESOLVE_STARTED не пришел вовремя. Действия остаются доступны."
+                : "TURN_RESOLVE_STARTED не пришел вовремя.",
+          },
+        );
+      }, RESOLVE_START_TIMEOUT_MS);
+    },
+    [clearResolveStartTimeout],
+  );
 
   const resyncWorldState = useCallback(async () => {
     if (worldResyncInFlightRef.current) {
@@ -181,6 +219,7 @@ export default function App() {
   const onWsMessage = useCallback(
     (msg: WsOutMessage) => {
       if (msg.type === "AUTH_OK") {
+        clearResolveStartTimeout();
         setTurnResolveOverlay({ phase: "idle" });
         setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
         setPendingDeltaAckVersion(msg.worldStateVersion);
@@ -210,12 +249,14 @@ export default function App() {
       }
 
       if (msg.type === "TURN_RESOLVE_STARTED") {
+        clearResolveStartTimeout();
         setTurnResolveOverlay((prev) =>
           prev.phase === "idle" ? { phase: "processing", startedAtMs: Date.now() } : prev,
         );
       }
 
       if (msg.type === "WORLD_DELTA") {
+        clearResolveStartTimeout();
         const currentWorldStateVersion = useGameStore.getState().worldStateVersion;
         if (msg.worldStateVersion !== currentWorldStateVersion + 1) {
           if (!replayRequestInFlightRef.current) {
@@ -300,6 +341,7 @@ export default function App() {
       }
 
       if (msg.type === "ERROR") {
+        clearResolveStartTimeout();
         setTurnResolveOverlay((prev) => (prev.phase === "processing" ? { phase: "idle" } : prev));
         if (msg.code === "REPLAY_UNAVAILABLE") {
           replayRequestInFlightRef.current = false;
@@ -311,7 +353,7 @@ export default function App() {
         addEvent({ category: "system", title: "Ошибка", message: msg.message, priority: "high", visibility: "private" });
       }
     },
-    [addEvent, addOrder, applyWorldDelta, pruneLogEntries, resetOverlay, resyncWorldState, setEventLogRetentionTurns, setPresence, setWorldBase],
+    [addEvent, addOrder, applyWorldDelta, clearResolveStartTimeout, pruneLogEntries, resetOverlay, resyncWorldState, setEventLogRetentionTurns, setPresence, setWorldBase],
   );
 
   const { send } = useWs(onWsMessage, auth?.token);
@@ -636,6 +678,7 @@ export default function App() {
 
   const logoutToAuth = () => {
     addEvent({ category: "system", title: "Выход", message: "Сессия игрока завершена", priority: "low", visibility: "private", countryId: auth?.countryId ?? null });
+    clearResolveStartTimeout();
     setTurnResolveOverlay({ phase: "idle" });
     setAuth(null);
     setCountry(null);
@@ -735,6 +778,7 @@ export default function App() {
 
   useEffect(() => {
     autoResolveRequestedTurnRef.current = null;
+    clearResolveStartTimeout();
   }, [turnId]);
 
   useEffect(() => {
@@ -750,9 +794,10 @@ export default function App() {
       }
       autoResolveRequestedTurnRef.current = turnId;
       send({ type: "REQUEST_RESOLVE" });
+      armResolveStartTimeout("auto");
     }, remainingMs);
     return () => window.clearTimeout(timeoutId);
-  }, [auth, send, turnId, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
+  }, [armResolveStartTimeout, auth, send, turnId, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
 
   useEffect(() => {
     if (!auth) {
@@ -815,9 +860,15 @@ export default function App() {
 
   const requestNextTurn = () => {
     if (turnResolveOverlay.phase === "processing") return;
-    setTurnResolveOverlay({ phase: "processing", startedAtMs: Date.now() });
     send({ type: "REQUEST_RESOLVE" });
+    armResolveStartTimeout("manual");
   };
+
+  useEffect(() => {
+    return () => {
+      clearResolveStartTimeout();
+    };
+  }, [clearResolveStartTimeout]);
 
   const openUiNotification = (item: InAppUiNotification) => {
     setViewedUiNotificationIds((prev) => {
@@ -1292,8 +1343,6 @@ export default function App() {
     </div>
   );
 }
-
-
 
 
 

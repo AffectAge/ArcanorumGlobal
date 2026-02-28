@@ -11,6 +11,7 @@
 - `apps/client` — UI и WebSocket-клиент
 - `apps/server` — authoritative правила, auth, map tiles (MVT), resolve turn
 - `packages/shared` — общие типы и ADM1 sample
+- `standarts.md` — единые стандарты UI, механик, производительности и процесса разработки
 
 ## Подготовка
 1. Скопируйте `apps/server/.env.example` в `apps/server/.env`
@@ -47,6 +48,7 @@ npm run dev
 - Серверный diff `WORLD_DELTA` для `colonyProgressByProvince` использует структурное сравнение map-объектов (без `JSON.stringify`) для снижения CPU-нагрузки.
 - В turn-resolve используется индекс активных колонизаций (`country -> provinces`), что уменьшает количество полных проходов по `colonyProgressByProvince`.
 - `MapView` на клиенте подписан на отдельные ветки `worldBase`, а не на весь объект, чтобы уменьшить лишние ререндеры при нерелевантных дельтах.
+- На сервере используются инкрементальные индексы очереди приказов (`COLONIZE`/`BUILD`) и индекс экономического тика стран, чтобы убрать полные обходы в hot-path проверок и начислений.
 
 ## Админ-диагностика
 - `GET /admin/ws-delta-metrics` — метрики размера WS-дельт (compact vs baseline).
