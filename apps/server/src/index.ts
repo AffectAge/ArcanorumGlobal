@@ -1646,11 +1646,39 @@ async function sendPendingRegistrationNotificationsToAdminSocket(socket: WebSock
   }
 }
 
-function cloneWorldBaseSnapshot(): WorldBase {
-  return structuredClone({
-    ...worldBase,
+type WorldBaseSectionSnapshot = {
+  turnId: number;
+  mask: number;
+  resourcesByCountry?: WorldBase["resourcesByCountry"];
+  provinceOwner?: WorldBase["provinceOwner"];
+  provinceNameById?: WorldBase["provinceNameById"];
+  colonyProgressByProvince?: WorldBase["colonyProgressByProvince"];
+  provinceColonizationByProvince?: WorldBase["provinceColonizationByProvince"];
+};
+
+function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
+  const snapshot: WorldBaseSectionSnapshot = {
     turnId,
-  });
+    mask,
+  };
+
+  if ((mask & WORLD_DELTA_MASK.resourcesByCountry) !== 0) {
+    snapshot.resourcesByCountry = structuredClone(worldBase.resourcesByCountry);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceOwner) !== 0) {
+    snapshot.provinceOwner = { ...worldBase.provinceOwner };
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceNameById) !== 0) {
+    snapshot.provinceNameById = { ...worldBase.provinceNameById };
+  }
+  if ((mask & WORLD_DELTA_MASK.colonyProgressByProvince) !== 0) {
+    snapshot.colonyProgressByProvince = structuredClone(worldBase.colonyProgressByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0) {
+    snapshot.provinceColonizationByProvince = structuredClone(worldBase.provinceColonizationByProvince);
+  }
+
+  return snapshot;
 }
 
 function resetWsDeltaSizeMetrics(): void {
@@ -1838,12 +1866,43 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
   return compact;
 }
 
-function broadcastWorldDeltaFromSnapshot(wss: WebSocketServer, previous: WorldBase, rejectedOrders: WorldDelta["rejectedOrders"] = []): void {
+function toWorldBaseForDeltaDiff(previous: WorldBaseSectionSnapshot, next: WorldBase): WorldBase {
+  return {
+    turnId: previous.turnId,
+    resourcesByCountry:
+      (previous.mask & WORLD_DELTA_MASK.resourcesByCountry) !== 0 && previous.resourcesByCountry
+        ? previous.resourcesByCountry
+        : next.resourcesByCountry,
+    provinceOwner:
+      (previous.mask & WORLD_DELTA_MASK.provinceOwner) !== 0 && previous.provinceOwner
+        ? previous.provinceOwner
+        : next.provinceOwner,
+    provinceNameById:
+      (previous.mask & WORLD_DELTA_MASK.provinceNameById) !== 0 && previous.provinceNameById
+        ? previous.provinceNameById
+        : next.provinceNameById,
+    colonyProgressByProvince:
+      (previous.mask & WORLD_DELTA_MASK.colonyProgressByProvince) !== 0 && previous.colonyProgressByProvince
+        ? previous.colonyProgressByProvince
+        : next.colonyProgressByProvince,
+    provinceColonizationByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0 && previous.provinceColonizationByProvince
+        ? previous.provinceColonizationByProvince
+        : next.provinceColonizationByProvince,
+  };
+}
+
+function broadcastWorldDeltaFromSectionSnapshot(
+  wss: WebSocketServer,
+  previous: WorldBaseSectionSnapshot,
+  rejectedOrders: WorldDelta["rejectedOrders"] = [],
+): void {
   const next = {
     ...worldBase,
     turnId,
   };
-  const compact = buildCompactWorldDelta(previous, next);
+  const prevForDiff = toWorldBaseForDeltaDiff(previous, next);
+  const compact = buildCompactWorldDelta(prevForDiff, next);
   if (compact.mask === 0 && rejectedOrders.length === 0) {
     return;
   }
@@ -1982,8 +2041,12 @@ function resetTurnTimerAnchor(): void {
   currentTurnStartedAtMs = Date.now();
 }
 
-function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: EventLogEntry[]; previousWorldBase: WorldBase } {
-  const previousWorldBase = cloneWorldBaseSnapshot();
+function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: EventLogEntry[]; previousWorldBase: WorldBaseSectionSnapshot } {
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(
+    WORLD_DELTA_MASK.resourcesByCountry |
+      WORLD_DELTA_MASK.provinceOwner |
+      WORLD_DELTA_MASK.colonyProgressByProvince,
+  );
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldDelta["rejectedOrders"] = [];
   const claimed = new Set<string>();
@@ -2165,7 +2228,7 @@ function resolveAndBroadcastCurrentTurn(wsServer: WebSocketServer): boolean {
   isResolvingTurnNow = true;
   try {
     const { previousWorldBase, rejectedOrders, news } = resolveTurn();
-    broadcastWorldDeltaFromSnapshot(wsServer, previousWorldBase, rejectedOrders);
+    broadcastWorldDeltaFromSectionSnapshot(wsServer, previousWorldBase, rejectedOrders);
     for (const event of news) {
       broadcast(wsServer, { type: "NEWS_EVENT", event });
     }
@@ -3112,7 +3175,9 @@ app.patch("/admin/game-settings", async (req, res) => {
   }
 
   const nextColonization = parsed.data.colonization;
-  const previousWorldBase = parsed.data.colonization ? cloneWorldBaseSnapshot() : null;
+  const previousWorldBase = parsed.data.colonization
+    ? cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceColonizationByProvince)
+    : null;
   let provinceColonizationCostsRecalculated = 0;
   if (nextColonization) {
     const prevPointsCostPer1000Km2 = gameSettings.colonization.pointsCostPer1000Km2;
@@ -3222,7 +3287,7 @@ app.patch("/admin/game-settings", async (req, res) => {
   savePersistentState();
   if (provinceColonizationCostsRecalculated > 0) {
     if (previousWorldBase) {
-      broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+      broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
     }
   }
   if (changedSections.length > 0) {
@@ -3301,7 +3366,7 @@ app.post("/country/colonization/start", async (req, res) => {
     });
   }
 
-  const previousWorldBase = cloneWorldBaseSnapshot();
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.colonyProgressByProvince);
   worldBase.colonyProgressByProvince[provinceId] = {
     ...existing,
     [auth.countryId]: 0,
@@ -3309,7 +3374,7 @@ app.post("/country/colonization/start", async (req, res) => {
   addActiveColonizationTarget(auth.countryId, provinceId);
 
   savePersistentState();
-  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -3343,7 +3408,7 @@ app.post("/country/colonization/cancel", async (req, res) => {
     return res.status(404).json({ error: "COLONIZATION_NOT_FOUND" });
   }
 
-  const previousWorldBase = cloneWorldBaseSnapshot();
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.colonyProgressByProvince);
   delete progress[auth.countryId];
   if (Object.keys(progress).length === 0) {
     delete worldBase.colonyProgressByProvince[provinceId];
@@ -3380,7 +3445,7 @@ app.post("/country/colonization/cancel", async (req, res) => {
   }
 
   savePersistentState();
-  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -3432,12 +3497,14 @@ app.patch("/country/province-rename", async (req, res) => {
     });
   }
 
-  const previousWorldBase = cloneWorldBaseSnapshot();
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(
+    WORLD_DELTA_MASK.resourcesByCountry | WORLD_DELTA_MASK.provinceNameById,
+  );
   resources.ducats = Math.max(0, resources.ducats - provinceRenameDucatsCost);
   worldBase.provinceNameById[provinceId] = provinceName;
 
   savePersistentState();
-  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -3541,7 +3608,12 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
   }
 
   const cfg = getProvinceColonizationConfig(provinceId);
-  const previousWorldBase = cloneWorldBaseSnapshot();
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(
+    WORLD_DELTA_MASK.resourcesByCountry |
+      WORLD_DELTA_MASK.provinceOwner |
+      WORLD_DELTA_MASK.colonyProgressByProvince |
+      WORLD_DELTA_MASK.provinceColonizationByProvince,
+  );
   let clearedProgress = false;
 
   if (parsed.data.resetColonizationCostToAuto) {
@@ -3578,7 +3650,7 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
   }
 
   savePersistentState();
-  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
   if (parsed.data.colonizationDisabled !== undefined || parsed.data.colonizationCost !== undefined || parsed.data.ownerCountryId !== undefined) {
     broadcast(wss, {
       type: "NEWS_EVENT",
@@ -3613,11 +3685,11 @@ app.post("/admin/provinces/recalculate-auto-costs", async (req, res) => {
   if (!auth || !(await isAdminCountry(auth.countryId))) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
-  const previousWorldBase = cloneWorldBaseSnapshot();
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceColonizationByProvince);
   const updatedCount = recalculateAllProvinceColonizationCosts();
   savePersistentState();
   if (updatedCount > 0) {
-    broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+    broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
     broadcast(wss, {
       type: "NEWS_EVENT",
       event: makeOfficialNews({
@@ -3766,7 +3838,11 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
     return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
   }
 
-  const previousWorldBase = cloneWorldBaseSnapshot();
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(
+    WORLD_DELTA_MASK.resourcesByCountry |
+      WORLD_DELTA_MASK.provinceOwner |
+      WORLD_DELTA_MASK.colonyProgressByProvince,
+  );
   await prisma.country.delete({ where: { id: countryIdParam } });
   invalidateCountryQueryCache();
 
@@ -3792,7 +3868,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
   }
 
   savePersistentState();
-  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
@@ -4236,7 +4312,11 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
   }
   removeUploadedByUrl(fullTarget.flagUrl);
   removeUploadedByUrl(fullTarget.crestUrl);
-  const previousWorldBase = cloneWorldBaseSnapshot();
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(
+    WORLD_DELTA_MASK.resourcesByCountry |
+      WORLD_DELTA_MASK.provinceOwner |
+      WORLD_DELTA_MASK.colonyProgressByProvince,
+  );
   await prisma.country.delete({ where: { id: targetId } });
   invalidateCountryQueryCache();
 
@@ -4254,7 +4334,7 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
   removeCountryFromActiveColonizationIndex(targetId);
   savePersistentState();
   removeQueuedUiNotification(`registration-approval:${targetId}`);
-  broadcastWorldDeltaFromSnapshot(wss, previousWorldBase);
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
   broadcast(wss, {
     type: "NEWS_EVENT",
     event: makeOfficialNews({
