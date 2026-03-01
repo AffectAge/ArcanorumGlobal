@@ -736,10 +736,19 @@ export default function App() {
     });
   };
 
-  const queueBuildOrder = (provinceId?: string) => {
+  const queueBuildOrder = (provinceId?: string, payload?: Record<string, unknown>) => {
     if (!auth) {
       return;
     }
+
+    const targetProvinceId = provinceId ?? selectedProvinceId ?? "ARG-1309";
+    const normalizedPayload = (payload ?? {}) as Record<string, unknown>;
+    const payloadBuildingId =
+      typeof normalizedPayload.buildingId === "string"
+        ? normalizedPayload.buildingId
+        : typeof normalizedPayload.building === "string"
+          ? normalizedPayload.building
+          : undefined;
 
     const delta: OrderDelta = {
       type: "ORDER_DELTA",
@@ -747,18 +756,22 @@ export default function App() {
         turnId,
         playerId: auth.playerId,
         countryId: auth.countryId,
-        provinceId: provinceId ?? selectedProvinceId ?? "ARG-1309",
+        provinceId: targetProvinceId,
         type: "BUILD",
-        payload: {},
+        payload: normalizedPayload,
       },
     };
 
     send(delta);
-    toast("Приказ отправлен", { description: `BUILD -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}` });
+    toast("Приказ отправлен", {
+      description: payloadBuildingId
+        ? `BUILD -> ${targetProvinceId} (${payloadBuildingId})`
+        : `BUILD -> ${targetProvinceId}`,
+    });
     addEvent({
       category: "economy",
       title: "Отправлен приказ",
-      message: `BUILD -> ${provinceId ?? selectedProvinceId ?? "ARG-1309"}`,
+      message: payloadBuildingId ? `BUILD -> ${targetProvinceId} (${payloadBuildingId})` : `BUILD -> ${targetProvinceId}`,
       countryId: auth.countryId,
       priority: "medium",
       visibility: "private",
@@ -1155,6 +1168,7 @@ export default function App() {
           worldBase={worldBase}
           countryId={auth.countryId}
           countryName={country?.name ?? auth.countryId}
+          onQueueBuildOrder={queueBuildOrder}
         />
       )}
 
@@ -1367,7 +1381,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 

@@ -11,6 +11,7 @@ type Props = {
   worldBase: WorldBase | null;
   countryId: string;
   countryName: string;
+  onQueueBuildOrder: (provinceId: string, payload?: Record<string, unknown>) => void;
 };
 
 type NamedItem = { id: string; name: string; color: string; logoUrl?: string | null };
@@ -34,7 +35,7 @@ function entryById(items: ContentEntry[]): Record<string, NamedItem> {
   );
 }
 
-export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, countryName }: Props) {
+export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, countryName, onQueueBuildOrder }: Props) {
   const [filterBuildingId, setFilterBuildingId] = useState<string>("");
   const [filterProvinceId, setFilterProvinceId] = useState<string>("");
   const [filterActive, setFilterActive] = useState<FilterActive>("all");
@@ -42,22 +43,36 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [buildings, setBuildings] = useState<ContentEntry[]>([]);
   const [goods, setGoods] = useState<ContentEntry[]>([]);
   const [professions, setProfessions] = useState<ContentEntry[]>([]);
+  const [companies, setCompanies] = useState<ContentEntry[]>([]);
+  const [constructionOpen, setConstructionOpen] = useState(false);
+  const [constructionProvinceId, setConstructionProvinceId] = useState("");
+  const [constructionBuildingId, setConstructionBuildingId] = useState("");
+  const [constructionOwnerType, setConstructionOwnerType] = useState<"state" | "company">("state");
+  const [constructionOwnerCountryId, setConstructionOwnerCountryId] = useState("");
+  const [constructionOwnerCompanyId, setConstructionOwnerCompanyId] = useState("");
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    Promise.all([fetchContentEntries("buildings"), fetchContentEntries("goods"), fetchContentEntries("professions")])
-      .then(([nextBuildings, nextGoods, nextProfessions]) => {
+    Promise.all([
+      fetchContentEntries("buildings"),
+      fetchContentEntries("goods"),
+      fetchContentEntries("professions"),
+      fetchContentEntries("companies"),
+    ])
+      .then(([nextBuildings, nextGoods, nextProfessions, nextCompanies]) => {
         if (cancelled) return;
         setBuildings(nextBuildings);
         setGoods(nextGoods);
         setProfessions(nextProfessions);
+        setCompanies(nextCompanies);
       })
       .catch(() => {
         if (cancelled) return;
         setBuildings([]);
         setGoods([]);
         setProfessions([]);
+        setCompanies([]);
       });
     return () => {
       cancelled = true;
@@ -168,6 +183,43 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     return map;
   }, [filteredCards]);
 
+  const countryOptions = useMemo(
+    () => Object.keys(worldBase?.resourcesByCountry ?? {}).sort((a, b) => a.localeCompare(b, "ru")),
+    [worldBase?.resourcesByCountry],
+  );
+
+  const selectedConstructionBuilding = useMemo(
+    () => buildings.find((item) => item.id === constructionBuildingId) ?? null,
+    [buildings, constructionBuildingId],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const defaultProvince = provinceItems[0]?.provinceId ?? "";
+    const defaultBuilding = buildings[0]?.id ?? "";
+    const defaultCountry = countryOptions.includes(countryId) ? countryId : countryOptions[0] ?? "";
+    const defaultCompany = companies[0]?.id ?? "";
+    setConstructionProvinceId(defaultProvince);
+    setConstructionBuildingId(defaultBuilding);
+    setConstructionOwnerType("state");
+    setConstructionOwnerCountryId(defaultCountry);
+    setConstructionOwnerCompanyId(defaultCompany);
+  }, [open, provinceItems, buildings, countryOptions, companies, countryId]);
+
+  const submitConstruction = () => {
+    if (!constructionProvinceId || !constructionBuildingId) return;
+    const ownerPayload =
+      constructionOwnerType === "company"
+        ? { type: "company", companyId: constructionOwnerCompanyId }
+        : { type: "state", countryId: constructionOwnerCountryId || countryId };
+    if (constructionOwnerType === "company" && !constructionOwnerCompanyId) return;
+    onQueueBuildOrder(constructionProvinceId, {
+      buildingId: constructionBuildingId,
+      owner: ownerPayload,
+    });
+    setConstructionOpen(false);
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[206]">
       <motion.div
@@ -194,9 +246,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  disabled
-                  className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-3 text-xs text-white/40"
-                  title="Строительство будет подключено позже"
+                  onClick={() => setConstructionOpen(true)}
+                  className="inline-flex h-10 items-center gap-2 rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 text-xs text-emerald-200 transition hover:bg-emerald-500/25"
+                  title="Открыть окно строительства"
                 >
                   <Hammer size={14} />
                   Строительство
@@ -461,6 +513,134 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           </Dialog.Panel>
         </motion.div>
       </div>
+      <Dialog open={constructionOpen} onClose={() => setConstructionOpen(false)} className="relative z-[207]">
+        <motion.div
+          aria-hidden="true"
+          className="fixed inset-0 bg-black/65 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+        />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.99 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="w-full max-w-2xl"
+          >
+            <Dialog.Panel className="glass panel-border rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
+              <div className="mb-4 flex items-center justify-between">
+                <Dialog.Title className="font-display text-xl tracking-wide text-arc-accent">Окно строительства</Dialog.Title>
+                <button
+                  type="button"
+                  onClick={() => setConstructionOpen(false)}
+                  className="panel-border inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-slate-300 transition hover:text-arc-accent"
+                  aria-label="Закрыть"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-1 text-xs text-white/65">
+                  Провинция
+                  <select
+                    value={constructionProvinceId}
+                    onChange={(event) => setConstructionProvinceId(event.target.value)}
+                    className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white outline-none focus:border-arc-accent/40"
+                  >
+                    {provinceItems.map((province) => (
+                      <option key={province.provinceId} value={province.provinceId}>
+                        {province.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-white/65">
+                  Здание
+                  <select
+                    value={constructionBuildingId}
+                    onChange={(event) => setConstructionBuildingId(event.target.value)}
+                    className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white outline-none focus:border-arc-accent/40"
+                  >
+                    {buildings.map((building) => (
+                      <option key={building.id} value={building.id}>
+                        {building.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-white/65">
+                  Владелец
+                  <select
+                    value={constructionOwnerType}
+                    onChange={(event) => setConstructionOwnerType(event.target.value as "state" | "company")}
+                    className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white outline-none focus:border-arc-accent/40"
+                  >
+                    <option value="state">Государство</option>
+                    <option value="company">Компания</option>
+                  </select>
+                </label>
+                {constructionOwnerType === "state" ? (
+                  <label className="flex flex-col gap-1 text-xs text-white/65">
+                    Страна-владелец
+                    <select
+                      value={constructionOwnerCountryId}
+                      onChange={(event) => setConstructionOwnerCountryId(event.target.value)}
+                      className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white outline-none focus:border-arc-accent/40"
+                    >
+                      {countryOptions.map((entryCountryId) => (
+                        <option key={entryCountryId} value={entryCountryId}>
+                          {entryCountryId}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="flex flex-col gap-1 text-xs text-white/65">
+                    Компания-владелец
+                    <select
+                      value={constructionOwnerCompanyId}
+                      onChange={(event) => setConstructionOwnerCompanyId(event.target.value)}
+                      className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white outline-none focus:border-arc-accent/40"
+                    >
+                      {companies.map((company) => (
+                        <option key={company.id} value={company.id}>
+                          {company.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+
+              <div className="mt-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs text-white/65">
+                Стоимость: {Math.max(1, Math.floor(Number(selectedConstructionBuilding?.costConstruction ?? 100)))} строительства /{" "}
+                {formatNum(Math.max(0, Number(selectedConstructionBuilding?.costDucats ?? 10)))} дукатов
+              </div>
+
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConstructionOpen(false)}
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-white/10 bg-black/35 px-4 text-sm text-white/70 transition hover:text-white"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={submitConstruction}
+                  disabled={!constructionProvinceId || !constructionBuildingId || (constructionOwnerType === "company" && !constructionOwnerCompanyId)}
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-emerald-400/35 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Добавить в очередь
+                </button>
+              </div>
+            </Dialog.Panel>
+          </motion.div>
+        </div>
+      </Dialog>
     </Dialog>
   );
 }
