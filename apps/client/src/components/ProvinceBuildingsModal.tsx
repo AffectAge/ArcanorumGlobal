@@ -465,7 +465,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         storageAmount: 0,
         inputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; cost: number }>,
         outputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; income: number }>,
-        trade: [] as Array<{ text: string; kind: "buy" | "sell" }>,
+        stockRows: [] as Array<{ goodName: string; goodLogoUrl: string | null; available: number; incoming: number; outgoing: number; remainder: number }>,
+        trade: [] as Array<{ kind: "buy" | "sell"; goodName: string; goodLogoUrl: string | null; amount: number; total: number }>,
       };
     }
     const ratio = Math.max(0, Math.min(1, productivity / 100));
@@ -496,16 +497,57 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     const storageAmount = totalInstancesByType > 0 ? totalTreasuryByType / totalInstancesByType : 0;
     const trade = [
       ...inputs.filter((entry) => entry.factual > 0).map((entry) => ({
-        text: `куплено ${formatCompact(entry.factual)} ${entry.goodName} (-${formatCompact(entry.cost)} дукат)`,
         kind: "buy" as const,
+        goodName: entry.goodName,
+        goodLogoUrl: entry.goodLogoUrl,
+        amount: entry.factual,
+        total: entry.cost,
       })),
       ...outputs.filter((entry) => entry.factual > 0).map((entry) => ({
-        text: `продано ${formatCompact(entry.factual)} ${entry.goodName} (+${formatCompact(entry.income)} дукат)`,
         kind: "sell" as const,
+        goodName: entry.goodName,
+        goodLogoUrl: entry.goodLogoUrl,
+        amount: entry.factual,
+        total: entry.income,
       })),
     ];
 
-    return { productivity, inputCost, outputRevenue, netPerTurn, storageAmount, inputs, outputs, trade };
+    const stockMap = new Map<
+      string,
+      { goodName: string; goodLogoUrl: string | null; available: number; incoming: number; outgoing: number }
+    >();
+    for (const input of inputs) {
+      const key = input.goodName;
+      const row = stockMap.get(key) ?? {
+        goodName: input.goodName,
+        goodLogoUrl: input.goodLogoUrl,
+        available: 0,
+        incoming: 0,
+        outgoing: 0,
+      };
+      row.incoming += input.factual;
+      row.outgoing += input.factual;
+      stockMap.set(key, row);
+    }
+    for (const output of outputs) {
+      const key = output.goodName;
+      const row = stockMap.get(key) ?? {
+        goodName: output.goodName,
+        goodLogoUrl: output.goodLogoUrl,
+        available: 0,
+        incoming: 0,
+        outgoing: 0,
+      };
+      row.incoming += output.factual;
+      row.outgoing += output.factual;
+      stockMap.set(key, row);
+    }
+    const stockRows = [...stockMap.values()].map((row) => ({
+      ...row,
+      remainder: row.available + row.incoming - row.outgoing,
+    }));
+
+    return { productivity, inputCost, outputRevenue, netPerTurn, storageAmount, inputs, outputs, stockRows, trade };
   };
 
   const filteredCards = useMemo(() => {
@@ -1043,35 +1085,102 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                             className="overflow-hidden"
                           >
                           <div className="space-y-2 border-t border-white/10 px-3 py-2 text-xs text-white/70">
-                          <div className="rounded-lg border border-white/10 bg-black/35 px-2 py-1">
-                            <div className="flex items-center gap-1 text-white/50"><Package size={12} />Склад</div>
-                            <Tooltip content="Накопленные дукаты этого здания">
-                              <div className="mt-0.5 text-white/85">{econ.storageAmount > 0 ? `${formatCompact(econ.storageAmount)} дукат` : "пусто"}</div>
-                            </Tooltip>
+                          <div className="space-y-1 rounded-md border border-white/15 bg-black/25 p-2">
+                            <div className="inline-flex items-center gap-1.5 font-semibold text-white/50">
+                              <Package size={12} className="shrink-0" />
+                              <span>Склад</span>
+                            </div>
+                            {econ.stockRows.length === 0 ? (
+                              <div className="text-white/50">пусто</div>
+                            ) : (
+                              <div className="space-y-1">
+                                {econ.stockRows.map((row, idx) => (
+                                  <div key={`${c.key}-stock-${idx}`} className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="inline-flex items-center gap-1.5 text-white/75">
+                                        {row.goodLogoUrl ? (
+                                          <img src={row.goodLogoUrl} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" />
+                                        ) : (
+                                          <Package size={11} className="shrink-0 text-white/60" />
+                                        )}
+                                        <span className="font-semibold">{row.goodName}</span>
+                                      </div>
+                                      <div className="ml-auto flex flex-wrap items-center justify-end gap-1 text-[10px]">
+                                        <span className="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-1.5 py-0.5 font-bold text-white/70">
+                                          В наличии: {formatCompact(row.available)}
+                                        </span>
+                                        <span className="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-1.5 py-0.5 font-bold text-white/75">
+                                          Пришло: {formatCompact(row.incoming)}
+                                        </span>
+                                        <span className="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-1.5 py-0.5 font-bold text-white/75">
+                                          Ушло: {formatCompact(row.outgoing)}
+                                        </span>
+                                        <span className="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-1.5 py-0.5 font-bold text-white/80">
+                                          Остаток: {formatCompact(row.remainder)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                          <div className="space-y-1">
-                            <div className="text-white/50">Торговля за ход</div>
+                          <div className="space-y-1 rounded-md border border-white/15 bg-black/25 p-2">
+                            <div className="inline-flex items-center gap-1.5 font-semibold text-white/50">
+                              <ArrowUpRight size={12} className="shrink-0" />
+                              <span>Торговля за ход</span>
+                            </div>
                             {econ.trade.length === 0 && <div className="text-white/50">пусто</div>}
-                            {econ.trade.map((item, idx) => (
-                              <Tooltip key={`${c.key}-trade-${idx}`} content={item.kind === "buy" ? "Покупка входных товаров за ход" : "Продажа выходных товаров за ход"}>
-                                <div
-                                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 ${
-                                    item.kind === "buy" ? "border border-emerald-400/35 bg-emerald-500/15 text-emerald-200" : "border border-sky-400/35 bg-sky-500/15 text-sky-200"
-                                  }`}
-                                >
-                                  {item.kind === "buy" ? <ArrowDownLeft size={11} /> : <ArrowUpRight size={11} />}
-                                  <span>{item.text}</span>
+                            {econ.trade.map((item, idx) => {
+                              const isBuy = item.kind === "buy";
+                              const rowClass = isBuy
+                                ? "rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-white/70"
+                                : "rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-white/70";
+                              const titleClass = isBuy ? "text-red-300" : "text-emerald-300";
+                              const pillClass = isBuy
+                                ? "inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200"
+                                : "inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200";
+                              return (
+                                <div key={`${c.key}-trade-${idx}`} className={rowClass}>
+                                  <div className="flex items-center justify-between gap-2">
+                                    <Tooltip content={isBuy ? "Покупка входных товаров за ход" : "Продажа выходных товаров за ход"}>
+                                      <div className={`inline-flex items-center gap-1.5 font-semibold ${titleClass}`}>
+                                        {item.goodLogoUrl ? (
+                                          <img src={item.goodLogoUrl} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" />
+                                        ) : isBuy ? (
+                                          <ArrowDownLeft size={12} className="shrink-0" />
+                                        ) : (
+                                          <ArrowUpRight size={12} className="shrink-0" />
+                                        )}
+                                        <span>{item.goodName}</span>
+                                      </div>
+                                    </Tooltip>
+                                    <div className="ml-auto flex items-center justify-end gap-1.5">
+                                      <Tooltip content="Объем торговой операции за ход">
+                                        <span className={pillClass}>Объем: {formatCompact(item.amount)}</span>
+                                      </Tooltip>
+                                      <Tooltip content={isBuy ? "Расход на закупку за ход" : "Доход от продажи за ход"}>
+                                        <span className={pillClass}>
+                                          {isBuy ? "Расход: " : "Доход: "}
+                                          {formatCompact(item.total)} дукат
+                                        </span>
+                                      </Tooltip>
+                                    </div>
+                                  </div>
                                 </div>
-                              </Tooltip>
-                            ))}
+                              );
+                            })}
                           </div>
-                          <div className="space-y-1">
-                            <div className="text-white/50">Производство</div>
+                          <div className="space-y-1 rounded-md border border-white/15 bg-black/25 p-2">
+                            <div className="inline-flex items-center gap-1.5 font-semibold text-white/50">
+                              <Factory size={12} className="shrink-0" />
+                              <span>Производство</span>
+                            </div>
                             {econ.outputs.length === 0 && <div className="text-white/50">нет выходных товаров</div>}
                             {econ.outputs.map((output, idx) => (
                               <div
                                 key={`${c.key}-output-${idx}`}
-                                className="rounded-md border border-emerald-400/35 bg-black px-2 py-1 text-white/60"
+                                className="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-white/70"
                               >
                                 <div className="flex items-center justify-between gap-2">
                                   <Tooltip content="Выходной товар, который производит здание">
@@ -1105,13 +1214,16 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               </div>
                             ))}
                           </div>
-                          <div className="space-y-1">
-                            <div className="text-white/50">Потребление</div>
+                          <div className="space-y-1 rounded-md border border-white/15 bg-black/25 p-2">
+                            <div className="inline-flex items-center gap-1.5 font-semibold text-white/50">
+                              <ArrowDownLeft size={12} className="shrink-0" />
+                              <span>Потребление</span>
+                            </div>
                             {econ.inputs.length === 0 && <div className="text-white/50">нет входных товаров</div>}
                             {econ.inputs.map((input, idx) => (
                               <div
                                 key={`${c.key}-input-${idx}`}
-                                className="rounded-md border border-red-400/35 bg-black px-2 py-1 text-white/60"
+                                className="rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-white/70"
                               >
                                 <div className="flex items-center justify-between gap-2">
                                   <Tooltip content="Входной товар, который здание закупает для производства">
