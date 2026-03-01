@@ -1,4 +1,4 @@
-import type { Country, LoginPayload, ProvincePopulation, ServerStatus, WorldBase, WsOutMessage } from "@arcanorum/shared";
+import type { Country, LoginPayload, Order, ProvincePopulation, ServerStatus, WorldBase, WsOutMessage } from "@arcanorum/shared";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -94,6 +94,20 @@ export async function fetchWorldSnapshot(token: string): Promise<{ worldBase: Wo
     throw new Error(err?.error ?? "WORLD_SNAPSHOT_FAILED");
   }
   return response.json();
+}
+
+export async function fetchCurrentTurnOrders(token: string): Promise<{ turnId: number; orders: Order[] }> {
+  const response = await fetch(`${API}/country/orders/current`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "CURRENT_ORDERS_FAILED");
+  }
+  const data = (await response.json()) as { turnId?: unknown; orders?: unknown };
+  const turnId = typeof data.turnId === "number" && Number.isFinite(data.turnId) ? Math.floor(data.turnId) : 1;
+  const orders = Array.isArray(data.orders) ? (data.orders as Order[]) : [];
+  return { turnId, orders };
 }
 
 export async function fetchContentCultures(): Promise<ContentCulture[]> {

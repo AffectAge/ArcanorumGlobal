@@ -1,7 +1,7 @@
 import { Dialog } from "@headlessui/react";
 import type { WorldBase } from "@arcanorum/shared";
 import { motion } from "framer-motion";
-import { Building2, Factory, Hammer, MapPin, Plus, Trash2, Users, X } from "lucide-react";
+import { Building2, Factory, Hammer, Lock, MapPin, Plus, Trash2, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { cancelCountryBuild, fetchContentEntries, fetchCountries, type ContentEntry } from "../lib/api";
@@ -58,6 +58,18 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [ownerCountryId, setOwnerCountryId] = useState("");
   const [ownerCompanyId, setOwnerCompanyId] = useState("");
   const [cancelingQueueKey, setCancelingQueueKey] = useState<string | null>(null);
+  const [cancelConfirmTarget, setCancelConfirmTarget] = useState<
+    | null
+    | {
+        key: string;
+        source: "pending" | "queued";
+        buildingName: string;
+        provinceName: string;
+        orderId?: string;
+        provinceId?: string;
+        queueId?: string;
+      }
+  >(null);
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
@@ -275,7 +287,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const availableConstruction = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.construction ?? 0)));
   const availableDucats = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.ducats ?? 0)));
   const constructionCardClass =
-    "h-[124px] rounded-lg border border-amber-400/55 bg-[#14100a] p-2 shadow-[0_0_0_1px_rgba(245,158,11,0.08)]";
+    "relative z-0 h-[124px] rounded-lg border border-amber-400/55 bg-[#14100a] p-2 shadow-[0_0_0_1px_rgba(245,158,11,0.08)] transition-all duration-150 hover:z-10 hover:-translate-y-0.5 hover:border-amber-300/80 hover:shadow-[0_8px_24px_rgba(245,158,11,0.16)]";
   const selectedProvinceBuildings = worldBase?.provinceBuildingsByProvince?.[provinceId] ?? {};
 
   const getBuildingAvailability = (building: ContentEntry): BuildAvailability => {
@@ -518,14 +530,14 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
               <div className="min-h-0 flex-1 grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <section className="min-h-0 rounded-xl border border-white/10 bg-black/25 p-3 flex flex-col">
                   <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Доступные здания</div>
-                  <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+                  <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1 pt-1">
                     {buildableBuildingCards.map(({ building, availability }) => {
                       const costConstruction = Math.max(1, Math.floor(Number(building.costConstruction ?? 100)));
                       const costDucats = Math.max(0, Math.floor(Number(building.costDucats ?? 0)));
                       const canAdd = availability.available;
                       const cardClass = canAdd
-                        ? "h-[124px] rounded-lg border border-emerald-400/55 bg-[#0f1a13] p-2 shadow-[0_0_0_1px_rgba(16,185,129,0.1)]"
-                        : "h-[124px] rounded-lg border border-red-400/55 bg-[#1a1010] p-2 shadow-[0_0_0_1px_rgba(248,113,113,0.08)]";
+                        ? "relative z-0 h-[124px] rounded-lg border border-emerald-400/55 bg-[#0f1a13] p-2 shadow-[0_0_0_1px_rgba(16,185,129,0.1)] transition-all duration-150 hover:z-10 hover:-translate-y-0.5 hover:border-emerald-300/80 hover:shadow-[0_8px_24px_rgba(16,185,129,0.15)]"
+                        : "relative z-0 h-[124px] rounded-lg border border-red-400/55 bg-[#1a1010] p-2 shadow-[0_0_0_1px_rgba(248,113,113,0.08)] transition-all duration-150 hover:z-10 hover:-translate-y-0.5 hover:border-red-300/80 hover:shadow-[0_8px_24px_rgba(248,113,113,0.14)]";
                       return (
                         <div key={building.id} className={cardClass}>
                           <div className="h-full overflow-hidden rounded-md flex items-stretch">
@@ -567,7 +579,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                         : "border border-red-400/55 bg-red-500/20 text-red-200"
                                     }`}
                                   >
-                                    <Plus size={20} />
+                                    {canAdd ? <Plus size={20} /> : <Lock size={18} />}
                                   </button>
                                 </Tooltip>
                               </div>
@@ -587,7 +599,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </div>
                   )}
                   {constructionQueue.length > 0 && (
-                    <div className="arc-scrollbar arc-scrollbar-construction min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+                    <div className="arc-scrollbar arc-scrollbar-construction min-h-0 flex-1 space-y-2 overflow-auto pr-1 pt-1">
                       {constructionQueue.map((card) => (
                         <div key={card.key} className={constructionCardClass}>
                           <div className="h-full overflow-hidden rounded-md flex items-stretch">
@@ -631,20 +643,33 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                 }
                                 placement="left"
                               >
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void cancelBuildQueueItem(
-                                        card.source === "pending"
-                                          ? { key: card.key, source: "pending", orderId: card.orderId }
-                                          : { key: card.key, source: "queued", provinceId: card.provinceId, queueId: card.queueId },
-                                      )
-                                    }
-                                    disabled={cancelingQueueKey === card.key}
-                                    className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-amber-400/55 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 disabled:opacity-40"
-                                  >
-                                    {cancelingQueueKey === card.key ? "..." : <X size={20} />}
-                                  </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setCancelConfirmTarget(
+                                      card.source === "pending"
+                                        ? {
+                                            key: card.key,
+                                            source: "pending",
+                                            buildingName: card.buildingName,
+                                            provinceName: card.provinceName,
+                                            orderId: card.orderId,
+                                          }
+                                        : {
+                                            key: card.key,
+                                            source: "queued",
+                                            buildingName: card.buildingName,
+                                            provinceName: card.provinceName,
+                                            provinceId: card.provinceId,
+                                            queueId: card.queueId,
+                                          },
+                                    )
+                                  }
+                                  disabled={cancelingQueueKey === card.key}
+                                  className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-amber-400/55 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 disabled:opacity-40"
+                                >
+                                  {cancelingQueueKey === card.key ? "..." : <X size={20} />}
+                                </button>
                               </Tooltip>
                             </div>
                           </div>
@@ -653,6 +678,62 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </div>
                   )}
                 </section>
+              </div>
+            </div>
+          </Dialog.Panel>
+        </div>
+      </Dialog>
+
+      <Dialog open={Boolean(cancelConfirmTarget)} onClose={() => setCancelConfirmTarget(null)} className="relative z-[208]">
+        <motion.div aria-hidden="true" className="fixed inset-0 bg-black/65 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Panel className="glass panel-border w-full max-w-md rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
+            <div className="rounded-lg border border-amber-400/55 bg-[#14100a] p-3 shadow-[0_0_0_1px_rgba(245,158,11,0.08)]">
+              <Dialog.Title className="text-sm font-semibold text-white">Отменить строительство?</Dialog.Title>
+              <div className="mt-2 text-xs text-white/70">
+                <div>
+                  Здание: <span className="text-white/90">{cancelConfirmTarget?.buildingName ?? "—"}</span>
+                </div>
+                <div>
+                  Провинция: <span className="text-white/90">{cancelConfirmTarget?.provinceName ?? "—"}</span>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCancelConfirmTarget(null)}
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-white/15 bg-black/35 px-3 text-xs font-semibold text-white/75 hover:border-white/30"
+                >
+                  Нет
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!cancelConfirmTarget) return;
+                    if (cancelConfirmTarget.source === "pending" && cancelConfirmTarget.orderId) {
+                      void cancelBuildQueueItem({
+                        key: cancelConfirmTarget.key,
+                        source: "pending",
+                        orderId: cancelConfirmTarget.orderId,
+                      });
+                    } else if (
+                      cancelConfirmTarget.source === "queued" &&
+                      cancelConfirmTarget.provinceId &&
+                      cancelConfirmTarget.queueId
+                    ) {
+                      void cancelBuildQueueItem({
+                        key: cancelConfirmTarget.key,
+                        source: "queued",
+                        provinceId: cancelConfirmTarget.provinceId,
+                        queueId: cancelConfirmTarget.queueId,
+                      });
+                    }
+                    setCancelConfirmTarget(null);
+                  }}
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-400/55 bg-amber-500/20 px-3 text-xs font-semibold text-amber-200 hover:bg-amber-500/30"
+                >
+                  Да
+                </button>
               </div>
             </div>
           </Dialog.Panel>

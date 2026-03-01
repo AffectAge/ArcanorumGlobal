@@ -23,7 +23,7 @@ import { ProvinceBuildingsModal } from "./components/ProvinceBuildingsModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
-import { adminReviewRegistration, apiBase, fetchCountries, fetchPendingUiNotifications, fetchProvinceIndex, fetchPublicGameUiSettings, fetchWorldSnapshot, markUiNotificationViewed, type ResourceIconsMap } from "./lib/api";
+import { adminReviewRegistration, apiBase, fetchCountries, fetchCurrentTurnOrders, fetchPendingUiNotifications, fetchProvinceIndex, fetchPublicGameUiSettings, fetchWorldSnapshot, markUiNotificationViewed, type ResourceIconsMap } from "./lib/api";
 import { useWs } from "./lib/useWs";
 import { useGameStore } from "./store/gameStore";
 
@@ -147,6 +147,7 @@ export default function App() {
   const setWorldBase = useGameStore((s) => s.setWorldBase);
   const applyWorldDelta = useGameStore((s) => s.applyWorldDelta);
   const addOrder = useGameStore((s) => s.addOrder);
+  const setTurnOrders = useGameStore((s) => s.setTurnOrders);
   const setPresence = useGameStore((s) => s.setPresence);
   const resetOverlay = useGameStore((s) => s.resetOverlay);
   const updateCountryResources = useGameStore((s) => s.updateCountryResources);
@@ -198,6 +199,18 @@ export default function App() {
     [clearResolveStartTimeout],
   );
 
+  const hydrateCurrentTurnOrders = useCallback(
+    async (token: string) => {
+      try {
+        const { turnId: ordersTurnId, orders } = await fetchCurrentTurnOrders(token);
+        setTurnOrders(ordersTurnId, orders);
+      } catch {
+        // Silently ignore hydration failures; live ORDER_BROADCAST still updates overlay.
+      }
+    },
+    [setTurnOrders],
+  );
+
   const resyncWorldState = useCallback(async () => {
     if (worldResyncInFlightRef.current) {
       return;
@@ -213,6 +226,7 @@ export default function App() {
       setPendingDeltaAckVersion(snapshot.worldStateVersion);
       replayRequestInFlightRef.current = false;
       resetOverlay(snapshot.turnId);
+      await hydrateCurrentTurnOrders(token);
       setTurnTimerUi((prev) => ({ ...prev, startedAtMs: Date.now() }));
       toast.warning("Состояние мира синхронизировано заново");
     } catch {
@@ -221,7 +235,7 @@ export default function App() {
     } finally {
       worldResyncInFlightRef.current = false;
     }
-  }, [resetOverlay, setWorldBase]);
+  }, [hydrateCurrentTurnOrders, resetOverlay, setWorldBase]);
 
   const onWsMessage = useCallback(
     (msg: WsOutMessage) => {
@@ -235,6 +249,7 @@ export default function App() {
         const currentAuth = useGameStore.getState().auth;
         if (currentAuth?.token) {
           setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
+          void hydrateCurrentTurnOrders(currentAuth.token);
         }
         if (msg.clientSettings?.eventLogRetentionTurns) {
           setEventLogRetentionTurns(msg.clientSettings.eventLogRetentionTurns);
@@ -360,7 +375,7 @@ export default function App() {
         addEvent({ category: "system", title: "Ошибка", message: msg.message, priority: "high", visibility: "private" });
       }
     },
-    [addEvent, addOrder, applyWorldDelta, clearResolveStartTimeout, pruneLogEntries, resetOverlay, resyncWorldState, setEventLogRetentionTurns, setPresence, setWorldBase],
+    [addEvent, addOrder, applyWorldDelta, clearResolveStartTimeout, hydrateCurrentTurnOrders, pruneLogEntries, resetOverlay, resyncWorldState, setEventLogRetentionTurns, setPresence, setWorldBase],
   );
 
   const { send } = useWs(onWsMessage, auth?.token);
@@ -1487,5 +1502,4 @@ export default function App() {
     </div>
   );
 }
-
 

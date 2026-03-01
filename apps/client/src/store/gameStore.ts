@@ -24,6 +24,7 @@ type GameState = {
   setWorldBase: (world: WorldBase, turnId: number, worldStateVersion: number) => void;
   applyWorldDelta: (delta: WorldDelta, turnId: number, worldStateVersion: number) => void;
   addOrder: (order: Order) => void;
+  setTurnOrders: (turnId: number, orders: Order[]) => void;
   removeOrder: (turnId: number, orderId: string) => void;
   setPresence: (ids: string[]) => void;
   setSelectedProvince: (id: string | null) => void;
@@ -189,6 +190,22 @@ export const useGameStore = create<GameState>((set) => ({
       const list = [...(byPlayer.get(order.playerId) ?? []), order];
       byPlayer.set(order.playerId, list);
       turnMap.set(order.turnId, byPlayer);
+      return { ordersByTurn: turnMap };
+    }),
+  setTurnOrders: (targetTurnId, orders) =>
+    set((state) => {
+      const turnMap = new Map(state.ordersByTurn);
+      const byPlayer = new Map<string, Order[]>();
+      for (const order of orders) {
+        const list = byPlayer.get(order.playerId) ?? [];
+        list.push(order);
+        byPlayer.set(order.playerId, list);
+      }
+      if (byPlayer.size > 0) {
+        turnMap.set(targetTurnId, byPlayer);
+      } else {
+        turnMap.delete(targetTurnId);
+      }
       return { ordersByTurn: turnMap };
     }),
   removeOrder: (targetTurnId, orderId) =>

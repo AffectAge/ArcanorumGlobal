@@ -4614,6 +4614,27 @@ app.post("/country/build/cancel", async (req, res) => {
   return res.json({ ok: true, canceledQueuedProject, canceledPendingOrder });
 });
 
+app.get("/country/orders/current", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const turnOrders = ordersByTurn.get(turnId);
+  if (!turnOrders) {
+    return res.json({ turnId, orders: [] as Order[] });
+  }
+
+  const orders: Order[] = [];
+  for (const list of turnOrders.values()) {
+    for (const order of list) {
+      orders.push(order);
+    }
+  }
+
+  return res.json({ turnId, orders });
+});
+
 app.patch("/country/province-rename", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth) {
