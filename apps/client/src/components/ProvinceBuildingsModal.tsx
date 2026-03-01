@@ -598,15 +598,15 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                 <Factory size={16} className="text-white/60" />
                               )}
                             </div>
-                            <div className="min-w-0 flex-1 p-3">
+                            <div className="min-w-0 flex h-full flex-1 flex-col p-3">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                   <div className="truncate text-sm font-semibold text-white/90">{card.buildingName}</div>
                                   <div className="text-[11px] text-white/55">{card.provinceName}</div>
                                 </div>
                               </div>
-                              <div className="mt-2 flex items-center gap-2">
-                                <div className="w-10 shrink-0 text-[11px] text-amber-300/90">{card.progressPercent}%</div>
+                              <div className="mt-auto flex items-center gap-0.5">
+                                <div className="w-9 shrink-0 text-[11px] leading-none text-amber-300/90">{card.progressPercent}%</div>
                                 <div className="h-1.5 flex-1 overflow-hidden rounded-full border border-amber-400/30 bg-black/50">
                                   <div
                                     className="h-full"
@@ -618,7 +618,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                   />
                                 </div>
                               </div>
-                              <div className="mt-2 text-[11px] text-white/55">
+                              <div className="mt-1 text-[11px] text-white/55">
                                 Владелец: <span className="text-white/80">{card.ownerLabel}</span>
                               </div>
                             </div>
