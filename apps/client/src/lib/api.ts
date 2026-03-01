@@ -14,7 +14,16 @@ export type ContentCulture = {
   femalePortraitUrl?: string | null;
 };
 export type ContentEntry = ContentCulture;
-export type ContentEntryKind = "cultures" | "religions" | "professions" | "ideologies" | "races";
+export type ContentEntryKind =
+  | "cultures"
+  | "religions"
+  | "professions"
+  | "ideologies"
+  | "races"
+  | "buildings"
+  | "goods"
+  | "companies"
+  | "industries";
 
 
 function withAssetBase(url?: string | null): string | null | undefined {

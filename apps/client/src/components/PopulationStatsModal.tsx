@@ -33,6 +33,8 @@ type ContentEntryMeta = {
   femalePortraitUrl: string | null;
 };
 
+type PopulationContentKind = "cultures" | "ideologies" | "religions" | "races" | "professions";
+
 type BreakdownRow = {
   id: string;
   label: string;
@@ -64,7 +66,7 @@ const STAT_TABS: Array<{
   { id: "branding", label: "Логотип и стиль", icon: Sticker },
 ];
 
-const KIND_BY_DIMENSION: Record<PopulationDimensionKey, ContentEntryKind> = {
+const KIND_BY_DIMENSION: Record<PopulationDimensionKey, PopulationContentKind> = {
   culturePct: "cultures",
   ideologyPct: "ideologies",
   religionPct: "religions",
@@ -192,7 +194,7 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
   const [section, setSection] = useState<PanelSection>("general");
   const [selectedByDimension, setSelectedByDimension] = useState<Partial<Record<PopulationDimensionKey, string>>>({});
   const [hoveredByDimension, setHoveredByDimension] = useState<Partial<Record<PopulationDimensionKey, string>>>({});
-  const [entryByKindById, setEntryByKindById] = useState<Record<ContentEntryKind, Record<string, ContentEntryMeta>>>({
+  const [entryByKindById, setEntryByKindById] = useState<Record<PopulationContentKind, Record<string, ContentEntryMeta>>>({
     cultures: {},
     ideologies: {},
     religions: {},

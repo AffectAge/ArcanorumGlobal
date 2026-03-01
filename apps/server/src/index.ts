@@ -62,6 +62,10 @@ const contentUploadDirs = {
   professions: resolve(uploadsRoot, "professions"),
   ideologies: resolve(uploadsRoot, "ideologies"),
   races: resolve(uploadsRoot, "races"),
+  buildings: resolve(uploadsRoot, "buildings"),
+  goods: resolve(uploadsRoot, "goods"),
+  companies: resolve(uploadsRoot, "companies"),
+  industries: resolve(uploadsRoot, "industries"),
   technologies: resolve(uploadsRoot, "technologies"),
 } as const;
 mkdirSync(flagsDir, { recursive: true });
@@ -80,6 +84,10 @@ function resolveContentUploadDir(kind?: string): string {
   if (kind === "professions") return contentUploadDirs.professions;
   if (kind === "ideologies") return contentUploadDirs.ideologies;
   if (kind === "races") return contentUploadDirs.races;
+  if (kind === "buildings") return contentUploadDirs.buildings;
+  if (kind === "goods") return contentUploadDirs.goods;
+  if (kind === "companies") return contentUploadDirs.companies;
+  if (kind === "industries") return contentUploadDirs.industries;
   if (kind === "technologies") return contentUploadDirs.technologies;
   return contentUploadDirs.cultures;
 }
@@ -355,6 +363,42 @@ type GameSettings = {
       femalePortraitUrl: string | null;
     }>;
     technologies: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+      malePortraitUrl: string | null;
+      femalePortraitUrl: string | null;
+    }>;
+    buildings: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+      malePortraitUrl: string | null;
+      femalePortraitUrl: string | null;
+    }>;
+    goods: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+      malePortraitUrl: string | null;
+      femalePortraitUrl: string | null;
+    }>;
+    companies: Array<{
+      id: string;
+      name: string;
+      description: string;
+      color: string;
+      logoUrl: string | null;
+      malePortraitUrl: string | null;
+      femalePortraitUrl: string | null;
+    }>;
+    industries: Array<{
       id: string;
       name: string;
       description: string;
@@ -919,14 +963,18 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
 }
 
 const defaultGameSettings = (): GameSettings => ({
-  content: {
-    races: [],
-    professions: [],
-    ideologies: [],
-    religions: [],
-    technologies: [],
-    cultures: [],
-  },
+    content: {
+      races: [],
+      professions: [],
+      ideologies: [],
+      religions: [],
+      technologies: [],
+      buildings: [],
+      goods: [],
+      companies: [],
+      industries: [],
+      cultures: [],
+    },
   civilopedia: {
     categories: defaultCivilopediaCategories(),
     entries: defaultCivilopediaEntries(),
@@ -1044,14 +1092,18 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     const defaults = defaultGameSettings();
     const civilopediaEntries = normalizeCivilopediaEntries((next as Partial<{ civilopedia?: { entries?: unknown } }>).civilopedia?.entries);
     gameSettings = {
-      content: {
-        races: normalizeContentRaces((next as Partial<{ content?: { races?: unknown } }>).content?.races),
-        professions: normalizeContentCultures((next as Partial<{ content?: { professions?: unknown } }>).content?.professions),
-        ideologies: normalizeContentCultures((next as Partial<{ content?: { ideologies?: unknown } }>).content?.ideologies),
-        religions: normalizeContentCultures((next as Partial<{ content?: { religions?: unknown } }>).content?.religions),
-        technologies: normalizeContentCultures((next as Partial<{ content?: { technologies?: unknown } }>).content?.technologies),
-        cultures: normalizeContentCultures((next as Partial<{ content?: { cultures?: unknown } }>).content?.cultures),
-      },
+        content: {
+          races: normalizeContentRaces((next as Partial<{ content?: { races?: unknown } }>).content?.races),
+          professions: normalizeContentCultures((next as Partial<{ content?: { professions?: unknown } }>).content?.professions),
+          ideologies: normalizeContentCultures((next as Partial<{ content?: { ideologies?: unknown } }>).content?.ideologies),
+          religions: normalizeContentCultures((next as Partial<{ content?: { religions?: unknown } }>).content?.religions),
+          technologies: normalizeContentCultures((next as Partial<{ content?: { technologies?: unknown } }>).content?.technologies),
+          buildings: normalizeContentCultures((next as Partial<{ content?: { buildings?: unknown } }>).content?.buildings),
+          goods: normalizeContentCultures((next as Partial<{ content?: { goods?: unknown } }>).content?.goods),
+          companies: normalizeContentCultures((next as Partial<{ content?: { companies?: unknown } }>).content?.companies),
+          industries: normalizeContentCultures((next as Partial<{ content?: { industries?: unknown } }>).content?.industries),
+          cultures: normalizeContentCultures((next as Partial<{ content?: { cultures?: unknown } }>).content?.cultures),
+        },
       civilopedia: {
         categories: normalizeCivilopediaCategories((next as Partial<{ civilopedia?: { categories?: unknown } }>).civilopedia?.categories, civilopediaEntries),
         entries: civilopediaEntries,
@@ -3054,7 +3106,17 @@ const culturePayloadSchema = z.object({
   description: z.string().trim().max(5000).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
 });
-const contentEntryKindSchema = z.enum(["cultures", "religions", "professions", "ideologies", "races"]);
+const contentEntryKindSchema = z.enum([
+  "cultures",
+  "religions",
+  "professions",
+  "ideologies",
+  "races",
+  "buildings",
+  "goods",
+  "companies",
+  "industries",
+]);
 type ContentEntryKind = z.infer<typeof contentEntryKindSchema>;
 
 function getContentEntriesByKind(kind: ContentEntryKind) {

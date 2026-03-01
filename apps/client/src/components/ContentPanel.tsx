@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { motion } from "framer-motion";
-import { Briefcase, FileText, Flame, Palette, Plus, ScrollText, Sticker, Trash2, Upload, UserRound, X } from "lucide-react";
+import { Briefcase, Building2, Factory, FileText, Flame, Package, Palette, Plus, ScrollText, Sticker, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
@@ -75,6 +75,46 @@ const CONTENT_UI_SCHEMA = {
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
+    {
+      id: "buildings",
+      label: "Здания",
+      icon: Building2,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
+      ] as const,
+    },
+    {
+      id: "goods",
+      label: "Товары",
+      icon: Package,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
+      ] as const,
+    },
+    {
+      id: "companies",
+      label: "Компании",
+      icon: Briefcase,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
+      ] as const,
+    },
+    {
+      id: "industries",
+      label: "Отрасли",
+      icon: Factory,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
+      ] as const,
+    },
   ] as const,
 } as const;
 type PanelCategory = ContentEntryKind;
@@ -123,6 +163,38 @@ const CATEGORY_META: Record<
     namePlaceholder: "Название идеологии",
     descriptionPlaceholder: "Краткое описание идеологии",
     sectionTitle: "Раздел создания и редактирования идеологий",
+  },
+  buildings: {
+    singular: "здание",
+    createBaseName: "Новое здание",
+    createLabel: "Создать здание",
+    namePlaceholder: "Название здания",
+    descriptionPlaceholder: "Краткое описание здания",
+    sectionTitle: "Раздел создания и редактирования зданий",
+  },
+  goods: {
+    singular: "товар",
+    createBaseName: "Новый товар",
+    createLabel: "Создать товар",
+    namePlaceholder: "Название товара",
+    descriptionPlaceholder: "Краткое описание товара",
+    sectionTitle: "Раздел создания и редактирования товаров",
+  },
+  companies: {
+    singular: "компания",
+    createBaseName: "Новая компания",
+    createLabel: "Создать компанию",
+    namePlaceholder: "Название компании",
+    descriptionPlaceholder: "Краткое описание компании",
+    sectionTitle: "Раздел создания и редактирования компаний",
+  },
+  industries: {
+    singular: "отрасль",
+    createBaseName: "Новая отрасль",
+    createLabel: "Создать отрасль",
+    namePlaceholder: "Название отрасли",
+    descriptionPlaceholder: "Краткое описание отрасли",
+    sectionTitle: "Раздел создания и редактирования отраслей",
   },
 };
 
@@ -430,7 +502,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
 
             <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
               <aside className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-3">
-                <Tooltip content="Выберите тип контента. Сейчас доступен раздел культур; остальные будут включены позже.">
+                <Tooltip content="Выберите тип контента для создания и редактирования записей.">
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">Категории</span>
                 </Tooltip>
                 <div className="mt-2 space-y-2">
