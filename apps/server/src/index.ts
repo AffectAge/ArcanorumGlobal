@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import Redis from "ioredis";
 import dotenv from "dotenv";
+import { Engine } from "json-rules-engine";
 import {
   type Country,
   type EventCategory,
@@ -338,6 +339,11 @@ type WorkforceRequirement = {
   workers: number;
 };
 
+type BuildingCountryLimit = {
+  countryId: string;
+  limit: number;
+};
+
 type GameContentEntry = {
   id: string;
   name: string;
@@ -358,6 +364,10 @@ type BuildingContentEntry = GameContentEntry & {
   inputs?: GoodFlow[];
   outputs?: GoodFlow[];
   workforceRequirements?: WorkforceRequirement[];
+  allowedCountryIds?: string[];
+  deniedCountryIds?: string[];
+  countryBuildLimits?: BuildingCountryLimit[];
+  globalBuildLimit?: number | null;
 };
 
 type GameSettings = {
@@ -500,6 +510,34 @@ function normalizeWorkforceRequirements(input: unknown): WorkforceRequirement[] 
   return items.slice(0, 64);
 }
 
+function normalizeCountryIdList(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const unique = new Set<string>();
+  const items: string[] = [];
+  for (const raw of input) {
+    if (typeof raw !== "string") continue;
+    const value = raw.trim();
+    if (!value || unique.has(value)) continue;
+    unique.add(value);
+    items.push(value);
+  }
+  return items.slice(0, 256);
+}
+
+function normalizeBuildingCountryLimits(input: unknown): BuildingCountryLimit[] {
+  if (!Array.isArray(input)) return [];
+  const byCountry = new Map<string, number>();
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Partial<{ countryId: unknown; limit: unknown }>;
+    const countryId = typeof row.countryId === "string" ? row.countryId.trim() : "";
+    const limit = typeof row.limit === "number" && Number.isFinite(row.limit) ? Math.max(1, Math.floor(row.limit)) : 0;
+    if (!countryId || limit <= 0) continue;
+    byCountry.set(countryId, limit);
+  }
+  return [...byCountry.entries()].slice(0, 256).map(([countryId, limit]) => ({ countryId, limit }));
+}
+
 function normalizeContentGoods(input: unknown): GameSettings["content"]["goods"] {
   const base = normalizeContentCultures(input);
   const sourceRows = Array.isArray(input) ? input : [];
@@ -524,6 +562,10 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       inputs?: unknown;
       outputs?: unknown;
       workforceRequirements?: unknown;
+      allowedCountryIds?: unknown;
+      deniedCountryIds?: unknown;
+      countryBuildLimits?: unknown;
+      globalBuildLimit?: unknown;
     }> | undefined;
     const costConstruction =
       typeof raw?.costConstruction === "number" && Number.isFinite(raw.costConstruction)
@@ -533,6 +575,10 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       typeof raw?.costDucats === "number" && Number.isFinite(raw.costDucats)
         ? Math.max(0, Number(raw.costDucats))
         : 10;
+    const globalBuildLimit =
+      typeof raw?.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit)
+        ? Math.max(1, Math.floor(raw.globalBuildLimit))
+        : null;
     return {
       ...entry,
       costConstruction,
@@ -540,6 +586,10 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       inputs: normalizeGoodFlows(raw?.inputs),
       outputs: normalizeGoodFlows(raw?.outputs),
       workforceRequirements: normalizeWorkforceRequirements(raw?.workforceRequirements),
+      allowedCountryIds: normalizeCountryIdList(raw?.allowedCountryIds),
+      deniedCountryIds: normalizeCountryIdList(raw?.deniedCountryIds),
+      countryBuildLimits: normalizeBuildingCountryLimits(raw?.countryBuildLimits),
+      globalBuildLimit,
     };
   });
 }
@@ -2883,6 +2933,113 @@ function resetTurnTimerAnchor(): void {
   currentTurnStartedAtMs = Date.now();
 }
 
+const buildingCountryAccessEngine = (() => {
+  const engine = new Engine();
+  engine.addRule({
+    conditions: {
+      all: [
+        { fact: "isDenied", operator: "equal", value: false },
+        { fact: "allowListSatisfied", operator: "equal", value: true },
+      ],
+    },
+    event: { type: "allowed" },
+  });
+  return engine;
+})();
+
+function parseRequestedBuildingIdFromPayload(payload: Record<string, unknown>): string {
+  const requestedBuildingId =
+    typeof payload.buildingId === "string"
+      ? payload.buildingId.trim()
+      : typeof payload.building === "string"
+        ? payload.building.trim()
+        : "";
+  if (requestedBuildingId) {
+    return requestedBuildingId;
+  }
+  return gameSettings.content.buildings[0]?.id || "";
+}
+
+function getBuildingRuleLists(building: BuildingContentEntry): { allowed: string[]; denied: string[] } {
+  return {
+    allowed: normalizeCountryIdList(building.allowedCountryIds),
+    denied: normalizeCountryIdList(building.deniedCountryIds),
+  };
+}
+
+function isCountryAllowedForBuildingSync(building: BuildingContentEntry, countryId: string): boolean {
+  const lists = getBuildingRuleLists(building);
+  if (lists.denied.includes(countryId)) {
+    return false;
+  }
+  if (lists.allowed.length > 0 && !lists.allowed.includes(countryId)) {
+    return false;
+  }
+  return true;
+}
+
+async function isCountryAllowedForBuildingWithEngine(building: BuildingContentEntry, countryId: string): Promise<boolean> {
+  const lists = getBuildingRuleLists(building);
+  const result = await buildingCountryAccessEngine.run({
+    isDenied: lists.denied.includes(countryId),
+    allowListSatisfied: lists.allowed.length === 0 || lists.allowed.includes(countryId),
+  });
+  return result.events.some((event) => event.type === "allowed");
+}
+
+function countBuildingOccurrences(
+  buildingId: string,
+  countryId: string,
+  options?: { includePendingOrders?: boolean },
+): { byCountry: number; global: number } {
+  let byCountry = 0;
+  let global = 0;
+
+  for (const [provinceId, levels] of Object.entries(worldBase.provinceBuildingsByProvince)) {
+    const level = Math.max(0, Math.floor(Number(levels?.[buildingId] ?? 0)));
+    if (level <= 0) continue;
+    global += level;
+    if ((worldBase.provinceOwner[provinceId] ?? null) === countryId) {
+      byCountry += level;
+    }
+  }
+
+  for (const [provinceId, queue] of Object.entries(worldBase.provinceConstructionQueueByProvince)) {
+    for (const project of queue ?? []) {
+      if (project.buildingId !== buildingId) continue;
+      global += 1;
+      if ((worldBase.provinceOwner[provinceId] ?? null) === countryId) {
+        byCountry += 1;
+      }
+    }
+  }
+
+  if (options?.includePendingOrders !== false) {
+    const turnOrders = ordersByTurn.get(turnId);
+    if (turnOrders) {
+      for (const orders of turnOrders.values()) {
+        for (const order of orders) {
+          if (order.type !== "BUILD") continue;
+          const payload = (order.payload ?? {}) as Record<string, unknown>;
+          if (parseRequestedBuildingIdFromPayload(payload) !== buildingId) continue;
+          global += 1;
+          if (order.countryId === countryId) {
+            byCountry += 1;
+          }
+        }
+      }
+    }
+  }
+
+  return { byCountry, global };
+}
+
+function getCountryBuildLimit(building: BuildingContentEntry, countryId: string): number | null {
+  const limits = normalizeBuildingCountryLimits(building.countryBuildLimits);
+  const row = limits.find((item) => item.countryId === countryId);
+  return row ? row.limit : null;
+}
+
 function resolveBuildingOwnerFromPayload(payload: Record<string, unknown>, requestedByCountryId: string): BuildingOwner | null {
   const rawOwner = payload.owner;
   if (!rawOwner || typeof rawOwner !== "object") {
@@ -3041,17 +3198,28 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
           continue;
         }
         const payload = (order.payload ?? {}) as Record<string, unknown>;
-        const requestedBuildingId =
-          typeof payload.buildingId === "string"
-            ? payload.buildingId.trim()
-            : typeof payload.building === "string"
-              ? payload.building.trim()
-              : "";
-        const fallbackBuildingId = gameSettings.content.buildings[0]?.id || "";
-        const buildingId = requestedBuildingId || fallbackBuildingId;
+        const buildingId = parseRequestedBuildingIdFromPayload(payload);
         const building = buildingById.get(buildingId);
         const ownerForProject = resolveBuildingOwnerFromPayload(payload, order.countryId);
         if (!buildingId || !building || !ownerForProject) {
+          rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
+          continue;
+        }
+        if (!isCountryAllowedForBuildingSync(building, order.countryId)) {
+          rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
+          continue;
+        }
+        const counts = countBuildingOccurrences(buildingId, order.countryId, { includePendingOrders: false });
+        const countryLimit = getCountryBuildLimit(building, order.countryId);
+        const globalLimit =
+          typeof building.globalBuildLimit === "number" && Number.isFinite(building.globalBuildLimit)
+            ? Math.max(1, Math.floor(building.globalBuildLimit))
+            : null;
+        if (countryLimit != null && counts.byCountry >= countryLimit) {
+          rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
+          continue;
+        }
+        if (globalLimit != null && counts.global >= globalLimit) {
           rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
           continue;
         }
@@ -3752,6 +3920,17 @@ const culturePayloadSchema = z.object({
       }),
     )
     .optional(),
+  allowedCountryIds: z.array(z.string().trim().min(1).max(120)).optional(),
+  deniedCountryIds: z.array(z.string().trim().min(1).max(120)).optional(),
+  countryBuildLimits: z
+    .array(
+      z.object({
+        countryId: z.string().trim().min(1).max(120),
+        limit: z.number().int().min(1),
+      }),
+    )
+    .optional(),
+  globalBuildLimit: z.number().int().min(1).nullable().optional(),
 });
 const contentEntryKindSchema = z.enum([
   "cultures",
@@ -3792,6 +3971,13 @@ function sanitizeContentEntryByKind(
       inputs: normalizeGoodFlows(payload.inputs),
       outputs: normalizeGoodFlows(payload.outputs),
       workforceRequirements: normalizeWorkforceRequirements(payload.workforceRequirements),
+      allowedCountryIds: normalizeCountryIdList(payload.allowedCountryIds),
+      deniedCountryIds: normalizeCountryIdList(payload.deniedCountryIds),
+      countryBuildLimits: normalizeBuildingCountryLimits(payload.countryBuildLimits),
+      globalBuildLimit:
+        payload.globalBuildLimit == null
+          ? null
+          : Math.max(1, Math.floor(Number(payload.globalBuildLimit))),
     };
   }
   return {};
@@ -6011,6 +6197,53 @@ wss.on("connection", (socket) => {
           return;
         }
 
+      }
+
+      if (delta.order.type === "BUILD") {
+        const owner = worldBase.provinceOwner[delta.order.provinceId];
+        if (!owner || owner !== delta.order.countryId) {
+          send({ type: "ERROR", code: "BUILD_CONFLICT", message: "Провинция не принадлежит вашей стране" });
+          return;
+        }
+        const payload = (delta.order.payload ?? {}) as Record<string, unknown>;
+        const buildingId = parseRequestedBuildingIdFromPayload(payload);
+        const building = gameSettings.content.buildings.find((entry) => entry.id === buildingId);
+        if (!buildingId || !building) {
+          send({ type: "ERROR", code: "BUILD_INVALID", message: "Некорректное здание для строительства" });
+          return;
+        }
+        const ownerForProject = resolveBuildingOwnerFromPayload(payload, delta.order.countryId);
+        if (!ownerForProject) {
+          send({ type: "ERROR", code: "BUILD_INVALID", message: "Некорректный владелец проекта" });
+          return;
+        }
+        const allowedByRules = await isCountryAllowedForBuildingWithEngine(building, delta.order.countryId);
+        if (!allowedByRules) {
+          send({ type: "ERROR", code: "BUILD_RESTRICTED", message: "Ваша страна не может строить это здание" });
+          return;
+        }
+        const counts = countBuildingOccurrences(buildingId, delta.order.countryId, { includePendingOrders: true });
+        const countryLimit = getCountryBuildLimit(building, delta.order.countryId);
+        const globalLimit =
+          typeof building.globalBuildLimit === "number" && Number.isFinite(building.globalBuildLimit)
+            ? Math.max(1, Math.floor(building.globalBuildLimit))
+            : null;
+        if (countryLimit != null && counts.byCountry >= countryLimit) {
+          send({
+            type: "ERROR",
+            code: "BUILD_LIMIT_COUNTRY",
+            message: `Достигнут лимит здания для страны: ${counts.byCountry}/${countryLimit}`,
+          });
+          return;
+        }
+        if (globalLimit != null && counts.global >= globalLimit) {
+          send({
+            type: "ERROR",
+            code: "BUILD_LIMIT_GLOBAL",
+            message: `Достигнут глобальный лимит здания: ${counts.global}/${globalLimit}`,
+          });
+          return;
+        }
       }
 
       if (playerOrders.length >= 8) {

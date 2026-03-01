@@ -300,11 +300,73 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     }
 
     const raw = building as unknown as Record<string, unknown>;
-    const allowedCountries = Array.isArray(raw.allowedCountries)
-      ? raw.allowedCountries.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    const allowedCountries = Array.isArray(raw.allowedCountryIds)
+      ? raw.allowedCountryIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : Array.isArray(raw.allowedCountries)
+        ? raw.allowedCountries.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        : [];
+    const deniedCountries = Array.isArray(raw.deniedCountryIds)
+      ? raw.deniedCountryIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       : [];
-    if (allowedCountries.length > 0 && !allowedCountries.includes(countryId)) {
-      reasons.push("Страна не может строить это здание");
+    if (deniedCountries.includes(countryId)) {
+      reasons.push("Страна находится в списке запрета");
+    } else if (allowedCountries.length > 0 && !allowedCountries.includes(countryId)) {
+      reasons.push("Страна не входит в список разрешенных");
+    }
+
+    const countBuiltAndQueued = Object.entries(worldBase?.provinceBuildingsByProvince ?? {}).reduce(
+      (sum, [, levels]) => sum + Math.max(0, Math.floor(Number(levels?.[building.id] ?? 0))),
+      0,
+    ) +
+      Object.values(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce(
+        (sum, queue) => sum + (queue ?? []).filter((project) => project.buildingId === building.id).length,
+        0,
+      );
+    const countBuiltAndQueuedByCountry =
+      Object.entries(worldBase?.provinceBuildingsByProvince ?? {}).reduce((sum, [pid, levels]) => {
+        if ((worldBase?.provinceOwner?.[pid] ?? "") !== countryId) return sum;
+        return sum + Math.max(0, Math.floor(Number(levels?.[building.id] ?? 0)));
+      }, 0) +
+      Object.entries(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce((sum, [pid, queue]) => {
+        if ((worldBase?.provinceOwner?.[pid] ?? "") !== countryId) return sum;
+        return sum + (queue ?? []).filter((project) => project.buildingId === building.id).length;
+      }, 0);
+    const pendingBuildOrders = [...(ordersByTurn.get(turnId)?.values() ?? [])]
+      .flat()
+      .filter((order) => {
+        if (order.type !== "BUILD") return false;
+        const payload = (order.payload ?? {}) as Record<string, unknown>;
+        const requestedBuildingId =
+          typeof payload.buildingId === "string"
+            ? payload.buildingId
+            : typeof payload.building === "string"
+              ? payload.building
+              : "";
+        return requestedBuildingId === building.id;
+      });
+    const pendingGlobal = pendingBuildOrders.length;
+    const pendingByCountry = pendingBuildOrders.filter((order) => order.countryId === countryId).length;
+    const globalLimit =
+      typeof raw.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit)
+        ? Math.max(1, Math.floor(raw.globalBuildLimit))
+        : null;
+    if (globalLimit != null && countBuiltAndQueued + pendingGlobal >= globalLimit) {
+      reasons.push(`Достигнут глобальный лимит (${countBuiltAndQueued + pendingGlobal}/${globalLimit})`);
+    }
+    const countryLimits = Array.isArray(raw.countryBuildLimits)
+      ? raw.countryBuildLimits.filter(
+          (row): row is { countryId: string; limit: number } =>
+            Boolean(
+              row &&
+                typeof row === "object" &&
+                typeof (row as { countryId?: unknown }).countryId === "string" &&
+                typeof (row as { limit?: unknown }).limit === "number",
+            ),
+        )
+      : [];
+    const countryLimit = countryLimits.find((row) => row.countryId === countryId)?.limit ?? null;
+    if (countryLimit != null && countBuiltAndQueuedByCountry + pendingByCountry >= countryLimit) {
+      reasons.push(`Достигнут лимит для страны (${countBuiltAndQueuedByCountry + pendingByCountry}/${countryLimit})`);
     }
 
     const dependencySource = Array.isArray(raw.requiredProvinceBuildingIds)
@@ -338,7 +400,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
             Number(b.availability.available) - Number(a.availability.available) ||
             a.building.name.localeCompare(b.building.name, "ru"),
         ),
-    [sortedBuildings, provinceId, ownerType, ownerCompanyId, countryId, selectedProvinceBuildings, buildingById],
+    [sortedBuildings, provinceId, ownerType, ownerCompanyId, countryId, selectedProvinceBuildings, buildingById, worldBase, ordersByTurn, turnId],
   );
 
   const submitBuild = (targetBuildingId: string) => {

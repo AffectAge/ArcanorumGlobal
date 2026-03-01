@@ -25,6 +25,7 @@
     "geojson-vt": "^4.0.2",
     "image-size": "^2.0.2",
     "ioredis": "^5.4.1",
+    "json-rules-engine": "^7.3.1",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "svg-path-properties": "^2.0.1",

@@ -18,6 +18,10 @@ export type ContentCulture = {
   inputs?: Array<{ goodId: string; amount: number }> | null;
   outputs?: Array<{ goodId: string; amount: number }> | null;
   workforceRequirements?: Array<{ professionId: string; workers: number }> | null;
+  allowedCountryIds?: string[] | null;
+  deniedCountryIds?: string[] | null;
+  countryBuildLimits?: Array<{ countryId: string; limit: number }> | null;
+  globalBuildLimit?: number | null;
 };
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind =
@@ -30,6 +34,22 @@ export type ContentEntryKind =
   | "goods"
   | "companies"
   | "industries";
+
+type ContentEntryUpsertPayload = {
+  name: string;
+  description?: string;
+  color: string;
+  basePrice?: number | null;
+  costConstruction?: number | null;
+  costDucats?: number | null;
+  inputs?: Array<{ goodId: string; amount: number }>;
+  outputs?: Array<{ goodId: string; amount: number }>;
+  workforceRequirements?: Array<{ professionId: string; workers: number }>;
+  allowedCountryIds?: string[];
+  deniedCountryIds?: string[];
+  countryBuildLimits?: Array<{ countryId: string; limit: number }>;
+  globalBuildLimit?: number | null;
+};
 
 
 function withAssetBase(url?: string | null): string | null | undefined {
@@ -143,17 +163,7 @@ export async function adminFetchContentEntries(token: string, kind: ContentEntry
 export async function adminCreateContentEntry(
   token: string,
   kind: ContentEntryKind,
-  payload: {
-    name: string;
-    description?: string;
-    color: string;
-    basePrice?: number | null;
-    costConstruction?: number | null;
-    costDucats?: number | null;
-    inputs?: Array<{ goodId: string; amount: number }>;
-    outputs?: Array<{ goodId: string; amount: number }>;
-    workforceRequirements?: Array<{ professionId: string; workers: number }>;
-  },
+  payload: ContentEntryUpsertPayload,
 ) {
   const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}`, {
     method: "POST",
@@ -172,17 +182,7 @@ export async function adminUpdateContentEntry(
   token: string,
   kind: ContentEntryKind,
   entryId: string,
-  payload: {
-    name: string;
-    description?: string;
-    color: string;
-    basePrice?: number | null;
-    costConstruction?: number | null;
-    costDucats?: number | null;
-    inputs?: Array<{ goodId: string; amount: number }>;
-    outputs?: Array<{ goodId: string; amount: number }>;
-    workforceRequirements?: Array<{ professionId: string; workers: number }>;
-  },
+  payload: ContentEntryUpsertPayload,
 ) {
   const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}`, {
     method: "PATCH",

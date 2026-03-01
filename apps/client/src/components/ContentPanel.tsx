@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
-import { motion } from "framer-motion";
-import { Briefcase, Building2, Factory, FileText, Flame, Package, Palette, Plus, ScrollText, Sticker, Trash2, Upload, UserRound, X } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Briefcase, Building2, ChevronDown, ChevronRight, Factory, FileText, Flame, Package, Palette, Plus, ScrollText, Sticker, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
@@ -14,6 +14,8 @@ import {
   adminUpdateContentEntry,
   adminUploadContentEntryLogo,
   adminUploadRacePortrait,
+  fetchCountries,
+  fetchWorldSnapshot,
   type ContentEntry,
   type ContentEntryKind,
 } from "../lib/api";
@@ -84,6 +86,7 @@ const CONTENT_UI_SCHEMA = {
       sections: [
         { id: "general", label: "Основная информация", icon: FileText },
         { id: "economy", label: "Экономика и производство", icon: Factory },
+        { id: "criteria", label: "Критерии", icon: ScrollText },
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
@@ -121,9 +124,10 @@ const CONTENT_UI_SCHEMA = {
   ] as const,
 } as const;
 type PanelCategory = ContentEntryKind;
-type PanelSection = "general" | "economy" | "branding";
+type PanelSection = "general" | "economy" | "criteria" | "branding";
 type GoodFlowDraft = { goodId: string; amount: string };
 type WorkforceRequirementDraft = { professionId: string; workers: string };
+type CountryBuildLimitDraft = { countryId: string; limit: string };
 
 const CATEGORY_META: Record<
   PanelCategory,
@@ -265,6 +269,23 @@ function normalizeWorkforceDraft(rows: WorkforceRequirementDraft[]): Array<{ pro
     .map((row) => ({ ...row, workers: Math.floor(row.workers) }));
 }
 
+function normalizeCountryIdsDraft(rows: string[]): string[] {
+  return [...new Set(rows.map((row) => row.trim()).filter((row) => row.length > 0))];
+}
+
+function normalizeCountryBuildLimitsDraft(
+  rows: CountryBuildLimitDraft[],
+): Array<{ countryId: string; limit: number }> {
+  const dedup = new Map<string, number>();
+  for (const row of rows) {
+    const countryId = row.countryId.trim();
+    const limit = Number(row.limit);
+    if (!countryId || !Number.isFinite(limit) || limit <= 0) continue;
+    dedup.set(countryId, Math.max(1, Math.floor(limit)));
+  }
+  return [...dedup.entries()].map(([countryId, limit]) => ({ countryId, limit }));
+}
+
 export function ContentPanel({ open, token, onClose }: Props) {
   const [activeCategory, setActiveCategory] = useState<PanelCategory>("cultures");
   const [contentSection, setContentSection] = useState<PanelSection>("general");
@@ -287,8 +308,26 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftInputs, setDraftInputs] = useState<GoodFlowDraft[]>([]);
   const [draftOutputs, setDraftOutputs] = useState<GoodFlowDraft[]>([]);
   const [draftWorkforceRequirements, setDraftWorkforceRequirements] = useState<WorkforceRequirementDraft[]>([]);
+  const [draftAllowedCountryIds, setDraftAllowedCountryIds] = useState<string[]>([]);
+  const [draftDeniedCountryIds, setDraftDeniedCountryIds] = useState<string[]>([]);
+  const [draftCountryBuildLimits, setDraftCountryBuildLimits] = useState<CountryBuildLimitDraft[]>([]);
+  const [draftGlobalBuildLimit, setDraftGlobalBuildLimit] = useState("");
+  const [allowCountrySearch, setAllowCountrySearch] = useState("");
+  const [denyCountrySearch, setDenyCountrySearch] = useState("");
+  const [criteriaCountriesOpen, setCriteriaCountriesOpen] = useState(false);
+  const [criteriaLimitsOpen, setCriteriaLimitsOpen] = useState(false);
+  const [goodsEconomyOpen, setGoodsEconomyOpen] = useState(false);
+  const [buildingCostOpen, setBuildingCostOpen] = useState(false);
+  const [buildingInputsOpen, setBuildingInputsOpen] = useState(false);
+  const [buildingOutputsOpen, setBuildingOutputsOpen] = useState(false);
+  const [buildingWorkforceOpen, setBuildingWorkforceOpen] = useState(false);
   const [goodsOptions, setGoodsOptions] = useState<ContentEntry[]>([]);
   const [professionOptions, setProfessionOptions] = useState<ContentEntry[]>([]);
+  const [countryOptions, setCountryOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [worldBuildingUsage, setWorldBuildingUsage] = useState<{
+    globalByBuildingId: Record<string, number>;
+    byCountryByBuildingId: Record<string, Record<string, number>>;
+  }>({ globalByBuildingId: {}, byCountryByBuildingId: {} });
   const [savedSnapshot, setSavedSnapshot] = useState<string>("");
   const buildSnapshot = (entry: ContentEntry) =>
     JSON.stringify({
@@ -308,6 +347,15 @@ export function ContentPanel({ open, token, onClose }: Props) {
         professionId: row.professionId,
         workers: Math.floor(row.workers),
       })),
+      allowedCountryIds: normalizeCountryIdsDraft(entry.allowedCountryIds ?? []),
+      deniedCountryIds: normalizeCountryIdsDraft(entry.deniedCountryIds ?? []),
+      countryBuildLimits: normalizeCountryBuildLimitsDraft(
+        (entry.countryBuildLimits ?? []).map((row) => ({ countryId: row.countryId, limit: String(row.limit) })),
+      ),
+      globalBuildLimit:
+        typeof entry.globalBuildLimit === "number" && Number.isFinite(entry.globalBuildLimit)
+          ? Math.max(1, Math.floor(entry.globalBuildLimit))
+          : null,
     });
 
   const filteredEntries = useMemo(() => {
@@ -320,6 +368,50 @@ export function ContentPanel({ open, token, onClose }: Props) {
     () => entries.find((c) => c.id === selectedEntryId) ?? null,
     [entries, selectedEntryId],
   );
+
+  const allowedCountryIdsNormalized = useMemo(
+    () => normalizeCountryIdsDraft(draftAllowedCountryIds),
+    [draftAllowedCountryIds],
+  );
+  const deniedCountryIdsNormalized = useMemo(
+    () => normalizeCountryIdsDraft(draftDeniedCountryIds),
+    [draftDeniedCountryIds],
+  );
+  const conflictingCountryIds = useMemo(() => {
+    const denySet = new Set(deniedCountryIdsNormalized);
+    return allowedCountryIdsNormalized.filter((countryId) => denySet.has(countryId));
+  }, [allowedCountryIdsNormalized, deniedCountryIdsNormalized]);
+  const conflictingCountryNames = useMemo(
+    () =>
+      conflictingCountryIds.map(
+        (countryId) => countryOptions.find((country) => country.id === countryId)?.name ?? countryId,
+      ),
+    [conflictingCountryIds, countryOptions],
+  );
+  const filteredAllowCountryOptions = useMemo(() => {
+    const q = allowCountrySearch.trim().toLowerCase();
+    if (!q) return countryOptions;
+    return countryOptions.filter(
+      (country) =>
+        country.name.toLowerCase().includes(q) || country.id.toLowerCase().includes(q),
+    );
+  }, [countryOptions, allowCountrySearch]);
+  const filteredDenyCountryOptions = useMemo(() => {
+    const q = denyCountrySearch.trim().toLowerCase();
+    if (!q) return countryOptions;
+    return countryOptions.filter(
+      (country) =>
+        country.name.toLowerCase().includes(q) || country.id.toLowerCase().includes(q),
+    );
+  }, [countryOptions, denyCountrySearch]);
+  const selectedBuildingGlobalUsage = useMemo(() => {
+    if (!selectedEntry) return 0;
+    return Math.max(0, Math.floor(worldBuildingUsage.globalByBuildingId[selectedEntry.id] ?? 0));
+  }, [selectedEntry, worldBuildingUsage.globalByBuildingId]);
+  const selectedBuildingUsageByCountry = useMemo(() => {
+    if (!selectedEntry) return {};
+    return worldBuildingUsage.byCountryByBuildingId[selectedEntry.id] ?? {};
+  }, [selectedEntry, worldBuildingUsage.byCountryByBuildingId]);
 
   const categoryMeta = CATEGORY_META[activeCategory];
 
@@ -347,17 +439,66 @@ export function ContentPanel({ open, token, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    Promise.all([adminFetchContentEntries(token, "goods"), adminFetchContentEntries(token, "professions")])
-      .then(([goods, professions]) => {
+    Promise.all([adminFetchContentEntries(token, "goods"), adminFetchContentEntries(token, "professions"), fetchCountries()])
+      .then(([goods, professions, countries]) => {
         if (cancelled) return;
         setGoodsOptions(goods);
         setProfessionOptions(professions);
+        setCountryOptions(countries.map((country) => ({ id: country.id, name: country.name })));
       })
       .catch(() => {
         if (cancelled) return;
         setGoodsOptions([]);
         setProfessionOptions([]);
+        setCountryOptions([]);
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, token]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetchWorldSnapshot(token)
+      .then((snapshot) => {
+        if (cancelled) return;
+        const globalByBuildingId: Record<string, number> = {};
+        const byCountryByBuildingId: Record<string, Record<string, number>> = {};
+
+        const addUsage = (buildingId: string, countryId: string | null, amount: number) => {
+          if (!buildingId || amount <= 0) return;
+          globalByBuildingId[buildingId] = (globalByBuildingId[buildingId] ?? 0) + amount;
+          if (!countryId) return;
+          if (!byCountryByBuildingId[buildingId]) {
+            byCountryByBuildingId[buildingId] = {};
+          }
+          byCountryByBuildingId[buildingId][countryId] =
+            (byCountryByBuildingId[buildingId][countryId] ?? 0) + amount;
+        };
+
+        for (const [provinceId, levels] of Object.entries(snapshot.worldBase.provinceBuildingsByProvince ?? {})) {
+          const ownerCountryId = snapshot.worldBase.provinceOwner?.[provinceId] ?? null;
+          for (const [buildingId, levelRaw] of Object.entries(levels ?? {})) {
+            const amount = Math.max(0, Math.floor(Number(levelRaw) || 0));
+            addUsage(buildingId, ownerCountryId, amount);
+          }
+        }
+
+        for (const [provinceId, queue] of Object.entries(snapshot.worldBase.provinceConstructionQueueByProvince ?? {})) {
+          const ownerCountryId = snapshot.worldBase.provinceOwner?.[provinceId] ?? null;
+          for (const project of queue ?? []) {
+            addUsage(project.buildingId, ownerCountryId, 1);
+          }
+        }
+
+        setWorldBuildingUsage({ globalByBuildingId, byCountryByBuildingId });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorldBuildingUsage({ globalByBuildingId: {}, byCountryByBuildingId: {} });
+      });
+
     return () => {
       cancelled = true;
     };
@@ -384,6 +525,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftInputs([]);
       setDraftOutputs([]);
       setDraftWorkforceRequirements([]);
+      setDraftAllowedCountryIds([]);
+      setDraftDeniedCountryIds([]);
+      setDraftCountryBuildLimits([]);
+      setDraftGlobalBuildLimit("");
       setSavedSnapshot("");
       return;
     }
@@ -416,6 +561,28 @@ export function ContentPanel({ open, token, onClose }: Props) {
         workers: String(row.workers),
       })),
     );
+    setDraftAllowedCountryIds(normalizeCountryIdsDraft(selectedEntry.allowedCountryIds ?? []));
+    setDraftDeniedCountryIds(normalizeCountryIdsDraft(selectedEntry.deniedCountryIds ?? []));
+    setDraftCountryBuildLimits(
+      (selectedEntry.countryBuildLimits ?? []).map((row) => ({
+        countryId: row.countryId,
+        limit: String(Math.max(1, Math.floor(row.limit))),
+      })),
+    );
+    setDraftGlobalBuildLimit(
+      typeof selectedEntry.globalBuildLimit === "number" && Number.isFinite(selectedEntry.globalBuildLimit)
+        ? String(Math.max(1, Math.floor(selectedEntry.globalBuildLimit)))
+        : "",
+    );
+    setCriteriaCountriesOpen(false);
+    setCriteriaLimitsOpen(false);
+    setGoodsEconomyOpen(false);
+    setBuildingCostOpen(false);
+    setBuildingInputsOpen(false);
+    setBuildingOutputsOpen(false);
+    setBuildingWorkforceOpen(false);
+    setAllowCountrySearch("");
+    setDenyCountrySearch("");
     setSavedSnapshot(buildSnapshot(selectedEntry));
   }, [selectedEntry]);
 
@@ -451,6 +618,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
         inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
         outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : [],
         workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : [],
+        allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : [],
+        deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : [],
+        countryBuildLimits:
+          activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : [],
+        globalBuildLimit:
+          activeCategory === "buildings"
+            ? Number.isFinite(Number(draftGlobalBuildLimit))
+              ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
+              : null
+            : null,
       }) !== savedSnapshot
     );
   }, [
@@ -467,6 +644,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftName,
     draftOutputs,
     draftWorkforceRequirements,
+    draftAllowedCountryIds,
+    draftDeniedCountryIds,
+    draftCountryBuildLimits,
+    draftGlobalBuildLimit,
     savedSnapshot,
     selectedEntry,
   ]);
@@ -500,6 +681,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
         inputs: activeCategory === "buildings" ? [] : undefined,
         outputs: activeCategory === "buildings" ? [] : undefined,
         workforceRequirements: activeCategory === "buildings" ? [] : undefined,
+        allowedCountryIds: activeCategory === "buildings" ? [] : undefined,
+        deniedCountryIds: activeCategory === "buildings" ? [] : undefined,
+        countryBuildLimits: activeCategory === "buildings" ? [] : undefined,
+        globalBuildLimit: activeCategory === "buildings" ? null : undefined,
       });
       setEntries(result.items);
       setSelectedEntryId(result.item.id);
@@ -541,6 +726,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
       inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : undefined,
       outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : undefined,
       workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : undefined,
+      allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : undefined,
+      deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : undefined,
+      countryBuildLimits:
+        activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : undefined,
+      globalBuildLimit:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftGlobalBuildLimit))
+            ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
+            : null
+          : undefined,
     };
     if (activeCategory === "goods" && !Number.isFinite(payload.basePrice ?? Number.NaN)) {
       toast.error("Базовая цена товара должна быть числом");
@@ -893,10 +1088,30 @@ export function ContentPanel({ open, token, onClose }: Props) {
                       <section className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="space-y-4">
                           <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                            <Tooltip content="Базовые затраты на добавление одного уровня здания в очередь строительства.">
-                              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Стоимость строительства</div>
-                            </Tooltip>
-                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                            <button
+                              type="button"
+                              onClick={() => setBuildingCostOpen((v) => !v)}
+                              className="mb-2 flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                            >
+                              <Tooltip content="Базовые затраты на добавление одного уровня здания в очередь строительства.">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Стоимость строительства</div>
+                              </Tooltip>
+                              {buildingCostOpen ? (
+                                <ChevronDown size={14} className="text-white/60" />
+                              ) : (
+                                <ChevronRight size={14} className="text-white/60" />
+                              )}
+                            </button>
+                            <AnimatePresence initial={false}>
+                            {buildingCostOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 pt-1">
                               <label className="block">
                                 <Tooltip content="Сколько очков строительства требуется на завершение проекта.">
                                   <span className="mb-1 block text-xs text-white/60">Очки строительства</span>
@@ -922,24 +1137,49 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                 />
                               </label>
                             </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
                           </div>
 
                           <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                            <div className="mb-2 flex items-center justify-between">
-                              <Tooltip content="Товары, которые здание потребляет каждый ход при производстве.">
-                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Входные товары</div>
-                              </Tooltip>
-                              <Tooltip content="Добавить новую строку входного товара.">
-                                <button
-                                  type="button"
-                                  onClick={() => setDraftInputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
-                                  className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
-                                >
-                                  Добавить
-                                </button>
-                              </Tooltip>
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBuildingInputsOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Товары, которые здание потребляет каждый ход при производстве.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Входные товары</div>
+                                </Tooltip>
+                                {buildingInputsOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                              {buildingInputsOpen && (
+                                <Tooltip content="Добавить новую строку входного товара.">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftInputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
+                                    className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+                                  >
+                                    Добавить
+                                  </button>
+                                </Tooltip>
+                              )}
                             </div>
-                            <div className="space-y-2">
+                            <AnimatePresence initial={false}>
+                            {buildingInputsOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                            <div className="space-y-2 pt-1">
                               {draftInputs.map((row, index) => (
                                 <div key={`input-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
                                   <CustomSelect
@@ -973,24 +1213,49 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               ))}
                               {draftInputs.length === 0 && <div className="text-xs text-white/45">Нет входных товаров</div>}
                             </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
                           </div>
 
                           <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                            <div className="mb-2 flex items-center justify-between">
-                              <Tooltip content="Товары, которые здание производит каждый ход.">
-                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Выходные товары</div>
-                              </Tooltip>
-                              <Tooltip content="Добавить новую строку выходного товара.">
-                                <button
-                                  type="button"
-                                  onClick={() => setDraftOutputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
-                                  className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
-                                >
-                                  Добавить
-                                </button>
-                              </Tooltip>
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBuildingOutputsOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Товары, которые здание производит каждый ход.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Выходные товары</div>
+                                </Tooltip>
+                                {buildingOutputsOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                              {buildingOutputsOpen && (
+                                <Tooltip content="Добавить новую строку выходного товара.">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftOutputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
+                                    className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+                                  >
+                                    Добавить
+                                  </button>
+                                </Tooltip>
+                              )}
                             </div>
-                            <div className="space-y-2">
+                            <AnimatePresence initial={false}>
+                            {buildingOutputsOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                            <div className="space-y-2 pt-1">
                               {draftOutputs.map((row, index) => (
                                 <div key={`output-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
                                   <CustomSelect
@@ -1024,26 +1289,54 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               ))}
                               {draftOutputs.length === 0 && <div className="text-xs text-white/45">Нет выходных товаров</div>}
                             </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
                           </div>
 
                           <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                            <div className="mb-2 flex items-center justify-between">
-                              <Tooltip content="Требуемые профессии и количество рабочих мест по каждой профессии.">
-                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Профессии и рабочие места</div>
-                              </Tooltip>
-                              <Tooltip content="Добавить новую строку требования по профессии.">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setDraftWorkforceRequirements((prev) => [...prev, { professionId: professionOptions[0]?.id ?? "", workers: "100" }])
-                                  }
-                                  className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
-                                >
-                                  Добавить
-                                </button>
-                              </Tooltip>
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBuildingWorkforceOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Требуемые профессии и количество рабочих мест по каждой профессии.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Профессии и рабочие места</div>
+                                </Tooltip>
+                                {buildingWorkforceOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                              {buildingWorkforceOpen && (
+                                <Tooltip content="Добавить новую строку требования по профессии.">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDraftWorkforceRequirements((prev) => [
+                                        ...prev,
+                                        { professionId: professionOptions[0]?.id ?? "", workers: "100" },
+                                      ])
+                                    }
+                                    className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+                                  >
+                                    Добавить
+                                  </button>
+                                </Tooltip>
+                              )}
                             </div>
-                            <div className="space-y-2">
+                            <AnimatePresence initial={false}>
+                            {buildingWorkforceOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                            <div className="space-y-2 pt-1">
                               {draftWorkforceRequirements.map((row, index) => (
                                 <div key={`workforce-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
                                   <CustomSelect
@@ -1081,6 +1374,259 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               ))}
                               {draftWorkforceRequirements.length === 0 && <div className="text-xs text-white/45">Нет требований по профессиям</div>}
                             </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
+                          </div>
+
+                        </div>
+                      </section>
+                    )}
+
+                    {contentSection === "criteria" && activeCategory === "buildings" && (
+                      <section className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="space-y-4">
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <button
+                              type="button"
+                              onClick={() => setCriteriaCountriesOpen((v) => !v)}
+                              className="mb-2 flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                            >
+                              <Tooltip content="Настройка стран, которые могут или не могут строить это здание.">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Условия стран</div>
+                              </Tooltip>
+                              {criteriaCountriesOpen ? (
+                                <ChevronDown size={14} className="text-white/60" />
+                              ) : (
+                                <ChevronRight size={14} className="text-white/60" />
+                              )}
+                            </button>
+                            <AnimatePresence initial={false}>
+                            {criteriaCountriesOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                            <div className="grid gap-3 md:grid-cols-2 pt-1">
+                              <div>
+                                <Tooltip content="Мультивыбор: если список не пуст, строить смогут только страны из него (кроме явно запрещенных).">
+                                  <div className="mb-1 text-[11px] text-emerald-300/90">
+                                    Разрешенные страны ({allowedCountryIdsNormalized.length})
+                                  </div>
+                                </Tooltip>
+                                <input
+                                  value={allowCountrySearch}
+                                  onChange={(e) => setAllowCountrySearch(e.target.value)}
+                                  placeholder="Поиск страны..."
+                                  className="mb-2 w-full rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-xs text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                                <div className="arc-scrollbar max-h-40 space-y-1 overflow-auto pr-1">
+                                  {filteredAllowCountryOptions.map((country) => {
+                                    const selected = allowedCountryIdsNormalized.includes(country.id);
+                                    return (
+                                      <button
+                                        key={`allow-country-${country.id}`}
+                                        type="button"
+                                        onClick={() =>
+                                          setDraftAllowedCountryIds((prev) =>
+                                            prev.includes(country.id)
+                                              ? prev.filter((id) => id !== country.id)
+                                              : [...prev, country.id],
+                                          )
+                                        }
+                                        className={`flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-xs ${
+                                          selected
+                                            ? "border-emerald-400/45 bg-emerald-500/15 text-emerald-200"
+                                            : "border-white/10 bg-black/25 text-white/70"
+                                        }`}
+                                      >
+                                        <span className="truncate">{country.name}</span>
+                                        <span className={selected ? "text-emerald-200" : "text-white/35"}>{selected ? "✓" : "○"}</span>
+                                      </button>
+                                    );
+                                  })}
+                                  {filteredAllowCountryOptions.length === 0 && (
+                                    <div className="rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-xs text-white/45">
+                                      Страны не найдены
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <Tooltip content="Страны из этого списка не смогут строить здание, даже если они есть в разрешенных.">
+                                  <div className="mb-1 text-[11px] text-red-300/90">
+                                    Запрещенные страны ({deniedCountryIdsNormalized.length})
+                                  </div>
+                                </Tooltip>
+                                <input
+                                  value={denyCountrySearch}
+                                  onChange={(e) => setDenyCountrySearch(e.target.value)}
+                                  placeholder="Поиск страны..."
+                                  className="mb-2 w-full rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-xs text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                                <div className="arc-scrollbar max-h-40 space-y-1 overflow-auto pr-1">
+                                  {filteredDenyCountryOptions.map((country) => {
+                                    const selected = deniedCountryIdsNormalized.includes(country.id);
+                                    return (
+                                      <button
+                                        key={`deny-country-${country.id}`}
+                                        type="button"
+                                        onClick={() =>
+                                          setDraftDeniedCountryIds((prev) =>
+                                            prev.includes(country.id)
+                                              ? prev.filter((id) => id !== country.id)
+                                              : [...prev, country.id],
+                                          )
+                                        }
+                                        className={`flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-xs ${
+                                          selected
+                                            ? "border-red-400/45 bg-red-500/15 text-red-200"
+                                            : "border-white/10 bg-black/25 text-white/70"
+                                        }`}
+                                      >
+                                        <span className="truncate">{country.name}</span>
+                                        <span className={selected ? "text-red-200" : "text-white/35"}>{selected ? "✓" : "○"}</span>
+                                      </button>
+                                    );
+                                  })}
+                                  {filteredDenyCountryOptions.length === 0 && (
+                                    <div className="rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-xs text-white/45">
+                                      Страны не найдены
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            {conflictingCountryNames.length > 0 && (
+                              <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">
+                                Конфликт критериев: страна одновременно в allow и deny: {conflictingCountryNames.join(", ")}
+                              </div>
+                            )}
+                            <div className="mt-2 text-[11px] text-white/45">
+                              Если список разрешенных пуст, строить могут все страны, кроме запрещенных.
+                            </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <button
+                              type="button"
+                              onClick={() => setCriteriaLimitsOpen((v) => !v)}
+                              className="mb-2 flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                            >
+                              <Tooltip content="Лимиты работают как cap на текущее количество построенных и строящихся зданий.">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Лимиты количества</div>
+                              </Tooltip>
+                              {criteriaLimitsOpen ? (
+                                <ChevronDown size={14} className="text-white/60" />
+                              ) : (
+                                <ChevronRight size={14} className="text-white/60" />
+                              )}
+                            </button>
+                            <AnimatePresence initial={false}>
+                            {criteriaLimitsOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                            <div className="mb-3">
+                              <label className="block">
+                                <Tooltip content="Пусто = без ограничений. Справа показан текущий счётчик: использовано/лимит.">
+                                  <span className="mb-1 block text-xs text-white/60">
+                                    Глобальный лимит (для всего мира):{" "}
+                                    <span className="text-amber-300/90">
+                                      {selectedBuildingGlobalUsage}/
+                                      {Number.isFinite(Number(draftGlobalBuildLimit))
+                                        ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
+                                        : "∞"}
+                                    </span>
+                                  </span>
+                                </Tooltip>
+                                <input
+                                  value={draftGlobalBuildLimit}
+                                  onChange={(e) => setDraftGlobalBuildLimit(e.target.value)}
+                                  inputMode="numeric"
+                                  placeholder="Пусто = без лимита"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                            </div>
+                            <div className="mb-2 flex items-center justify-between">
+                              <Tooltip content="Лимит на конкретную страну. Формат счётчика: текущее значение/лимит.">
+                                <div className="text-xs text-white/60">Лимиты для конкретных государств</div>
+                              </Tooltip>
+                              <button
+                                type="button"
+                                onClick={() => setDraftCountryBuildLimits((prev) => [...prev, { countryId: "", limit: "1" }])}
+                                className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+                              >
+                                Добавить лимит
+                              </button>
+                            </div>
+                            <div className="space-y-2">
+                              {draftCountryBuildLimits.map((row, index) => (
+                                <div key={`country-limit-${index}`} className="grid grid-cols-[minmax(0,1fr)_120px_32px] gap-2">
+                                  <CustomSelect
+                                    value={row.countryId}
+                                    onChange={(value) =>
+                                      setDraftCountryBuildLimits((prev) =>
+                                        prev.map((item, i) => (i === index ? { ...item, countryId: value } : item)),
+                                      )
+                                    }
+                                    options={[
+                                      { value: "", label: "Выберите страну" },
+                                      ...countryOptions.map((country) => ({ value: country.id, label: country.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
+                                  />
+                                  <input
+                                    value={row.limit}
+                                    onChange={(e) =>
+                                      setDraftCountryBuildLimits((prev) =>
+                                        prev.map((item, i) => (i === index ? { ...item, limit: e.target.value } : item)),
+                                      )
+                                    }
+                                    inputMode="numeric"
+                                    placeholder="1"
+                                    className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftCountryBuildLimits((prev) => prev.filter((_, i) => i !== index))}
+                                    className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                              {draftCountryBuildLimits.map((row, index) => {
+                                const used = row.countryId ? Math.max(0, Math.floor(selectedBuildingUsageByCountry[row.countryId] ?? 0)) : 0;
+                                const limit = Number.isFinite(Number(row.limit))
+                                  ? Math.max(1, Math.floor(Number(row.limit)))
+                                  : null;
+                                return (
+                                  <div key={`country-limit-usage-${index}`} className="text-[11px] text-white/50">
+                                    {(countryOptions.find((country) => country.id === row.countryId)?.name ?? row.countryId ?? "Страна")}:
+                                    {" "}
+                                    <span className="text-amber-300/90">{used}/{limit ?? "∞"}</span>
+                                  </div>
+                                );
+                              })}
+                              {draftCountryBuildLimits.length === 0 && (
+                                <div className="text-xs text-white/45">Нет лимитов по странам</div>
+                              )}
+                            </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
                           </div>
                         </div>
                       </section>
@@ -1089,24 +1635,47 @@ export function ContentPanel({ open, token, onClose }: Props) {
                     {contentSection === "economy" && activeCategory === "goods" && (
                       <section className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                          <Tooltip content="Параметры товара для экономической модели до подключения полноценного рынка.">
-                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Экономика товара</div>
-                          </Tooltip>
-                          <label className="block">
-                            <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
-                              <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
+                          <button
+                            type="button"
+                            onClick={() => setGoodsEconomyOpen((v) => !v)}
+                            className="mb-2 flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                          >
+                            <Tooltip content="Параметры товара для экономической модели до подключения полноценного рынка.">
+                              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Экономика товара</div>
                             </Tooltip>
-                            <input
-                              value={draftBasePrice}
-                              onChange={(e) => setDraftBasePrice(e.target.value)}
-                              inputMode="decimal"
-                              placeholder="1"
-                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
-                            />
-                          </label>
-                          <Tooltip content="После внедрения рынка это значение будет стартовой/референсной ценой.">
-                            <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
-                          </Tooltip>
+                            {goodsEconomyOpen ? (
+                              <ChevronDown size={14} className="text-white/60" />
+                            ) : (
+                              <ChevronRight size={14} className="text-white/60" />
+                            )}
+                          </button>
+                          <AnimatePresence initial={false}>
+                          {goodsEconomyOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                              <label className="block">
+                                <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
+                                  <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
+                                </Tooltip>
+                                <input
+                                  value={draftBasePrice}
+                                  onChange={(e) => setDraftBasePrice(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="1"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <Tooltip content="После внедрения рынка это значение будет стартовой/референсной ценой.">
+                                <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
+                              </Tooltip>
+                            </motion.div>
+                          ) : null}
+                          </AnimatePresence>
                         </div>
                       </section>
                     )}
