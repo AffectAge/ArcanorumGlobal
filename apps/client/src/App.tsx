@@ -639,6 +639,96 @@ export default function App() {
     };
   }, [auth, colonizationCostPer1000Km2.ducats, colonizationCostPer1000Km2.points, currentResources.colonization, currentResources.ducats, ordersByTurn, provinceAreaKm2ById, turnId, worldBase]);
   const activeColonizationCount = myColonizationProjection.activeCount;
+  const myConstructionProjection = useMemo(() => {
+    if (!auth || !worldBase) {
+      return { activeCount: 0, predictedPointsSpend: 0, predictedDucatSpend: 0 };
+    }
+
+    const EPS = 1e-6;
+    const activeProjects = Object.entries(worldBase.provinceConstructionQueueByProvince ?? {})
+      .flatMap(([provinceId, queue]) => {
+        if ((worldBase.provinceOwner?.[provinceId] ?? "") !== auth.countryId) {
+          return [];
+        }
+        return (queue ?? []).filter((project) => {
+          if (!project) return false;
+          if (project.requestedByCountryId !== auth.countryId) return false;
+          return project.progressConstruction + EPS < project.costConstruction;
+        });
+      })
+      .map((project) => {
+        const ducatRatio = project.costConstruction > 0 ? project.costDucats / project.costConstruction : 0;
+        const remainingConstruction = Math.max(0, project.costConstruction - project.progressConstruction);
+        const spentProjectDucats = project.progressConstruction * ducatRatio;
+        const remainingProjectDucats = Math.max(0, project.costDucats - spentProjectDucats);
+        return {
+          remainingConstruction,
+          ducatRatio,
+          remainingProjectDucats,
+        };
+      })
+      .filter((item) => item.remainingConstruction > EPS);
+
+    if (activeProjects.length === 0) {
+      return { activeCount: 0, predictedPointsSpend: 0, predictedDucatSpend: 0 };
+    }
+
+    let remainingConstructionBudget = Math.max(0, Number(currentResources.construction ?? 0));
+    let remainingDucatBudget = Math.max(
+      0,
+      Number(currentResources.ducats ?? 0) - Math.max(0, myColonizationProjection.predictedSupportDucatSpend),
+    );
+    if (remainingConstructionBudget <= EPS) {
+      return { activeCount: activeProjects.length, predictedPointsSpend: 0, predictedDucatSpend: 0 };
+    }
+
+    let active = activeProjects.map((project) => ({ ...project }));
+    let pointsSpend = 0;
+    let ducatSpend = 0;
+
+    while (remainingConstructionBudget > EPS && active.length > 0) {
+      const equalShare = remainingConstructionBudget / active.length;
+      let progressedInRound = 0;
+      const nextActive: typeof active = [];
+      for (const project of active) {
+        const maxByCountryDucats = project.ducatRatio > 0 ? remainingDucatBudget / project.ducatRatio : Number.POSITIVE_INFINITY;
+        const maxByProjectDucats = project.ducatRatio > 0 ? project.remainingProjectDucats / project.ducatRatio : Number.POSITIVE_INFINITY;
+        const appliedConstruction = Math.min(equalShare, project.remainingConstruction, maxByCountryDucats, maxByProjectDucats);
+        if (appliedConstruction <= EPS) continue;
+        const appliedDucats =
+          project.ducatRatio > 0
+            ? Math.min(project.remainingProjectDucats, appliedConstruction * project.ducatRatio, remainingDucatBudget)
+            : 0;
+        project.remainingConstruction = Math.max(0, project.remainingConstruction - appliedConstruction);
+        project.remainingProjectDucats = Math.max(0, project.remainingProjectDucats - appliedDucats);
+        remainingConstructionBudget = Math.max(0, remainingConstructionBudget - appliedConstruction);
+        remainingDucatBudget = Math.max(0, remainingDucatBudget - appliedDucats);
+        pointsSpend += appliedConstruction;
+        ducatSpend += appliedDucats;
+        progressedInRound += appliedConstruction;
+
+        const canContinue = project.remainingConstruction > EPS && (project.ducatRatio <= 0 || project.remainingProjectDucats > EPS);
+        if (canContinue) {
+          nextActive.push(project);
+        }
+      }
+      if (progressedInRound <= EPS) break;
+      active = nextActive;
+    }
+
+    return {
+      activeCount: activeProjects.length,
+      predictedPointsSpend: Math.max(0, Math.floor(pointsSpend)),
+      predictedDucatSpend: Math.max(0, Math.floor(ducatSpend)),
+    };
+  }, [
+    auth,
+    currentResources.construction,
+    currentResources.ducats,
+    myColonizationProjection.predictedSupportDucatSpend,
+    worldBase,
+  ]);
+
   const currentTurnExpenses = useMemo(() => {
     const empty = { culture: 0, science: 0, religion: 0, colonization: 0, construction: 0, ducats: 0, gold: 0 };
     if (!auth) {
@@ -662,9 +752,25 @@ export default function App() {
       );
       totals.ducats += supportDucatSpend;
     }
+    if (myConstructionProjection.predictedPointsSpend > 0) {
+      totals.construction += myConstructionProjection.predictedPointsSpend;
+      totals.ducats += myConstructionProjection.predictedDucatSpend;
+    }
 
     return totals;
-  }, [auth, currentResources.ducats, customizationDucatSpend.amount, customizationDucatSpend.turnId, myColonizationProjection.predictedPointsSpend, myColonizationProjection.predictedSupportDucatSpend, provinceRenameDucatSpend.amount, provinceRenameDucatSpend.turnId, turnId]);
+  }, [
+    auth,
+    currentResources.ducats,
+    customizationDucatSpend.amount,
+    customizationDucatSpend.turnId,
+    myColonizationProjection.predictedPointsSpend,
+    myColonizationProjection.predictedSupportDucatSpend,
+    myConstructionProjection.predictedDucatSpend,
+    myConstructionProjection.predictedPointsSpend,
+    provinceRenameDucatSpend.amount,
+    provinceRenameDucatSpend.turnId,
+    turnId,
+  ]);
   useEffect(() => {
     setCustomizationDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
     setProvinceRenameDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
@@ -1381,6 +1487,5 @@ export default function App() {
     </div>
   );
 }
-
 
 

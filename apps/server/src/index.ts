@@ -2905,6 +2905,7 @@ function resolveBuildingOwnerFromPayload(payload: Record<string, unknown>, reque
 function resolveBuildingConstructionQueuesTurn(): void {
   type ProjectRef = { provinceId: string; index: number };
   const projectsByCountry = new Map<string, ProjectRef[]>();
+  const EPS = 1e-6;
 
   for (const [provinceId, queue] of Object.entries(worldBase.provinceConstructionQueueByProvince ?? {})) {
     if (!Array.isArray(queue) || queue.length === 0) continue;
@@ -2925,7 +2926,7 @@ function resolveBuildingConstructionQueuesTurn(): void {
     const availableConstruction = Math.max(0, Number(countryResource.construction ?? 0));
     if (availableConstruction <= 0 || refs.length === 0) continue;
     let remainingCountryDucats = Math.max(0, Number(countryResource.ducats ?? 0));
-    const gainPerProject = availableConstruction / refs.length;
+    let remainingConstruction = availableConstruction;
     let spentConstruction = 0;
     let spentDucats = 0;
 
@@ -2937,34 +2938,53 @@ function resolveBuildingConstructionQueuesTurn(): void {
         ),
     );
 
-    for (const ref of sortedRefs) {
-      const queue = worldBase.provinceConstructionQueueByProvince[ref.provinceId];
-      const project = queue?.[ref.index];
-      if (!queue || !project) continue;
-      const remainingConstruction = Math.max(0, project.costConstruction - project.progressConstruction);
-      if (remainingConstruction <= 0) continue;
-      const ducatRatio = project.costConstruction > 0 ? project.costDucats / project.costConstruction : 0;
-      const spentDucatsForCurrentProgress = project.progressConstruction * ducatRatio;
-      const remainingProjectDucats = Math.max(0, project.costDucats - spentDucatsForCurrentProgress);
-      const maxGainByCountryDucats = ducatRatio > 0 ? remainingCountryDucats / ducatRatio : Number.POSITIVE_INFINITY;
-      const maxGainByProjectDucats = ducatRatio > 0 ? remainingProjectDucats / ducatRatio : Number.POSITIVE_INFINITY;
-      const appliedConstruction = Math.min(
-        gainPerProject,
-        remainingConstruction,
-        maxGainByCountryDucats,
-        maxGainByProjectDucats,
-      );
-      if (appliedConstruction <= 0) continue;
-      const appliedDucats =
-        ducatRatio > 0
-          ? Math.min(remainingProjectDucats, appliedConstruction * ducatRatio, remainingCountryDucats)
-          : 0;
-      project.progressConstruction = Number(
-        Math.min(project.costConstruction, project.progressConstruction + appliedConstruction).toFixed(3),
-      );
-      spentConstruction += appliedConstruction;
-      spentDucats += appliedDucats;
-      remainingCountryDucats = Math.max(0, remainingCountryDucats - appliedDucats);
+    let activeRefs = [...sortedRefs];
+    while (remainingConstruction > EPS && activeRefs.length > 0) {
+      const equalShare = remainingConstruction / activeRefs.length;
+      let progressedInRound = 0;
+      const nextActiveRefs: ProjectRef[] = [];
+      for (const ref of activeRefs) {
+        const queue = worldBase.provinceConstructionQueueByProvince[ref.provinceId];
+        const project = queue?.[ref.index];
+        if (!queue || !project) continue;
+        const remainingProjectConstruction = Math.max(0, project.costConstruction - project.progressConstruction);
+        if (remainingProjectConstruction <= EPS) continue;
+        const ducatRatio = project.costConstruction > 0 ? project.costDucats / project.costConstruction : 0;
+        const spentProjectDucats = project.progressConstruction * ducatRatio;
+        const remainingProjectDucats = Math.max(0, project.costDucats - spentProjectDucats);
+        const maxByCountryDucats = ducatRatio > 0 ? remainingCountryDucats / ducatRatio : Number.POSITIVE_INFINITY;
+        const maxByProjectDucats = ducatRatio > 0 ? remainingProjectDucats / ducatRatio : Number.POSITIVE_INFINITY;
+        const appliedConstruction = Math.min(
+          equalShare,
+          remainingProjectConstruction,
+          maxByCountryDucats,
+          maxByProjectDucats,
+        );
+        if (appliedConstruction <= EPS) continue;
+        const appliedDucats =
+          ducatRatio > 0
+            ? Math.min(remainingProjectDucats, appliedConstruction * ducatRatio, remainingCountryDucats)
+            : 0;
+        project.progressConstruction = Number(
+          Math.min(project.costConstruction, project.progressConstruction + appliedConstruction).toFixed(3),
+        );
+        spentConstruction += appliedConstruction;
+        spentDucats += appliedDucats;
+        remainingConstruction = Math.max(0, remainingConstruction - appliedConstruction);
+        remainingCountryDucats = Math.max(0, remainingCountryDucats - appliedDucats);
+        progressedInRound += appliedConstruction;
+
+        const stillHasConstruction = project.costConstruction - project.progressConstruction > EPS;
+        const canPayMore =
+          ducatRatio <= 0 || (remainingCountryDucats > EPS && project.costDucats - project.progressConstruction * ducatRatio > EPS);
+        if (stillHasConstruction && canPayMore) {
+          nextActiveRefs.push(ref);
+        }
+      }
+      if (progressedInRound <= EPS) {
+        break;
+      }
+      activeRefs = nextActiveRefs;
     }
 
     countryResource.construction = Math.max(0, Number((countryResource.construction - spentConstruction).toFixed(3)));
