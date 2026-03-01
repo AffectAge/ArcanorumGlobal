@@ -70,6 +70,21 @@ export type ProvincePopulation = {
   professionPct: Record<string, number>;
 };
 
+export type BuildingOwner =
+  | { type: "state"; countryId: string }
+  | { type: "company"; companyId: string };
+
+export type ProvinceConstructionProject = {
+  queueId: string;
+  requestedByCountryId: string;
+  buildingId: string;
+  owner: BuildingOwner;
+  progressConstruction: number;
+  costConstruction: number;
+  costDucats: number;
+  createdTurnId: number;
+};
+
 export type WorldBase = {
   turnId: number;
   resourcesByCountry: Record<string, ResourceTotals>;
@@ -81,6 +96,7 @@ export type WorldBase = {
   provinceBuildingsByProvince: Record<string, Record<string, number>>;
   provinceBuildingDucatsByProvince: Record<string, Record<string, number>>;
   provincePopulationTreasuryByProvince: Record<string, number>;
+  provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[]>;
 };
 
 export const WORLD_DELTA_MASK = {
@@ -93,6 +109,7 @@ export const WORLD_DELTA_MASK = {
   provinceBuildingsByProvince: 1 << 6,
   provincePopulationTreasuryByProvince: 1 << 7,
   provinceBuildingDucatsByProvince: 1 << 8,
+  provinceConstructionQueueByProvince: 1 << 9,
 } as const;
 
 export type WorldDelta = {
@@ -109,6 +126,7 @@ export type WorldDelta = {
   b?: Record<string, Record<string, number> | null>;
   y?: Record<string, number | null>;
   q?: Record<string, Record<string, number> | null>;
+  r?: Record<string, ProvinceConstructionProject[] | null>;
   rejectedOrders: Array<{ playerId: string; reason: string; tempOrderId?: string }>;
 };
 

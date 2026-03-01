@@ -645,21 +645,7 @@ export default function App() {
       return empty;
     }
 
-    const byPlayer = ordersByTurn.get(turnId);
-    const myOrders = byPlayer?.get(auth.playerId) ?? [];
     const totals = { ...empty };
-    let queuedOrderDucatSpend = 0;
-
-    for (const order of myOrders) {
-      if (order.type === "COLONIZE") {
-        continue;
-      }
-      if (order.type === "BUILD") {
-        totals.ducats += 2;
-        totals.gold += 5;
-        queuedOrderDucatSpend += 2;
-      }
-    }
 
     if (customizationDucatSpend.turnId === turnId && customizationDucatSpend.amount > 0) {
       totals.ducats += customizationDucatSpend.amount;
@@ -672,13 +658,13 @@ export default function App() {
       totals.colonization += myColonizationProjection.predictedPointsSpend;
       const supportDucatSpend = Math.min(
         myColonizationProjection.predictedSupportDucatSpend,
-        Math.max(0, Math.floor((currentResources.ducats ?? 0) - queuedOrderDucatSpend)),
+        Math.max(0, Math.floor(currentResources.ducats ?? 0)),
       );
       totals.ducats += supportDucatSpend;
     }
 
     return totals;
-  }, [auth, currentResources.ducats, customizationDucatSpend.amount, customizationDucatSpend.turnId, myColonizationProjection.predictedPointsSpend, myColonizationProjection.predictedSupportDucatSpend, ordersByTurn, provinceRenameDucatSpend.amount, provinceRenameDucatSpend.turnId, turnId]);
+  }, [auth, currentResources.ducats, customizationDucatSpend.amount, customizationDucatSpend.turnId, myColonizationProjection.predictedPointsSpend, myColonizationProjection.predictedSupportDucatSpend, provinceRenameDucatSpend.amount, provinceRenameDucatSpend.turnId, turnId]);
   useEffect(() => {
     setCustomizationDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
     setProvinceRenameDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
@@ -1381,8 +1367,6 @@ export default function App() {
     </div>
   );
 }
-
-
 
 
 

@@ -164,6 +164,17 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
+      if ((delta.mask & WORLD_DELTA_MASK.provinceConstructionQueueByProvince) !== 0 && delta.r) {
+        nextWorldBase.provinceConstructionQueueByProvince = { ...nextWorldBase.provinceConstructionQueueByProvince };
+        for (const [provinceId, value] of Object.entries(delta.r)) {
+          if (!value) {
+            delete nextWorldBase.provinceConstructionQueueByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceConstructionQueueByProvince[provinceId] = value;
+        }
+      }
+
       return {
         worldBase: nextWorldBase,
         turnId: nextTurnId,

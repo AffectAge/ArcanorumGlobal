@@ -13,6 +13,8 @@ export type ContentCulture = {
   malePortraitUrl?: string | null;
   femalePortraitUrl?: string | null;
   basePrice?: number | null;
+  costConstruction?: number | null;
+  costDucats?: number | null;
   inputs?: Array<{ goodId: string; amount: number }> | null;
   outputs?: Array<{ goodId: string; amount: number }> | null;
   workforceRequirements?: Array<{ professionId: string; workers: number }> | null;
@@ -132,6 +134,8 @@ export async function adminCreateContentEntry(
     description?: string;
     color: string;
     basePrice?: number | null;
+    costConstruction?: number | null;
+    costDucats?: number | null;
     inputs?: Array<{ goodId: string; amount: number }>;
     outputs?: Array<{ goodId: string; amount: number }>;
     workforceRequirements?: Array<{ professionId: string; workers: number }>;
@@ -159,6 +163,8 @@ export async function adminUpdateContentEntry(
     description?: string;
     color: string;
     basePrice?: number | null;
+    costConstruction?: number | null;
+    costDucats?: number | null;
     inputs?: Array<{ goodId: string; amount: number }>;
     outputs?: Array<{ goodId: string; amount: number }>;
     workforceRequirements?: Array<{ professionId: string; workers: number }>;
