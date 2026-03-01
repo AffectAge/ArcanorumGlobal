@@ -1,6 +1,7 @@
 import { Dialog } from "@headlessui/react";
 import type { ProvincePopulation, WorldBase } from "@arcanorum/shared";
 import * as echarts from "echarts";
+import type { EChartsType } from "echarts";
 import { motion } from "framer-motion";
 import { BarChart3, Briefcase, FileText, Flame, Globe2, MapPinned, Palette, ScrollText, Sticker, UserRound, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -73,6 +74,34 @@ const KIND_BY_DIMENSION: Record<PopulationDimensionKey, ContentEntryKind> = {
 
 function formatInt(value: number): string {
   return new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.floor(value)));
+}
+
+const FALLBACK_COLORS = [
+  "#4ade80",
+  "#38bdf8",
+  "#f59e0b",
+  "#f87171",
+  "#a78bfa",
+  "#22d3ee",
+  "#fb7185",
+  "#84cc16",
+  "#f97316",
+  "#60a5fa",
+];
+
+function colorFromId(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  }
+  return FALLBACK_COLORS[hash % FALLBACK_COLORS.length] ?? "#9ca3af";
+}
+
+function normalizeColor(value: string | null | undefined, id: string): string {
+  if (!value) return colorFromId(id);
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return colorFromId(id);
+  return trimmed;
 }
 
 function aggregatePopulation(
@@ -161,6 +190,8 @@ function aggregatePopulation(
 export function PopulationStatsModal({ open, onClose, worldBase, countryId, countryName }: Props) {
   const [mode, setMode] = useState<ViewMode>("country");
   const [section, setSection] = useState<PanelSection>("general");
+  const [selectedByDimension, setSelectedByDimension] = useState<Partial<Record<PopulationDimensionKey, string>>>({});
+  const [hoveredByDimension, setHoveredByDimension] = useState<Partial<Record<PopulationDimensionKey, string>>>({});
   const [entryByKindById, setEntryByKindById] = useState<Record<ContentEntryKind, Record<string, ContentEntryMeta>>>({
     cultures: {},
     ideologies: {},
@@ -169,6 +200,7 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
     professions: {},
   });
   const pieRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<EChartsType | null>(null);
 
   const countryStats = useMemo(() => aggregatePopulation(worldBase, "country", countryId), [countryId, worldBase]);
   const worldStats = useMemo(() => aggregatePopulation(worldBase, "world", countryId), [countryId, worldBase]);
@@ -245,7 +277,7 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
           id,
           label: entry?.name ?? id,
           pct,
-          color: entry?.color ?? "#9ca3af",
+          color: normalizeColor(entry?.color, id),
           imageUrl:
             kind === "races"
               ? (entry?.malePortraitUrl ?? entry?.femalePortraitUrl ?? entry?.logoUrl ?? null)
@@ -257,11 +289,58 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
       .slice(0, 200);
   }, [activeDimension, entryByKindById, stats]);
 
+  const topCulture = useMemo(() => {
+    const [id, pct] = Object.entries(stats.breakdown.culturePct).sort((a, b) => b[1] - a[1])[0] ?? [];
+    if (!id || !pct || pct <= 0) return null;
+    return {
+      label: entryByKindById.cultures[id]?.name ?? id,
+      pct,
+      count: (stats.totalPopulation * pct) / 100,
+    };
+  }, [entryByKindById.cultures, stats.breakdown.culturePct, stats.totalPopulation]);
+
+  const topReligion = useMemo(() => {
+    const [id, pct] = Object.entries(stats.breakdown.religionPct).sort((a, b) => b[1] - a[1])[0] ?? [];
+    if (!id || !pct || pct <= 0) return null;
+    return {
+      label: entryByKindById.religions[id]?.name ?? id,
+      pct,
+      count: (stats.totalPopulation * pct) / 100,
+    };
+  }, [entryByKindById.religions, stats.breakdown.religionPct, stats.totalPopulation]);
+
   useEffect(() => {
     if (!activeDimension) return;
     if (!pieRef.current) return;
 
-    const chart = echarts.init(pieRef.current);
+    const chart = chartRef.current ?? echarts.init(pieRef.current);
+    chartRef.current = chart;
+    const selectedId = selectedByDimension[activeDimension] ?? activeRows[0]?.id;
+    const hoveredId = hoveredByDimension[activeDimension] ?? null;
+
+    chart.off("mouseover");
+    chart.off("mouseout");
+    chart.off("click");
+
+    chart.on("mouseover", (params: { componentType?: string; dataIndex?: number }) => {
+      if (params.componentType !== "series") return;
+      if (typeof params.dataIndex !== "number") return;
+      const row = activeRows[params.dataIndex];
+      if (!row) return;
+      setHoveredByDimension((prev) => ({ ...prev, [activeDimension]: row.id }));
+    });
+
+    chart.on("mouseout", () => {
+      setHoveredByDimension((prev) => ({ ...prev, [activeDimension]: undefined }));
+    });
+
+    chart.on("click", (params: { componentType?: string; dataIndex?: number }) => {
+      if (params.componentType !== "series") return;
+      if (typeof params.dataIndex !== "number") return;
+      const row = activeRows[params.dataIndex];
+      if (!row) return;
+      setSelectedByDimension((prev) => ({ ...prev, [activeDimension]: row.id }));
+    });
 
     chart.setOption({
       animationDuration: 280,
@@ -271,34 +350,31 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
         formatter: (params: { seriesName: string; name: string; value: number; percent: number }) =>
           `${params.seriesName} <br/>${params.name} : ${params.value.toFixed(2)} (${params.percent.toFixed(2)}%)`,
       },
-      legend: {
-        type: "scroll",
-        orient: "vertical",
-        right: 8,
-        top: 20,
-        bottom: 20,
-        width: "36%",
-        pageIconColor: "#4ade80",
-        pageTextStyle: { color: "#94a3b8" },
-        textStyle: { color: "#cbd5e1", fontSize: 11 },
-      },
       series: [
         {
           name: activeTab.label,
           type: "pie",
-          radius: "52%",
-          center: ["34%", "50%"],
+          radius: "48%",
+          center: ["50%", "50%"],
+          avoidLabelOverlap: true,
+          selectedMode: "single",
           label: {
             show: true,
             color: "#e2e8f0",
-            formatter: "{d}%",
-            fontSize: 10,
+            position: "outside",
+            formatter: "{b}\n{d}%",
+            fontSize: 11,
+            lineHeight: 14,
           },
-          labelLine: { length: 10, length2: 6 },
+          labelLine: { show: true, length: 12, length2: 10, smooth: 0.2 },
           data: activeRows.map((row) => ({
             name: row.label,
             value: row.pct,
-            itemStyle: { color: row.color },
+            selected: row.id === selectedId,
+            itemStyle: {
+              color: row.color,
+              opacity: hoveredId ? (hoveredId === row.id ? 1 : 0.35) : 1,
+            },
           })),
           emphasis: {
             scale: true,
@@ -310,18 +386,26 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
           },
         },
       ],
-    });
+    }, { notMerge: true });
 
     const onResize = () => chart.resize();
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
-      chart.dispose();
     };
-  }, [activeDimension, activeRows, activeTab.label]);
+  }, [activeDimension, activeRows, activeTab.label, hoveredByDimension, selectedByDimension]);
+
+  useEffect(() => {
+    return () => {
+      chartRef.current?.dispose();
+      chartRef.current = null;
+    };
+  }, []);
 
   const renderDimensionStats = (dimension: PopulationDimensionKey) => {
     const dimensionLabel = DIMENSION_LABELS.find((item) => item.key === dimension)?.label ?? "Статистика";
+    const selectedId = selectedByDimension[dimension] ?? activeRows[0]?.id ?? null;
+    const hoveredId = hoveredByDimension[dimension] ?? null;
 
     return (
       <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -337,9 +421,19 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
           <div className="mb-2 text-xs text-white/60">Легенда ({activeRows.length})</div>
           <div className="arc-scrollbar max-h-[420px] space-y-2 overflow-auto pr-1">
             {activeRows.map((row) => (
-              <div
+              <button
                 key={row.id}
-                className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2.5 py-2 text-left"
+                type="button"
+                onClick={() => setSelectedByDimension((prev) => ({ ...prev, [dimension]: row.id }))}
+                onMouseEnter={() => setHoveredByDimension((prev) => ({ ...prev, [dimension]: row.id }))}
+                onMouseLeave={() => setHoveredByDimension((prev) => ({ ...prev, [dimension]: undefined }))}
+                className={`flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left transition ${
+                  selectedId === row.id
+                    ? "border-arc-accent/50 bg-arc-accent/10"
+                    : hoveredId === row.id
+                      ? "border-white/25 bg-white/10"
+                      : "border-white/10 bg-black/25 hover:border-white/20"
+                }`}
               >
                 <span className="flex min-w-0 items-center gap-2">
                   {row.imageUrl ? (
@@ -364,7 +458,7 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
                     {formatInt((stats.totalPopulation * row.pct) / 100)} чел.
                   </span>
                 </span>
-              </div>
+              </button>
             ))}
             {activeRows.length === 0 && <div className="text-xs text-white/45">Нет данных</div>}
           </div>
@@ -460,6 +554,27 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
                 </div>
 
                 <div className="min-h-0 overflow-auto rounded-xl border border-white/10 bg-black/20 p-4">
+                  <div className="mb-4 grid gap-3 md:grid-cols-3">
+                    <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">Всего населения</div>
+                      <div className="mt-1 text-lg font-semibold text-white">{formatInt(stats.totalPopulation)}</div>
+                    </section>
+                    <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">Крупнейшая культура</div>
+                      <div className="mt-1 truncate text-sm font-semibold text-white">{topCulture?.label ?? "Нет данных"}</div>
+                      <div className="text-[11px] text-white/60">
+                        {topCulture ? `${topCulture.pct.toFixed(2)}% · ${formatInt(topCulture.count)} чел.` : "—"}
+                      </div>
+                    </section>
+                    <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-white/50">Доминирующая религия</div>
+                      <div className="mt-1 truncate text-sm font-semibold text-white">{topReligion?.label ?? "Нет данных"}</div>
+                      <div className="text-[11px] text-white/60">
+                        {topReligion ? `${topReligion.pct.toFixed(2)}% · ${formatInt(topReligion.count)} чел.` : "—"}
+                      </div>
+                    </section>
+                  </div>
+
                   {section === "general" && (
                     <>
                       <div className="mb-4">
