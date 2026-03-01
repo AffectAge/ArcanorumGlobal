@@ -77,6 +77,9 @@ export type WorldBase = {
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
   provincePopulationByProvince: Record<string, ProvincePopulation>;
+  provinceBuildingsByProvince: Record<string, Record<string, number>>;
+  provinceBuildingDucatsByProvince: Record<string, Record<string, number>>;
+  provincePopulationTreasuryByProvince: Record<string, number>;
 };
 
 export const WORLD_DELTA_MASK = {
@@ -86,6 +89,9 @@ export const WORLD_DELTA_MASK = {
   colonyProgressByProvince: 1 << 3,
   provinceColonizationByProvince: 1 << 4,
   provincePopulationByProvince: 1 << 5,
+  provinceBuildingsByProvince: 1 << 6,
+  provincePopulationTreasuryByProvince: 1 << 7,
+  provinceBuildingDucatsByProvince: 1 << 8,
 } as const;
 
 export type WorldDelta = {
@@ -99,6 +105,9 @@ export type WorldDelta = {
   p?: Record<string, Record<string, number> | null>;
   z?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
   u?: Record<string, ProvincePopulation | null>;
+  b?: Record<string, Record<string, number> | null>;
+  y?: Record<string, number | null>;
+  q?: Record<string, Record<string, number> | null>;
   rejectedOrders: Array<{ playerId: string; reason: string; tempOrderId?: string }>;
 };
 

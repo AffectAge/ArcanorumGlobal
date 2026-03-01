@@ -12,6 +12,10 @@ export type ContentCulture = {
   logoUrl: string | null;
   malePortraitUrl?: string | null;
   femalePortraitUrl?: string | null;
+  basePrice?: number | null;
+  inputs?: Array<{ goodId: string; amount: number }> | null;
+  outputs?: Array<{ goodId: string; amount: number }> | null;
+  workforceRequirements?: Array<{ professionId: string; workers: number }> | null;
 };
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind =
@@ -123,7 +127,15 @@ export async function adminFetchContentEntries(token: string, kind: ContentEntry
 export async function adminCreateContentEntry(
   token: string,
   kind: ContentEntryKind,
-  payload: { name: string; description?: string; color: string },
+  payload: {
+    name: string;
+    description?: string;
+    color: string;
+    basePrice?: number | null;
+    inputs?: Array<{ goodId: string; amount: number }>;
+    outputs?: Array<{ goodId: string; amount: number }>;
+    workforceRequirements?: Array<{ professionId: string; workers: number }>;
+  },
 ) {
   const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}`, {
     method: "POST",
@@ -142,7 +154,15 @@ export async function adminUpdateContentEntry(
   token: string,
   kind: ContentEntryKind,
   entryId: string,
-  payload: { name: string; description?: string; color: string },
+  payload: {
+    name: string;
+    description?: string;
+    color: string;
+    basePrice?: number | null;
+    inputs?: Array<{ goodId: string; amount: number }>;
+    outputs?: Array<{ goodId: string; amount: number }>;
+    workforceRequirements?: Array<{ professionId: string; workers: number }>;
+  },
 ) {
   const response = await fetch(`${API}/admin/content/entries/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}`, {
     method: "PATCH",

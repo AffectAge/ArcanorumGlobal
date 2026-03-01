@@ -119,6 +119,8 @@ const CONTENT_UI_SCHEMA = {
 } as const;
 type PanelCategory = ContentEntryKind;
 type PanelSection = "general" | "branding";
+type GoodFlowDraft = { goodId: string; amount: string };
+type WorkforceRequirementDraft = { professionId: string; workers: string };
 
 const CATEGORY_META: Record<
   PanelCategory,
@@ -240,6 +242,26 @@ async function validateRacePortrait(file: File): Promise<void> {
   });
 }
 
+function normalizeGoodFlowsDraft(rows: GoodFlowDraft[]): Array<{ goodId: string; amount: number }> {
+  return rows
+    .map((row) => ({
+      goodId: row.goodId.trim(),
+      amount: Number(row.amount),
+    }))
+    .filter((row) => row.goodId.length > 0 && Number.isFinite(row.amount) && row.amount > 0)
+    .map((row) => ({ ...row, amount: Number(row.amount.toFixed(3)) }));
+}
+
+function normalizeWorkforceDraft(rows: WorkforceRequirementDraft[]): Array<{ professionId: string; workers: number }> {
+  return rows
+    .map((row) => ({
+      professionId: row.professionId.trim(),
+      workers: Number(row.workers),
+    }))
+    .filter((row) => row.professionId.length > 0 && Number.isFinite(row.workers) && row.workers > 0)
+    .map((row) => ({ ...row, workers: Math.floor(row.workers) }));
+}
+
 export function ContentPanel({ open, token, onClose }: Props) {
   const [activeCategory, setActiveCategory] = useState<PanelCategory>("cultures");
   const [contentSection, setContentSection] = useState<PanelSection>("general");
@@ -256,6 +278,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftLogoUrl, setDraftLogoUrl] = useState<string | null>(null);
   const [draftMalePortraitUrl, setDraftMalePortraitUrl] = useState<string | null>(null);
   const [draftFemalePortraitUrl, setDraftFemalePortraitUrl] = useState<string | null>(null);
+  const [draftBasePrice, setDraftBasePrice] = useState("1");
+  const [draftInputs, setDraftInputs] = useState<GoodFlowDraft[]>([]);
+  const [draftOutputs, setDraftOutputs] = useState<GoodFlowDraft[]>([]);
+  const [draftWorkforceRequirements, setDraftWorkforceRequirements] = useState<WorkforceRequirementDraft[]>([]);
+  const [goodsOptions, setGoodsOptions] = useState<ContentEntry[]>([]);
+  const [professionOptions, setProfessionOptions] = useState<ContentEntry[]>([]);
   const [savedSnapshot, setSavedSnapshot] = useState<string>("");
   const buildSnapshot = (entry: ContentEntry) =>
     JSON.stringify({
@@ -266,6 +294,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
       logoUrl: entry.logoUrl ?? null,
       malePortraitUrl: entry.malePortraitUrl ?? null,
       femalePortraitUrl: entry.femalePortraitUrl ?? null,
+      basePrice: entry.basePrice ?? null,
+      inputs: (entry.inputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
+      outputs: (entry.outputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
+      workforceRequirements: (entry.workforceRequirements ?? []).map((row) => ({
+        professionId: row.professionId,
+        workers: Math.floor(row.workers),
+      })),
     });
 
   const filteredEntries = useMemo(() => {
@@ -304,6 +339,25 @@ export function ContentPanel({ open, token, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
+    Promise.all([adminFetchContentEntries(token, "goods"), adminFetchContentEntries(token, "professions")])
+      .then(([goods, professions]) => {
+        if (cancelled) return;
+        setGoodsOptions(goods);
+        setProfessionOptions(professions);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGoodsOptions([]);
+        setProfessionOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, token]);
+
+  useEffect(() => {
+    if (!open) return;
     if (!selectedEntryId && entries[0]) {
       setSelectedEntryId(entries[0].id);
     }
@@ -317,6 +371,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftLogoUrl(null);
       setDraftMalePortraitUrl(null);
       setDraftFemalePortraitUrl(null);
+      setDraftBasePrice("1");
+      setDraftInputs([]);
+      setDraftOutputs([]);
+      setDraftWorkforceRequirements([]);
       setSavedSnapshot("");
       return;
     }
@@ -326,6 +384,19 @@ export function ContentPanel({ open, token, onClose }: Props) {
     setDraftLogoUrl(selectedEntry.logoUrl);
     setDraftMalePortraitUrl(selectedEntry.malePortraitUrl ?? null);
     setDraftFemalePortraitUrl(selectedEntry.femalePortraitUrl ?? null);
+    setDraftBasePrice(
+      typeof selectedEntry.basePrice === "number" && Number.isFinite(selectedEntry.basePrice)
+        ? String(selectedEntry.basePrice)
+        : "1",
+    );
+    setDraftInputs((selectedEntry.inputs ?? []).map((row) => ({ goodId: row.goodId, amount: String(row.amount) })));
+    setDraftOutputs((selectedEntry.outputs ?? []).map((row) => ({ goodId: row.goodId, amount: String(row.amount) })));
+    setDraftWorkforceRequirements(
+      (selectedEntry.workforceRequirements ?? []).map((row) => ({
+        professionId: row.professionId,
+        workers: String(row.workers),
+      })),
+    );
     setSavedSnapshot(buildSnapshot(selectedEntry));
   }, [selectedEntry]);
 
@@ -340,9 +411,32 @@ export function ContentPanel({ open, token, onClose }: Props) {
         logoUrl: draftLogoUrl,
         malePortraitUrl: draftMalePortraitUrl,
         femalePortraitUrl: draftFemalePortraitUrl,
+        basePrice:
+          activeCategory === "goods"
+            ? Number.isFinite(Number(draftBasePrice))
+              ? Number(Number(draftBasePrice).toFixed(3))
+              : null
+            : null,
+        inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
+        outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : [],
+        workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : [],
       }) !== savedSnapshot
     );
-  }, [draftColor, draftDescription, draftFemalePortraitUrl, draftLogoUrl, draftMalePortraitUrl, draftName, savedSnapshot, selectedEntry]);
+  }, [
+    activeCategory,
+    draftBasePrice,
+    draftColor,
+    draftDescription,
+    draftFemalePortraitUrl,
+    draftInputs,
+    draftLogoUrl,
+    draftMalePortraitUrl,
+    draftName,
+    draftOutputs,
+    draftWorkforceRequirements,
+    savedSnapshot,
+    selectedEntry,
+  ]);
 
   const requestClose = () => {
     if (saving) return;
@@ -363,9 +457,23 @@ export function ContentPanel({ open, token, onClose }: Props) {
       while (used.has(name.toLowerCase())) {
         name = `${nextNameBase} ${i++}`;
       }
-      const result = await adminCreateContentEntry(token, activeCategory, { name, description: "", color: "#a78bfa" });
+      const result = await adminCreateContentEntry(token, activeCategory, {
+        name,
+        description: "",
+        color: "#a78bfa",
+        basePrice: activeCategory === "goods" ? 1 : undefined,
+        inputs: activeCategory === "buildings" ? [] : undefined,
+        outputs: activeCategory === "buildings" ? [] : undefined,
+        workforceRequirements: activeCategory === "buildings" ? [] : undefined,
+      });
       setEntries(result.items);
       setSelectedEntryId(result.item.id);
+      if (activeCategory === "goods") {
+        setGoodsOptions(result.items);
+      }
+      if (activeCategory === "professions") {
+        setProfessionOptions(result.items);
+      }
       toast.success(`${categoryMeta.singular[0].toUpperCase()}${categoryMeta.singular.slice(1)} создана`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "ADMIN_CREATE_CONTENT_ENTRY_FAILED";
@@ -388,15 +496,30 @@ export function ContentPanel({ open, token, onClose }: Props) {
       return;
     }
     const color = /^#[0-9A-Fa-f]{6}$/.test(draftColor) ? draftColor : "#4ade80";
+    const payload = {
+      name,
+      description: draftDescription.trim(),
+      color,
+      basePrice: activeCategory === "goods" ? Math.max(0, Number(draftBasePrice || "0")) : undefined,
+      inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : undefined,
+      outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : undefined,
+      workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : undefined,
+    };
+    if (activeCategory === "goods" && !Number.isFinite(payload.basePrice ?? Number.NaN)) {
+      toast.error("Базовая цена товара должна быть числом");
+      return;
+    }
     setSaving(true);
     try {
-      const result = await adminUpdateContentEntry(token, activeCategory, selectedEntry.id, {
-        name,
-        description: draftDescription.trim(),
-        color,
-      });
+      const result = await adminUpdateContentEntry(token, activeCategory, selectedEntry.id, payload);
       setEntries(result.items);
       setSavedSnapshot(buildSnapshot(result.item));
+      if (activeCategory === "goods") {
+        setGoodsOptions(result.items);
+      }
+      if (activeCategory === "professions") {
+        setProfessionOptions(result.items);
+      }
       toast.success("Изменения сохранены");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "ADMIN_UPDATE_CONTENT_ENTRY_FAILED";
@@ -414,6 +537,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
       const result = await adminDeleteContentEntry(token, activeCategory, selectedEntry.id);
       setEntries(result.items);
       setSelectedEntryId(result.items[0]?.id ?? "");
+      if (activeCategory === "goods") {
+        setGoodsOptions(result.items);
+      }
+      if (activeCategory === "professions") {
+        setProfessionOptions(result.items);
+      }
       setDeleteConfirmOpen(false);
       toast.success("Запись удалена");
     } catch {
@@ -712,6 +841,183 @@ export function ContentPanel({ open, token, onClose }: Props) {
                           />
                           <div className="mt-1 text-right text-[11px] text-white/45">{draftDescription.length}/5000</div>
                         </label>
+
+                        {activeCategory === "goods" && (
+                          <div className="mt-4 rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Экономика товара</div>
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
+                              <input
+                                value={draftBasePrice}
+                                onChange={(e) => setDraftBasePrice(e.target.value)}
+                                inputMode="decimal"
+                                placeholder="1"
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                              />
+                            </label>
+                            <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
+                          </div>
+                        )}
+
+                        {activeCategory === "buildings" && (
+                          <div className="mt-4 space-y-4">
+                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                              <div className="mb-2 flex items-center justify-between">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Входные товары</div>
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftInputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
+                                  className="rounded-md border border-white/15 px-2 py-1 text-[11px] text-white/75 hover:border-white/30"
+                                >
+                                  + Добавить
+                                </button>
+                              </div>
+                              <div className="space-y-2">
+                                {draftInputs.map((row, index) => (
+                                  <div key={`input-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                    <select
+                                      value={row.goodId}
+                                      onChange={(e) =>
+                                        setDraftInputs((prev) => prev.map((r, i) => (i === index ? { ...r, goodId: e.target.value } : r)))
+                                      }
+                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                    >
+                                      <option value="">Выберите товар</option>
+                                      {goodsOptions.map((option) => (
+                                        <option key={option.id} value={option.id}>
+                                          {option.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      value={row.amount}
+                                      onChange={(e) =>
+                                        setDraftInputs((prev) => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
+                                      }
+                                      inputMode="decimal"
+                                      placeholder="0"
+                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setDraftInputs((prev) => prev.filter((_, i) => i !== index))}
+                                      className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                ))}
+                                {draftInputs.length === 0 && <div className="text-xs text-white/45">Нет входных товаров</div>}
+                              </div>
+                            </div>
+
+                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                              <div className="mb-2 flex items-center justify-between">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Выходные товары</div>
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftOutputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
+                                  className="rounded-md border border-white/15 px-2 py-1 text-[11px] text-white/75 hover:border-white/30"
+                                >
+                                  + Добавить
+                                </button>
+                              </div>
+                              <div className="space-y-2">
+                                {draftOutputs.map((row, index) => (
+                                  <div key={`output-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                    <select
+                                      value={row.goodId}
+                                      onChange={(e) =>
+                                        setDraftOutputs((prev) => prev.map((r, i) => (i === index ? { ...r, goodId: e.target.value } : r)))
+                                      }
+                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                    >
+                                      <option value="">Выберите товар</option>
+                                      {goodsOptions.map((option) => (
+                                        <option key={option.id} value={option.id}>
+                                          {option.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      value={row.amount}
+                                      onChange={(e) =>
+                                        setDraftOutputs((prev) => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
+                                      }
+                                      inputMode="decimal"
+                                      placeholder="0"
+                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setDraftOutputs((prev) => prev.filter((_, i) => i !== index))}
+                                      className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                ))}
+                                {draftOutputs.length === 0 && <div className="text-xs text-white/45">Нет выходных товаров</div>}
+                              </div>
+                            </div>
+
+                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                              <div className="mb-2 flex items-center justify-between">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Профессии и рабочие места</div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDraftWorkforceRequirements((prev) => [...prev, { professionId: professionOptions[0]?.id ?? "", workers: "100" }])
+                                  }
+                                  className="rounded-md border border-white/15 px-2 py-1 text-[11px] text-white/75 hover:border-white/30"
+                                >
+                                  + Добавить
+                                </button>
+                              </div>
+                              <div className="space-y-2">
+                                {draftWorkforceRequirements.map((row, index) => (
+                                  <div key={`workforce-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                    <select
+                                      value={row.professionId}
+                                      onChange={(e) =>
+                                        setDraftWorkforceRequirements((prev) =>
+                                          prev.map((r, i) => (i === index ? { ...r, professionId: e.target.value } : r)),
+                                        )
+                                      }
+                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                    >
+                                      <option value="">Выберите профессию</option>
+                                      {professionOptions.map((option) => (
+                                        <option key={option.id} value={option.id}>
+                                          {option.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      value={row.workers}
+                                      onChange={(e) =>
+                                        setDraftWorkforceRequirements((prev) =>
+                                          prev.map((r, i) => (i === index ? { ...r, workers: e.target.value } : r)),
+                                        )
+                                      }
+                                      inputMode="numeric"
+                                      placeholder="0"
+                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setDraftWorkforceRequirements((prev) => prev.filter((_, i) => i !== index))}
+                                      className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                ))}
+                                {draftWorkforceRequirements.length === 0 && <div className="text-xs text-white/45">Нет требований по профессиям</div>}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </section>
                     )}
 

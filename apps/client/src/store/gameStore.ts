@@ -131,6 +131,39 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
+      if ((delta.mask & WORLD_DELTA_MASK.provinceBuildingsByProvince) !== 0 && delta.b) {
+        nextWorldBase.provinceBuildingsByProvince = { ...nextWorldBase.provinceBuildingsByProvince };
+        for (const [provinceId, value] of Object.entries(delta.b)) {
+          if (!value) {
+            delete nextWorldBase.provinceBuildingsByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceBuildingsByProvince[provinceId] = value;
+        }
+      }
+
+      if ((delta.mask & WORLD_DELTA_MASK.provinceBuildingDucatsByProvince) !== 0 && delta.q) {
+        nextWorldBase.provinceBuildingDucatsByProvince = { ...nextWorldBase.provinceBuildingDucatsByProvince };
+        for (const [provinceId, value] of Object.entries(delta.q)) {
+          if (!value) {
+            delete nextWorldBase.provinceBuildingDucatsByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceBuildingDucatsByProvince[provinceId] = value;
+        }
+      }
+
+      if ((delta.mask & WORLD_DELTA_MASK.provincePopulationTreasuryByProvince) !== 0 && delta.y) {
+        nextWorldBase.provincePopulationTreasuryByProvince = { ...nextWorldBase.provincePopulationTreasuryByProvince };
+        for (const [provinceId, value] of Object.entries(delta.y)) {
+          if (value == null) {
+            delete nextWorldBase.provincePopulationTreasuryByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provincePopulationTreasuryByProvince[provinceId] = value;
+        }
+      }
+
       return {
         worldBase: nextWorldBase,
         turnId: nextTurnId,

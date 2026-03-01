@@ -289,6 +289,8 @@ const POPULATION_MIN_TOTAL = 100;
 const POPULATION_DEFAULT_BASE_TOTAL = 10_000;
 const POPULATION_BIRTH_RATE = 0.012;
 const POPULATION_DEATH_RATE = 0.008;
+const BUILDING_BASE_THROUGHPUT = 1;
+const BUILDING_BASE_WAGE_PER_WORKER_GOLD = 0.2;
 
 type PopulationDimensionKey = "culturePct" | "ideologyPct" | "religionPct" | "racePct" | "professionPct";
 
@@ -324,98 +326,48 @@ async function getCachedCountryQuery<T>(params: { key: string; ttlMs?: number; l
   return value;
 }
 
+type GoodFlow = {
+  goodId: string;
+  amount: number;
+};
+
+type WorkforceRequirement = {
+  professionId: string;
+  workers: number;
+};
+
+type GameContentEntry = {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  logoUrl: string | null;
+  malePortraitUrl: string | null;
+  femalePortraitUrl: string | null;
+};
+
+type GoodContentEntry = GameContentEntry & {
+  basePrice?: number | null;
+};
+
+type BuildingContentEntry = GameContentEntry & {
+  inputs?: GoodFlow[];
+  outputs?: GoodFlow[];
+  workforceRequirements?: WorkforceRequirement[];
+};
+
 type GameSettings = {
   content: {
-    races: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    professions: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    ideologies: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    religions: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    technologies: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    buildings: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    goods: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    companies: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    industries: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
-    cultures: Array<{
-      id: string;
-      name: string;
-      description: string;
-      color: string;
-      logoUrl: string | null;
-      malePortraitUrl: string | null;
-      femalePortraitUrl: string | null;
-    }>;
+    races: GameContentEntry[];
+    professions: GameContentEntry[];
+    ideologies: GameContentEntry[];
+    religions: GameContentEntry[];
+    technologies: GameContentEntry[];
+    buildings: BuildingContentEntry[];
+    goods: GoodContentEntry[];
+    companies: GameContentEntry[];
+    industries: GameContentEntry[];
+    cultures: GameContentEntry[];
   };
   civilopedia: {
     categories: string[];
@@ -512,6 +464,62 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
 
 function normalizeContentRaces(input: unknown): GameSettings["content"]["races"] {
   return normalizeContentCultures(input);
+}
+
+function normalizeGoodFlows(input: unknown): GoodFlow[] {
+  if (!Array.isArray(input)) return [];
+  const items: GoodFlow[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Partial<{ goodId: unknown; amount: unknown }>;
+    const goodId = typeof row.goodId === "string" ? row.goodId.trim() : "";
+    const amount = typeof row.amount === "number" && Number.isFinite(row.amount) ? Math.max(0, row.amount) : 0;
+    if (!goodId || amount <= 0) continue;
+    items.push({ goodId, amount: Number(amount.toFixed(3)) });
+  }
+  return items.slice(0, 64);
+}
+
+function normalizeWorkforceRequirements(input: unknown): WorkforceRequirement[] {
+  if (!Array.isArray(input)) return [];
+  const items: WorkforceRequirement[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Partial<{ professionId: unknown; workers: unknown }>;
+    const professionId = typeof row.professionId === "string" ? row.professionId.trim() : "";
+    const workers = typeof row.workers === "number" && Number.isFinite(row.workers) ? Math.max(0, Math.floor(row.workers)) : 0;
+    if (!professionId || workers <= 0) continue;
+    items.push({ professionId, workers });
+  }
+  return items.slice(0, 64);
+}
+
+function normalizeContentGoods(input: unknown): GameSettings["content"]["goods"] {
+  const base = normalizeContentCultures(input);
+  const sourceRows = Array.isArray(input) ? input : [];
+  return base.map((entry, index) => {
+    const raw = sourceRows[index] as Partial<{ basePrice?: unknown }> | undefined;
+    const basePrice =
+      typeof raw?.basePrice === "number" && Number.isFinite(raw.basePrice) ? Math.max(0, raw.basePrice) : 1;
+    return {
+      ...entry,
+      basePrice: Number(basePrice.toFixed(3)),
+    };
+  });
+}
+
+function normalizeContentBuildings(input: unknown): GameSettings["content"]["buildings"] {
+  const base = normalizeContentCultures(input);
+  const sourceRows = Array.isArray(input) ? input : [];
+  return base.map((entry, index) => {
+    const raw = sourceRows[index] as Partial<{ inputs?: unknown; outputs?: unknown; workforceRequirements?: unknown }> | undefined;
+    return {
+      ...entry,
+      inputs: normalizeGoodFlows(raw?.inputs),
+      outputs: normalizeGoodFlows(raw?.outputs),
+      workforceRequirements: normalizeWorkforceRequirements(raw?.workforceRequirements),
+    };
+  });
 }
 
 function hashStringToUInt32(input: string): number {
@@ -746,7 +754,70 @@ function normalizeProvincePopulationMap(input: unknown): Record<string, Province
   return normalized;
 }
 
-function resolvePopulationTurnForProvince(currentPopulation: ProvincePopulation): ProvincePopulation {
+function normalizeProvinceBuildingsMap(input: unknown): Record<string, Record<string, number>> {
+  const normalized: Record<string, Record<string, number>> = {};
+  if (input && typeof input === "object") {
+    for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
+      if (!raw || typeof raw !== "object") continue;
+      const byBuilding: Record<string, number> = {};
+      for (const [buildingId, levelRaw] of Object.entries(raw as Record<string, unknown>)) {
+        const level = typeof levelRaw === "number" && Number.isFinite(levelRaw) ? Math.max(0, Math.floor(levelRaw)) : 0;
+        if (!buildingId || level <= 0) continue;
+        byBuilding[buildingId] = level;
+      }
+      normalized[provinceId] = byBuilding;
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (!normalized[province.id]) {
+      normalized[province.id] = {};
+    }
+  }
+  return normalized;
+}
+
+function normalizeProvincePopulationTreasuryMap(input: unknown): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  if (input && typeof input === "object") {
+    for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
+      const value = typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 0;
+      normalized[provinceId] = Number(value.toFixed(3));
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (normalized[province.id] == null) {
+      normalized[province.id] = 0;
+    }
+  }
+  return normalized;
+}
+
+function normalizeProvinceBuildingDucatsMap(input: unknown): Record<string, Record<string, number>> {
+  const normalized: Record<string, Record<string, number>> = {};
+  if (input && typeof input === "object") {
+    for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
+      if (!raw || typeof raw !== "object") continue;
+      const byBuilding: Record<string, number> = {};
+      for (const [buildingId, valueRaw] of Object.entries(raw as Record<string, unknown>)) {
+        const value = typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0;
+        if (!buildingId) continue;
+        byBuilding[buildingId] = Number(value.toFixed(3));
+      }
+      normalized[provinceId] = byBuilding;
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (!normalized[province.id]) {
+      normalized[province.id] = {};
+    }
+  }
+  return normalized;
+}
+
+function resolvePopulationTurnForProvince(
+  currentPopulation: ProvincePopulation,
+  nextProfessionPct?: Record<string, number>,
+): ProvincePopulation {
   if (currentPopulation.populationTotal <= 0) {
     return currentPopulation;
   }
@@ -761,12 +832,101 @@ function resolvePopulationTurnForProvince(currentPopulation: ProvincePopulation)
     ideologyPct: currentPopulation.ideologyPct,
     religionPct: currentPopulation.religionPct,
     racePct: currentPopulation.racePct,
-    professionPct: currentPopulation.professionPct,
+    professionPct: nextProfessionPct ?? currentPopulation.professionPct,
   };
+}
+
+function resolveBuildingsTurn(): Record<string, Record<string, number>> {
+  const domains = getPopulationDomainKeys();
+  const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
+  const goodBasePriceById = new Map(gameSettings.content.goods.map((entry) => [entry.id, Number(entry.basePrice ?? 1)] as const));
+  const nextProfessionPctByProvince: Record<string, Record<string, number>> = {};
+
+  for (const province of adm1ProvinceIndex) {
+    const provinceId = province.id;
+    if (!worldBase.provinceOwner[provinceId]) continue;
+
+    const population = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
+    const buildingLevels = worldBase.provinceBuildingsByProvince[provinceId] ?? {};
+    const buildingDucats = { ...(worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {}) };
+    const professionDemandById: Record<string, number> = {};
+    let totalWorkforceDemand = 0;
+
+    for (const [buildingId, levelRaw] of Object.entries(buildingLevels)) {
+      const level = Math.max(0, Math.floor(levelRaw));
+      if (level <= 0) continue;
+      const building = buildingById.get(buildingId);
+      if (!building) continue;
+      for (const requirement of building.workforceRequirements ?? []) {
+        const workersDemand = Math.max(0, requirement.workers) * level;
+        if (workersDemand <= 0) continue;
+        professionDemandById[requirement.professionId] = (professionDemandById[requirement.professionId] ?? 0) + workersDemand;
+        totalWorkforceDemand += workersDemand;
+      }
+    }
+
+    const employmentRatio =
+      totalWorkforceDemand > 0 ? Math.max(0, Math.min(1, population.populationTotal / totalWorkforceDemand)) : 0;
+
+    const employedByProfession: Record<string, number> = {};
+    let totalEmployed = 0;
+    for (const [professionId, demand] of Object.entries(professionDemandById)) {
+      const employed = demand * employmentRatio;
+      if (employed <= 0) continue;
+      employedByProfession[professionId] = employed;
+      totalEmployed += employed;
+    }
+
+    if (totalEmployed > 0) {
+      nextProfessionPctByProvince[provinceId] = normalizePercentageMap(
+        employedByProfession,
+        domains.professionPct,
+        POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct,
+      );
+    }
+
+    for (const [buildingId, levelRaw] of Object.entries(buildingLevels)) {
+      const level = Math.max(0, Math.floor(levelRaw));
+      if (level <= 0) continue;
+      const building = buildingById.get(buildingId);
+      if (!building) continue;
+      let buildingRevenue = 0;
+      let buildingInputCost = 0;
+      let buildingWorkersDemand = 0;
+      for (const requirement of building.workforceRequirements ?? []) {
+        buildingWorkersDemand += Math.max(0, requirement.workers) * level;
+      }
+      const buildingEmployed = buildingWorkersDemand * employmentRatio;
+      const buildingWages = buildingEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;
+      for (const input of building.inputs ?? []) {
+        const basePrice = goodBasePriceById.get(input.goodId) ?? 1;
+        const amount = Math.max(0, input.amount) * level * employmentRatio * BUILDING_BASE_THROUGHPUT;
+        const totalCost = amount * basePrice;
+        buildingInputCost += totalCost;
+      }
+      for (const output of building.outputs ?? []) {
+        const basePrice = goodBasePriceById.get(output.goodId) ?? 1;
+        const amount = Math.max(0, output.amount) * level * employmentRatio * BUILDING_BASE_THROUGHPUT;
+        const totalRevenue = amount * basePrice;
+        buildingRevenue += totalRevenue;
+      }
+      const resultDucats = buildingRevenue - buildingInputCost - buildingWages;
+      const prevDucats = buildingDucats[buildingId] ?? 0;
+      buildingDucats[buildingId] = Math.max(0, Number((prevDucats + resultDucats).toFixed(3)));
+    }
+
+    const provinceWages = totalEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;
+    const prevTreasury = worldBase.provincePopulationTreasuryByProvince[provinceId] ?? 0;
+    worldBase.provincePopulationTreasuryByProvince[provinceId] = Number((prevTreasury + provinceWages).toFixed(3));
+    worldBase.provinceBuildingDucatsByProvince[provinceId] = buildingDucats;
+  }
+
+  return nextProfessionPctByProvince;
 }
 
 function resolvePopulationTurn(): void {
   const domains = getPopulationDomainKeys();
+  const professionByProvince = resolveBuildingsTurn();
   for (const province of adm1ProvinceIndex) {
     const provinceId = province.id;
     const currentPopulation = normalizeProvincePopulation(
@@ -774,7 +934,7 @@ function resolvePopulationTurn(): void {
       provinceId,
       domains,
     );
-    const nextPopulation = resolvePopulationTurnForProvince(currentPopulation);
+    const nextPopulation = resolvePopulationTurnForProvince(currentPopulation, professionByProvince[provinceId]);
     if (!isEqualProvincePopulation(worldBase.provincePopulationByProvince[provinceId], nextPopulation)) {
       worldBase.provincePopulationByProvince[provinceId] = nextPopulation;
     }
@@ -1023,8 +1183,14 @@ const defaultGameSettings = (): GameSettings => ({
 function defaultWorldBase(currentTurnId: number): WorldBase {
   const domains = getPopulationDomainKeys();
   const provincePopulationByProvince: Record<string, ProvincePopulation> = {};
+  const provinceBuildingsByProvince: Record<string, Record<string, number>> = {};
+  const provinceBuildingDucatsByProvince: Record<string, Record<string, number>> = {};
+  const provincePopulationTreasuryByProvince: Record<string, number> = {};
   for (const province of adm1ProvinceIndex) {
     provincePopulationByProvince[province.id] = buildDefaultProvincePopulation(province.id, domains);
+    provinceBuildingsByProvince[province.id] = {};
+    provinceBuildingDucatsByProvince[province.id] = {};
+    provincePopulationTreasuryByProvince[province.id] = 0;
   }
   return {
     turnId: currentTurnId,
@@ -1041,6 +1207,9 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
     provincePopulationByProvince,
+    provinceBuildingsByProvince,
+    provinceBuildingDucatsByProvince,
+    provincePopulationTreasuryByProvince,
   };
 }
 
@@ -1098,8 +1267,8 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           ideologies: normalizeContentCultures((next as Partial<{ content?: { ideologies?: unknown } }>).content?.ideologies),
           religions: normalizeContentCultures((next as Partial<{ content?: { religions?: unknown } }>).content?.religions),
           technologies: normalizeContentCultures((next as Partial<{ content?: { technologies?: unknown } }>).content?.technologies),
-          buildings: normalizeContentCultures((next as Partial<{ content?: { buildings?: unknown } }>).content?.buildings),
-          goods: normalizeContentCultures((next as Partial<{ content?: { goods?: unknown } }>).content?.goods),
+          buildings: normalizeContentBuildings((next as Partial<{ content?: { buildings?: unknown } }>).content?.buildings),
+          goods: normalizeContentGoods((next as Partial<{ content?: { goods?: unknown } }>).content?.goods),
           companies: normalizeContentCultures((next as Partial<{ content?: { companies?: unknown } }>).content?.companies),
           industries: normalizeContentCultures((next as Partial<{ content?: { industries?: unknown } }>).content?.industries),
           cultures: normalizeContentCultures((next as Partial<{ content?: { cultures?: unknown } }>).content?.cultures),
@@ -1226,6 +1395,15 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         ),
         provincePopulationByProvince: normalizeProvincePopulationMap(
           (candidate as Partial<WorldBase> & { provincePopulationByProvince?: unknown }).provincePopulationByProvince,
+        ),
+        provinceBuildingsByProvince: normalizeProvinceBuildingsMap(
+          (candidate as Partial<WorldBase> & { provinceBuildingsByProvince?: unknown }).provinceBuildingsByProvince,
+        ),
+        provinceBuildingDucatsByProvince: normalizeProvinceBuildingDucatsMap(
+          (candidate as Partial<WorldBase> & { provinceBuildingDucatsByProvince?: unknown }).provinceBuildingDucatsByProvince,
+        ),
+        provincePopulationTreasuryByProvince: normalizeProvincePopulationTreasuryMap(
+          (candidate as Partial<WorldBase> & { provincePopulationTreasuryByProvince?: unknown }).provincePopulationTreasuryByProvince,
         ),
       };
     } else {
@@ -2006,6 +2184,9 @@ type WorldBaseSectionSnapshot = {
   colonyProgressByProvince?: WorldBase["colonyProgressByProvince"];
   provinceColonizationByProvince?: WorldBase["provinceColonizationByProvince"];
   provincePopulationByProvince?: WorldBase["provincePopulationByProvince"];
+  provinceBuildingsByProvince?: WorldBase["provinceBuildingsByProvince"];
+  provinceBuildingDucatsByProvince?: WorldBase["provinceBuildingDucatsByProvince"];
+  provincePopulationTreasuryByProvince?: WorldBase["provincePopulationTreasuryByProvince"];
 };
 
 function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
@@ -2031,6 +2212,15 @@ function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
   }
   if ((mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0) {
     snapshot.provincePopulationByProvince = structuredClone(worldBase.provincePopulationByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceBuildingsByProvince) !== 0) {
+    snapshot.provinceBuildingsByProvince = structuredClone(worldBase.provinceBuildingsByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceBuildingDucatsByProvince) !== 0) {
+    snapshot.provinceBuildingDucatsByProvince = structuredClone(worldBase.provinceBuildingDucatsByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provincePopulationTreasuryByProvince) !== 0) {
+    snapshot.provincePopulationTreasuryByProvince = structuredClone(worldBase.provincePopulationTreasuryByProvince);
   }
 
   return snapshot;
@@ -2122,6 +2312,9 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
   const colonyProgressByProvince: Record<string, Record<string, number> | null> = {};
   const provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null> = {};
   const provincePopulationByProvince: Record<string, ProvincePopulation | null> = {};
+  const provinceBuildingsByProvince: Record<string, Record<string, number> | null> = {};
+  const provinceBuildingDucatsByProvince: Record<string, Record<string, number> | null> = {};
+  const provincePopulationTreasuryByProvince: Record<string, number | null> = {};
 
   for (const key of new Set([...Object.keys(prev.resourcesByCountry), ...Object.keys(next.resourcesByCountry)])) {
     const prevValue = prev.resourcesByCountry[key];
@@ -2208,6 +2401,42 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
     }
   }
 
+  for (const key of new Set([...Object.keys(prev.provinceBuildingsByProvince), ...Object.keys(next.provinceBuildingsByProvince)])) {
+    const prevValue = prev.provinceBuildingsByProvince[key];
+    const nextValue = next.provinceBuildingsByProvince[key];
+    if (!nextValue) {
+      provinceBuildingsByProvince[key] = null;
+      continue;
+    }
+    if (!isEqualCountryProgressMap(prevValue, nextValue)) {
+      provinceBuildingsByProvince[key] = nextValue;
+    }
+  }
+
+  for (const key of new Set([...Object.keys(prev.provinceBuildingDucatsByProvince), ...Object.keys(next.provinceBuildingDucatsByProvince)])) {
+    const prevValue = prev.provinceBuildingDucatsByProvince[key];
+    const nextValue = next.provinceBuildingDucatsByProvince[key];
+    if (!nextValue) {
+      provinceBuildingDucatsByProvince[key] = null;
+      continue;
+    }
+    if (!isEqualCountryProgressMap(prevValue, nextValue)) {
+      provinceBuildingDucatsByProvince[key] = nextValue;
+    }
+  }
+
+  for (const key of new Set([...Object.keys(prev.provincePopulationTreasuryByProvince), ...Object.keys(next.provincePopulationTreasuryByProvince)])) {
+    const prevValue = prev.provincePopulationTreasuryByProvince[key];
+    const nextValue = next.provincePopulationTreasuryByProvince[key];
+    if (nextValue == null) {
+      provincePopulationTreasuryByProvince[key] = null;
+      continue;
+    }
+    if (prevValue !== nextValue) {
+      provincePopulationTreasuryByProvince[key] = nextValue;
+    }
+  }
+
   let mask = 0;
   const compact: Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> = { mask: 0 };
   if (Object.keys(resourcesByCountry).length > 0) {
@@ -2233,6 +2462,18 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
   if (Object.keys(provincePopulationByProvince).length > 0) {
     mask |= WORLD_DELTA_MASK.provincePopulationByProvince;
     compact.u = provincePopulationByProvince;
+  }
+  if (Object.keys(provinceBuildingsByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceBuildingsByProvince;
+    compact.b = provinceBuildingsByProvince;
+  }
+  if (Object.keys(provinceBuildingDucatsByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceBuildingDucatsByProvince;
+    compact.q = provinceBuildingDucatsByProvince;
+  }
+  if (Object.keys(provincePopulationTreasuryByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provincePopulationTreasuryByProvince;
+    compact.y = provincePopulationTreasuryByProvince;
   }
   compact.mask = mask;
   return compact;
@@ -2265,6 +2506,18 @@ function toWorldBaseForDeltaDiff(previous: WorldBaseSectionSnapshot, next: World
       (previous.mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0 && previous.provincePopulationByProvince
         ? previous.provincePopulationByProvince
         : next.provincePopulationByProvince,
+    provinceBuildingsByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceBuildingsByProvince) !== 0 && previous.provinceBuildingsByProvince
+        ? previous.provinceBuildingsByProvince
+        : next.provinceBuildingsByProvince,
+    provinceBuildingDucatsByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceBuildingDucatsByProvince) !== 0 && previous.provinceBuildingDucatsByProvince
+        ? previous.provinceBuildingDucatsByProvince
+        : next.provinceBuildingDucatsByProvince,
+    provincePopulationTreasuryByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provincePopulationTreasuryByProvince) !== 0 && previous.provincePopulationTreasuryByProvince
+        ? previous.provincePopulationTreasuryByProvince
+        : next.provincePopulationTreasuryByProvince,
   };
 }
 
@@ -2294,6 +2547,9 @@ function broadcastWorldDeltaFromSectionSnapshot(
     p: compact.p,
     z: compact.z,
     u: compact.u,
+    b: compact.b,
+    q: compact.q,
+    y: compact.y,
     rejectedOrders,
   };
   const baselinePayload = {
@@ -2307,6 +2563,9 @@ function broadcastWorldDeltaFromSectionSnapshot(
       colonyProgressByProvince: compact.p,
       provinceColonizationByProvince: compact.z,
       provincePopulationByProvince: compact.u,
+      provinceBuildingsByProvince: compact.b,
+      provinceBuildingDucatsByProvince: compact.q,
+      provincePopulationTreasuryByProvince: compact.y,
     },
     rejectedOrders,
   };
@@ -2424,12 +2683,16 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
     WORLD_DELTA_MASK.resourcesByCountry |
       WORLD_DELTA_MASK.provinceOwner |
       WORLD_DELTA_MASK.colonyProgressByProvince |
-      WORLD_DELTA_MASK.provincePopulationByProvince,
+      WORLD_DELTA_MASK.provincePopulationByProvince |
+      WORLD_DELTA_MASK.provinceBuildingsByProvince |
+      WORLD_DELTA_MASK.provinceBuildingDucatsByProvince |
+      WORLD_DELTA_MASK.provincePopulationTreasuryByProvince,
   );
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldDelta["rejectedOrders"] = [];
   const claimed = new Set<string>();
   const news: EventLogEntry[] = [];
+  const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
 
   const colonizeTargetsByCountry = new Map<string, Set<string>>();
   const touchedProvinceIds = new Set<string>();
@@ -2448,12 +2711,22 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
           rejectedOrders.push({ playerId, reason: "BUILD_CONFLICT", tempOrderId: order.id });
           continue;
         }
+        const payload = (order.payload ?? {}) as Record<string, unknown>;
+        const requestedBuildingId = typeof payload.building === "string" ? payload.building.trim() : "";
+        const buildingId = requestedBuildingId || gameSettings.content.buildings[0]?.id || "";
+        if (!buildingId || !buildingById.has(buildingId)) {
+          rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
+          continue;
+        }
         claimed.add(order.provinceId);
         const resource = worldBase.resourcesByCountry[order.countryId] as ResourceTotals | undefined;
         if (resource) {
           resource.ducats = Math.max(0, resource.ducats - 2);
           resource.gold = Math.max(0, resource.gold - 5);
         }
+        const byBuilding = { ...(worldBase.provinceBuildingsByProvince[order.provinceId] ?? {}) };
+        byBuilding[buildingId] = (byBuilding[buildingId] ?? 0) + 1;
+        worldBase.provinceBuildingsByProvince[order.provinceId] = byBuilding;
       }
 
       if (order.type === "COLONIZE") {
@@ -3105,6 +3378,31 @@ const culturePayloadSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().trim().max(5000).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+  basePrice: z.number().finite().min(0).optional(),
+  inputs: z
+    .array(
+      z.object({
+        goodId: z.string().trim().min(1).max(120),
+        amount: z.number().finite().min(0),
+      }),
+    )
+    .optional(),
+  outputs: z
+    .array(
+      z.object({
+        goodId: z.string().trim().min(1).max(120),
+        amount: z.number().finite().min(0),
+      }),
+    )
+    .optional(),
+  workforceRequirements: z
+    .array(
+      z.object({
+        professionId: z.string().trim().min(1).max(120),
+        workers: z.number().int().min(0),
+      }),
+    )
+    .optional(),
 });
 const contentEntryKindSchema = z.enum([
   "cultures",
@@ -3127,6 +3425,25 @@ function contentNameExists(kind: ContentEntryKind, name: string, excludeId?: str
   return getContentEntriesByKind(kind).some(
     (entry) => entry.id !== excludeId && entry.name.trim().toLowerCase() === name.trim().toLowerCase(),
   );
+}
+
+function sanitizeContentEntryByKind(
+  kind: ContentEntryKind,
+  payload: z.infer<typeof culturePayloadSchema>,
+): Partial<GameContentEntry & GoodContentEntry & BuildingContentEntry> {
+  if (kind === "goods") {
+    return {
+      basePrice: Number((payload.basePrice ?? 1).toFixed(3)),
+    };
+  }
+  if (kind === "buildings") {
+    return {
+      inputs: normalizeGoodFlows(payload.inputs),
+      outputs: normalizeGoodFlows(payload.outputs),
+      workforceRequirements: normalizeWorkforceRequirements(payload.workforceRequirements),
+    };
+  }
+  return {};
 }
 
 app.get("/content/entries/:kind", (req, res) => {
@@ -3175,6 +3492,7 @@ app.post("/admin/content/entries/:kind", async (req, res) => {
     logoUrl: null as string | null,
     malePortraitUrl: null as string | null,
     femalePortraitUrl: null as string | null,
+    ...sanitizeContentEntryByKind(kind, parsed.data),
   };
   getContentEntriesByKind(kind).unshift(item);
   savePersistentState();
@@ -3210,6 +3528,7 @@ app.patch("/admin/content/entries/:kind/:entryId", async (req, res) => {
     name: normalizedName,
     description: (parsed.data.description ?? "").trim(),
     color: parsed.data.color,
+    ...sanitizeContentEntryByKind(kind, parsed.data),
   };
   savePersistentState();
   return res.json({ item: items[index], items });

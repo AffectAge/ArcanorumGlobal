@@ -19,6 +19,7 @@ import { ClientSettingsModal } from "./components/ClientSettingsModal";
 import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
 import { PopulationStatsModal } from "./components/PopulationStatsModal";
+import { ProvinceBuildingsModal } from "./components/ProvinceBuildingsModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -75,6 +76,7 @@ export default function App() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [contentPanelOpen, setContentPanelOpen] = useState(false);
   const [populationStatsOpen, setPopulationStatsOpen] = useState(false);
+  const [provinceBuildingsOpen, setProvinceBuildingsOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
@@ -757,7 +759,7 @@ export default function App() {
         countryId: auth.countryId,
         provinceId: provinceId ?? selectedProvinceId ?? "ARG-1309",
         type: "BUILD",
-        payload: { building: "factory" },
+        payload: {},
       },
     };
 
@@ -1119,6 +1121,9 @@ export default function App() {
           />
           <SideNav
             onItemClick={(key) => {
+              if (key === "buildings") {
+                setProvinceBuildingsOpen(true);
+              }
               if (key === "population") {
                 setPopulationStatsOpen(true);
               }
@@ -1147,6 +1152,16 @@ export default function App() {
         <PopulationStatsModal
           open={populationStatsOpen}
           onClose={() => setPopulationStatsOpen(false)}
+          worldBase={worldBase}
+          countryId={auth.countryId}
+          countryName={country?.name ?? auth.countryId}
+        />
+      )}
+
+      {auth && (
+        <ProvinceBuildingsModal
+          open={provinceBuildingsOpen}
+          onClose={() => setProvinceBuildingsOpen(false)}
           worldBase={worldBase}
           countryId={auth.countryId}
           countryName={country?.name ?? auth.countryId}
@@ -1361,8 +1376,6 @@ export default function App() {
     </div>
   );
 }
-
-
 
 
 
