@@ -310,10 +310,22 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
   }, [entryByKindById.religions, stats.breakdown.religionPct, stats.totalPopulation]);
 
   useEffect(() => {
+    if (!open) {
+      chartRef.current?.dispose();
+      chartRef.current = null;
+      return;
+    }
     if (!activeDimension) return;
     if (!pieRef.current) return;
 
-    const chart = chartRef.current ?? echarts.init(pieRef.current);
+    const existing = chartRef.current;
+    const chart =
+      existing && existing.getDom() === pieRef.current
+        ? existing
+        : (() => {
+            existing?.dispose();
+            return echarts.init(pieRef.current!);
+          })();
     chartRef.current = chart;
     const selectedId = selectedByDimension[activeDimension] ?? activeRows[0]?.id;
     const hoveredId = hoveredByDimension[activeDimension] ?? null;
@@ -347,8 +359,28 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
       backgroundColor: "transparent",
       tooltip: {
         trigger: "item",
-        formatter: (params: { seriesName: string; name: string; value: number; percent: number }) =>
-          `${params.seriesName} <br/>${params.name} : ${params.value.toFixed(2)} (${params.percent.toFixed(2)}%)`,
+        backgroundColor: "transparent",
+        borderWidth: 0,
+        padding: 0,
+        formatter: (params: { seriesName: string; name: string; value: number; percent: number; color?: string }) => {
+          const pieceColor = params.color ?? "#334155";
+          const peopleCount = formatInt((stats.totalPopulation * params.value) / 100);
+          return `
+            <div style="
+              background:${pieceColor}dd;
+              border:1px solid ${pieceColor};
+              color:#f8fafc;
+              border-radius:8px;
+              padding:8px 10px;
+              box-shadow:0 6px 18px rgba(0,0,0,0.35);
+              backdrop-filter: blur(4px);
+            ">
+              <div style="font-weight:700; margin-bottom:2px;">${params.seriesName}</div>
+              <div>${params.name}: ${params.value.toFixed(2)}%</div>
+              <div style="opacity:0.92;">${peopleCount} чел.</div>
+            </div>
+          `;
+        },
       },
       series: [
         {
@@ -364,6 +396,7 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
             position: "outside",
             formatter: "{b}\n{d}%",
             fontSize: 11,
+            fontWeight: 700,
             lineHeight: 14,
           },
           labelLine: { show: true, length: 12, length2: 10, smooth: 0.2 },
@@ -374,6 +407,14 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
             itemStyle: {
               color: row.color,
               opacity: hoveredId ? (hoveredId === row.id ? 1 : 0.35) : 1,
+            },
+            label: {
+              color: row.color,
+            },
+            labelLine: {
+              lineStyle: {
+                color: row.color,
+              },
             },
           })),
           emphasis: {
@@ -393,7 +434,7 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
     return () => {
       window.removeEventListener("resize", onResize);
     };
-  }, [activeDimension, activeRows, activeTab.label, hoveredByDimension, selectedByDimension]);
+  }, [open, activeDimension, activeRows, activeTab.label, hoveredByDimension, selectedByDimension]);
 
   useEffect(() => {
     return () => {
