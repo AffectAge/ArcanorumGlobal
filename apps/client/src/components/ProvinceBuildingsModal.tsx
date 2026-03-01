@@ -1,7 +1,24 @@
 import { Dialog } from "@headlessui/react";
 import type { WorldBase } from "@arcanorum/shared";
-import { motion } from "framer-motion";
-import { Building2, Coins, Factory, Hammer, Lock, MapPin, Plus, Trash2, Users, X } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Building2,
+  ChevronDown,
+  ChevronUp,
+  Coins,
+  Factory,
+  Hammer,
+  Lock,
+  MapPin,
+  Package,
+  Plus,
+  SlidersHorizontal,
+  Trash2,
+  Users,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { cancelCountryBuild, demolishCountryBuild, fetchContentEntries, fetchCountries, fetchPublicGameUiSettings, type ContentEntry, type ResourceIconsMap } from "../lib/api";
@@ -32,6 +49,8 @@ type Card = {
   industryName: string | null;
   ownerLabel: string;
   ownerLogo: string | null;
+  ownerType: "state" | "company";
+  ownerCompanyId?: string;
   isActive: boolean;
   inactiveReasons: string[];
   level: number;
@@ -74,6 +93,7 @@ const formatCompact = (value: number): string => {
 export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, countryName, onQueueBuildOrder }: Props) {
   const [buildings, setBuildings] = useState<ContentEntry[]>([]);
   const [industries, setIndustries] = useState<ContentEntry[]>([]);
+  const [goods, setGoods] = useState<ContentEntry[]>([]);
   const [companies, setCompanies] = useState<ContentEntry[]>([]);
   const [countries, setCountries] = useState<Array<{ id: string; name: string; flagUrl?: string | null }>>([]);
   const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
@@ -119,6 +139,16 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         demolitionCostConstruction: number;
       }
   >(null);
+  const [filterBuildingId, setFilterBuildingId] = useState("");
+  const [filterProvinceId, setFilterProvinceId] = useState("");
+  const [filterCompanyId, setFilterCompanyId] = useState("");
+  const [filterCompanyCountryId, setFilterCompanyCountryId] = useState("");
+  const [filterIndustryId, setFilterIndustryId] = useState("");
+  const [filterStatus, setFilterStatus] = useState<"all" | "construction" | "built">("all");
+  const [filterActive, setFilterActive] = useState<"all" | "active" | "inactive">("all");
+  const [filterEconomy, setFilterEconomy] = useState<"all" | "profit" | "loss">("all");
+  const [sortBy, setSortBy] = useState<"building" | "province" | "company" | "industry">("building");
+  const [openEconomyByCardKey, setOpenEconomyByCardKey] = useState<Record<string, boolean>>({});
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
@@ -130,14 +160,16 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     Promise.all([
       fetchContentEntries("buildings"),
       fetchContentEntries("industries"),
+      fetchContentEntries("goods"),
       fetchContentEntries("companies"),
       fetchCountries(),
       fetchPublicGameUiSettings(),
     ])
-      .then(([b, i, c, ctr, ui]) => {
+      .then(([b, i, g, c, ctr, ui]) => {
         if (cancelled) return;
         setBuildings(b);
         setIndustries(i);
+        setGoods(g);
         setCompanies(c);
         setCountries(ctr);
         setResourceIcons(ui.resourceIcons);
@@ -147,6 +179,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         if (cancelled) return;
         setBuildings([]);
         setIndustries([]);
+        setGoods([]);
         setCompanies([]);
         setCountries([]);
         setResourceIcons({
@@ -168,6 +201,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const buildingById = useMemo(() => new Map(buildings.map((x) => [x.id, x] as const)), [buildings]);
   const sortedBuildings = useMemo(() => [...buildings].sort((a, b) => a.name.localeCompare(b.name, "ru")), [buildings]);
   const industryById = useMemo(() => new Map(industries.map((x) => [x.id, x] as const)), [industries]);
+  const goodById = useMemo(() => new Map(goods.map((x) => [x.id, x] as const)), [goods]);
   const companyById = useMemo(() => new Map(companies.map((x) => [x.id, x] as const)), [companies]);
   const countryById = useMemo(() => new Map(countries.map((x) => [x.id, x] as const)), [countries]);
 
@@ -280,6 +314,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           industryName: ind?.name ?? null,
           ownerLabel,
           ownerLogo,
+          ownerType: instance.owner.type,
+          ownerCompanyId: instance.owner.type === "company" ? instance.owner.companyId : undefined,
           isActive: inactiveReasons.length === 0,
           inactiveReasons,
           level,
@@ -308,6 +344,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           industryName: null,
           ownerLabel,
           ownerLogo,
+          ownerType: q.owner.type,
+          ownerCompanyId: q.owner.type === "company" ? q.owner.companyId : undefined,
           isActive: true,
           inactiveReasons: [],
           level: 0,
@@ -414,6 +452,108 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     },
     [ordersByTurn, turnId, countryId, buildingById, myProvinces, worldBase?.provinceConstructionQueueByProvince, worldBase?.provinceNameById, companyById, countryById],
   );
+
+  const getCardEconomy = (card: Card) => {
+    const building = buildingById.get(card.buildingId);
+    const productivity = card.kind === "construction" ? card.progressPercent : card.workersDemand > 0 ? Math.round((card.workersEmployed / card.workersDemand) * 100) : 100;
+    if (!building) {
+      return {
+        productivity,
+        inputCost: 0,
+        outputRevenue: 0,
+        netPerTurn: 0,
+        storageAmount: 0,
+        inputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; cost: number }>,
+        outputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; income: number }>,
+        trade: [] as Array<{ text: string; kind: "buy" | "sell" }>,
+      };
+    }
+    const ratio = Math.max(0, Math.min(1, productivity / 100));
+    const inputs = (building.inputs ?? []).map((entry) => {
+      const good = goodById.get(entry.goodId);
+      const price = Math.max(0, Number(good?.basePrice ?? 1));
+      const max = Math.max(0, Number(entry.amount ?? 0));
+      const factual = max * ratio;
+      const cost = factual * price;
+      return { goodName: good?.name ?? entry.goodId, goodLogoUrl: good?.logoUrl ?? null, factual, max, cost };
+    });
+    const outputs = (building.outputs ?? []).map((entry) => {
+      const good = goodById.get(entry.goodId);
+      const price = Math.max(0, Number(good?.basePrice ?? 1));
+      const max = Math.max(0, Number(entry.amount ?? 0));
+      const factual = max * ratio;
+      const revenue = factual * price;
+      return { goodName: good?.name ?? entry.goodId, goodLogoUrl: good?.logoUrl ?? null, factual, max, income: revenue };
+    });
+    const inputCost = inputs.reduce((sum, entry) => sum + entry.cost, 0);
+    const outputRevenue = outputs.reduce((sum, entry) => sum + entry.income, 0);
+    const netPerTurn = outputRevenue - inputCost;
+
+    const totalTreasuryByType = worldBase?.provinceBuildingDucatsByProvince?.[card.provinceId]?.[card.buildingId] ?? 0;
+    const totalInstancesByType = (worldBase?.provinceBuildingsByProvince?.[card.provinceId] ?? []).filter(
+      (instance) => instance.buildingId === card.buildingId,
+    ).length;
+    const storageAmount = totalInstancesByType > 0 ? totalTreasuryByType / totalInstancesByType : 0;
+    const trade = [
+      ...inputs.filter((entry) => entry.factual > 0).map((entry) => ({
+        text: `куплено ${formatCompact(entry.factual)} ${entry.goodName} (-${formatCompact(entry.cost)} дукат)`,
+        kind: "buy" as const,
+      })),
+      ...outputs.filter((entry) => entry.factual > 0).map((entry) => ({
+        text: `продано ${formatCompact(entry.factual)} ${entry.goodName} (+${formatCompact(entry.income)} дукат)`,
+        kind: "sell" as const,
+      })),
+    ];
+
+    return { productivity, inputCost, outputRevenue, netPerTurn, storageAmount, inputs, outputs, trade };
+  };
+
+  const filteredCards = useMemo(() => {
+    const source = [...cards].filter((card) => {
+      if (filterBuildingId && card.buildingId !== filterBuildingId) return false;
+      if (filterProvinceId && card.provinceId !== filterProvinceId) return false;
+      if (filterCompanyId && card.ownerCompanyId !== filterCompanyId) return false;
+      if (filterCompanyCountryId) {
+        if (card.ownerType !== "company" || !card.ownerCompanyId) return false;
+        const companyCountryId =
+          (companies.find((company) => company.id === card.ownerCompanyId) as (ContentEntry & { countryId?: string }) | undefined)?.countryId ?? "";
+        if (companyCountryId !== filterCompanyCountryId) return false;
+      }
+      if (filterIndustryId) {
+        const industryId = (buildingById.get(card.buildingId) as (ContentEntry & { industryId?: string }) | undefined)?.industryId ?? "";
+        if (industryId !== filterIndustryId) return false;
+      }
+      if (filterStatus !== "all" && card.kind !== filterStatus) return false;
+      if (filterActive === "active" && !card.isActive) return false;
+      if (filterActive === "inactive" && card.isActive) return false;
+      if (filterEconomy !== "all" && card.kind === "built") {
+        const econ = getCardEconomy(card);
+        if (filterEconomy === "profit" && econ.netPerTurn <= 0) return false;
+        if (filterEconomy === "loss" && econ.netPerTurn >= 0) return false;
+      }
+      return true;
+    });
+    source.sort((a, b) => {
+      if (sortBy === "province") return a.provinceName.localeCompare(b.provinceName, "ru");
+      if (sortBy === "company") return a.ownerLabel.localeCompare(b.ownerLabel, "ru");
+      if (sortBy === "industry") return (a.industryName ?? "").localeCompare(b.industryName ?? "", "ru");
+      return a.buildingName.localeCompare(b.buildingName, "ru");
+    });
+    return source;
+  }, [
+    cards,
+    filterBuildingId,
+    filterProvinceId,
+    filterCompanyId,
+    filterCompanyCountryId,
+    filterIndustryId,
+    filterStatus,
+    filterActive,
+    filterEconomy,
+    sortBy,
+    companies,
+    buildingById,
+  ]);
 
   const availableConstruction = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.construction ?? 0)));
   const availableDucats = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.ducats ?? 0)));
@@ -618,16 +758,126 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       <motion.div aria-hidden="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
       <div className="fixed inset-0 p-4 md:p-6">
         <Dialog.Panel className="glass panel-border flex h-full flex-col rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div><Dialog.Title className="font-display text-2xl tracking-wide text-arc-accent">Постройки</Dialog.Title><span className="mt-1 block text-xs text-white/60">Индустрия и строительство страны {countryName}</span></div>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setConstructionOpen(true)} className="inline-flex h-10 items-center gap-2 rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-3 text-xs text-emerald-200"><Hammer size={14} />Строительство</button>
-              <button type="button" onClick={onClose} className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-300"><X size={16} /></button>
+          <div className="mb-3 rounded-xl border border-white/10 bg-gradient-to-r from-[#0f1726] to-[#0b111b] px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <Dialog.Title className="font-display text-2xl tracking-wide text-arc-accent">Индустрия</Dialog.Title>
+                <span className="mt-1 block text-xs text-white/60">Все построенные здания по провинциям</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConstructionOpen(true)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-400/35 bg-emerald-500/15 text-emerald-200"
+                >
+                  <SlidersHorizontal size={15} />
+                </button>
+                <button type="button" onClick={onClose} className="panel-border inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-300">
+                  <X size={16} />
+                </button>
+              </div>
             </div>
           </div>
 
-          <div className="arc-scrollbar grid min-h-0 grid-cols-1 gap-3 overflow-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
-            {cards.map((c) => (
+          <div className="mb-3 rounded-xl border border-white/10 bg-black/25 p-3">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-7">
+              <CustomSelect
+                value={filterBuildingId}
+                onChange={setFilterBuildingId}
+                options={[{ value: "", label: "Фильтр по зданию" }, ...sortedBuildings.map((b) => ({ value: b.id, label: b.name }))]}
+                placeholder="Фильтр по зданию"
+              />
+              <CustomSelect
+                value={filterProvinceId}
+                onChange={setFilterProvinceId}
+                options={[{ value: "", label: "Фильтр по провинции" }, ...myProvinces.map((p) => ({ value: p.id, label: p.name }))]}
+                placeholder="Фильтр по провинции"
+              />
+              <CustomSelect
+                value={filterCompanyId}
+                onChange={setFilterCompanyId}
+                options={[{ value: "", label: "Фильтр по компании" }, ...companies.map((c) => ({ value: c.id, label: c.name }))]}
+                placeholder="Фильтр по компании"
+              />
+              <CustomSelect
+                value={filterCompanyCountryId}
+                onChange={setFilterCompanyCountryId}
+                options={[{ value: "", label: "Фильтр по стране компании" }, ...countries.map((c) => ({ value: c.id, label: c.name }))]}
+                placeholder="Фильтр по стране компании"
+              />
+              <CustomSelect
+                value={filterIndustryId}
+                onChange={setFilterIndustryId}
+                options={[{ value: "", label: "Фильтр по отрасли" }, ...industries.map((i) => ({ value: i.id, label: i.name }))]}
+                placeholder="Фильтр по отрасли"
+              />
+              <CustomSelect
+                value={filterStatus}
+                onChange={(value) => setFilterStatus(value as "all" | "construction" | "built")}
+                options={[
+                  { value: "all", label: "Статус: Все" },
+                  { value: "construction", label: "Статус: Строящиеся" },
+                  { value: "built", label: "Статус: Построенные" },
+                ]}
+              />
+              <CustomSelect
+                value={filterActive}
+                onChange={(value) => setFilterActive(value as "all" | "active" | "inactive")}
+                options={[
+                  { value: "all", label: "Активность: Все" },
+                  { value: "active", label: "Активные" },
+                  { value: "inactive", label: "Неактивные" },
+                ]}
+              />
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="w-full max-w-[260px]">
+                <CustomSelect
+                  value={filterEconomy}
+                  onChange={(value) => setFilterEconomy(value as "all" | "profit" | "loss")}
+                  options={[
+                    { value: "all", label: "Экономика: Все" },
+                    { value: "profit", label: "Экономика: Прибыльные" },
+                    { value: "loss", label: "Экономика: Убыточные" },
+                  ]}
+                />
+              </div>
+              <div className="flex items-center gap-2 text-xs text-white/70">
+                <span>Всего: {filteredCards.length}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterBuildingId("");
+                    setFilterProvinceId("");
+                    setFilterCompanyId("");
+                    setFilterCompanyCountryId("");
+                    setFilterIndustryId("");
+                    setFilterStatus("all");
+                    setFilterActive("all");
+                    setFilterEconomy("all");
+                  }}
+                  className="rounded-lg border border-white/15 bg-black/35 px-2 py-1 hover:border-emerald-400/40"
+                >
+                  Сбросить фильтры
+                </button>
+                <div className="w-[190px]">
+                  <CustomSelect
+                    value={sortBy}
+                    onChange={(value) => setSortBy(value as "building" | "province" | "company" | "industry")}
+                    options={[
+                      { value: "building", label: "Сортировка: По зданию" },
+                      { value: "province", label: "Сортировка: По провинции" },
+                      { value: "company", label: "Сортировка: По компании" },
+                      { value: "industry", label: "Сортировка: По отрасли" },
+                    ]}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="arc-scrollbar grid min-h-0 grid-cols-1 gap-3 overflow-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+            {filteredCards.map((c) => (
               <article key={c.key} className={`rounded-2xl border bg-gradient-to-br from-white/5 to-transparent p-4 flex flex-col gap-4 shadow-lg shadow-black/30 ${border(c)}`}>
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
@@ -716,8 +966,199 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                   <div className="flex items-center gap-2"><Factory size={13} /><span className="text-white/40">Владелец:</span><span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-2 py-0.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}{c.ownerLabel}</span></div>
                   {c.kind === "built" && <div className="flex items-center gap-2"><Users size={13} /><span className="text-white/40">Рабочие:</span><span>{fmt(c.workersEmployed)} / {fmt(c.workersDemand)}</span></div>}
                 </div>
+                {c.kind === "built" && (
+                  <div className="rounded-xl border border-white/10 bg-black/30">
+                    {(() => {
+                      const econ = getCardEconomy(c);
+                      return (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenEconomyByCardKey((prev) => ({
+                          ...prev,
+                          [c.key]: !prev[c.key],
+                        }))
+                      }
+                      className="flex w-full items-center justify-between px-3 py-2 text-xs text-white/80"
+                    >
+                      <span>Экономика</span>
+                      <div className="flex items-center gap-2">
+                        <Tooltip content={`Производительность: ${econ.productivity}%. Показывает, какую долю от максимальной мощности здание отрабатывает за ход.`}>
+                          <span className="inline-flex min-h-[22px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-black/40 px-2 py-1">
+                            <span className="text-[10px] font-semibold text-white/75">Производительность: {econ.productivity}%</span>
+                            <span className="h-1.5 w-14 overflow-hidden rounded-full border border-white/15 bg-black/60">
+                              <span
+                                className="block h-full bg-emerald-400/75"
+                                style={{ width: `${Math.max(0, Math.min(100, econ.productivity))}%` }}
+                              />
+                            </span>
+                          </span>
+                        </Tooltip>
+                        <Tooltip content="Накоплено денег у здания">
+                          <span className="inline-flex min-h-[22px] items-center justify-center gap-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-[11px] font-bold leading-none text-white/75">
+                            {resourceIcons.ducats ? (
+                              <img src={resourceIcons.ducats} alt="" className="h-3.5 w-3.5 shrink-0 self-center object-contain" />
+                            ) : (
+                              <Coins size={11} />
+                            )}
+                            {formatCompact(econ.storageAmount)}
+                          </span>
+                        </Tooltip>
+                        <Tooltip content="Финансовый результат здания за ход (прибыль или убыток)">
+                          <span
+                            className={`inline-flex min-h-[22px] items-center justify-center rounded-md border px-2 py-1 text-[11px] font-bold leading-none ${
+                              econ.netPerTurn >= 0
+                                ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-300"
+                                : "border-red-400/40 bg-red-500/15 text-red-300"
+                            }`}
+                          >
+                            <span className="inline-flex items-center justify-center gap-1">
+                              {resourceIcons.ducats ? (
+                                <img src={resourceIcons.ducats} alt="" className="h-3.5 w-3.5 shrink-0 self-center object-contain" />
+                              ) : (
+                                <Coins size={11} />
+                              )}
+                              <span>
+                                {econ.netPerTurn >= 0 ? "+" : ""}
+                                {formatCompact(econ.netPerTurn)}
+                              </span>
+                            </span>
+                          </span>
+                        </Tooltip>
+                        {openEconomyByCardKey[c.key] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </div>
+                    </button>
+                      );
+                    })()}
+                    <AnimatePresence initial={false}>
+                      {openEconomyByCardKey[c.key] && (() => {
+                        const econ = getCardEconomy(c);
+                        return (
+                          <motion.div
+                            key={`${c.key}-economy`}
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2, ease: "easeOut" }}
+                            className="overflow-hidden"
+                          >
+                          <div className="space-y-2 border-t border-white/10 px-3 py-2 text-xs text-white/70">
+                          <div className="rounded-lg border border-white/10 bg-black/35 px-2 py-1">
+                            <div className="flex items-center gap-1 text-white/50"><Package size={12} />Склад</div>
+                            <Tooltip content="Накопленные дукаты этого здания">
+                              <div className="mt-0.5 text-white/85">{econ.storageAmount > 0 ? `${formatCompact(econ.storageAmount)} дукат` : "пусто"}</div>
+                            </Tooltip>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-white/50">Торговля за ход</div>
+                            {econ.trade.length === 0 && <div className="text-white/50">пусто</div>}
+                            {econ.trade.map((item, idx) => (
+                              <Tooltip key={`${c.key}-trade-${idx}`} content={item.kind === "buy" ? "Покупка входных товаров за ход" : "Продажа выходных товаров за ход"}>
+                                <div
+                                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 ${
+                                    item.kind === "buy" ? "border border-emerald-400/35 bg-emerald-500/15 text-emerald-200" : "border border-sky-400/35 bg-sky-500/15 text-sky-200"
+                                  }`}
+                                >
+                                  {item.kind === "buy" ? <ArrowDownLeft size={11} /> : <ArrowUpRight size={11} />}
+                                  <span>{item.text}</span>
+                                </div>
+                              </Tooltip>
+                            ))}
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-white/50">Производство</div>
+                            {econ.outputs.length === 0 && <div className="text-white/50">нет выходных товаров</div>}
+                            {econ.outputs.map((output, idx) => (
+                              <div
+                                key={`${c.key}-output-${idx}`}
+                                className="rounded-md border border-emerald-400/35 bg-black px-2 py-1 text-white/60"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <Tooltip content="Выходной товар, который производит здание">
+                                    <div className="inline-flex items-center gap-1.5 font-semibold text-emerald-300">
+                                      {output.goodLogoUrl ? (
+                                        <img src={output.goodLogoUrl} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" />
+                                      ) : (
+                                        <Package size={12} className="shrink-0 text-emerald-300" />
+                                      )}
+                                      <span>{output.goodName}</span>
+                                    </div>
+                                  </Tooltip>
+                                  <div className="ml-auto flex items-center justify-end gap-1.5">
+                                    <Tooltip content="Фактический объем производства за ход">
+                                      <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
+                                        Фактически: {formatCompact(output.factual)}
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip content="Максимально возможный объем производства за ход">
+                                      <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
+                                        Максимально: {formatCompact(output.max)}
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip content="Доход от продажи выходного товара за ход">
+                                      <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
+                                        Доход: {formatCompact(output.income)} дукат
+                                      </span>
+                                    </Tooltip>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-white/50">Потребление</div>
+                            {econ.inputs.length === 0 && <div className="text-white/50">нет входных товаров</div>}
+                            {econ.inputs.map((input, idx) => (
+                              <div
+                                key={`${c.key}-input-${idx}`}
+                                className="rounded-md border border-red-400/35 bg-black px-2 py-1 text-white/60"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <Tooltip content="Входной товар, который здание закупает для производства">
+                                    <div className="inline-flex items-center gap-1.5 font-semibold text-red-300">
+                                      {input.goodLogoUrl ? (
+                                        <img src={input.goodLogoUrl} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" />
+                                      ) : (
+                                        <Package size={12} className="shrink-0 text-red-300" />
+                                      )}
+                                      <span>{input.goodName}</span>
+                                    </div>
+                                  </Tooltip>
+                                  <div className="ml-auto flex items-center justify-end gap-1.5">
+                                    <Tooltip content="Фактический объем закупки за ход">
+                                      <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
+                                        Фактически: {formatCompact(input.factual)}
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip content="Максимально возможный объем закупки за ход">
+                                      <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
+                                        Максимально: {formatCompact(input.max)}
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip content="Стоимость закупки входного товара за ход">
+                                      <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
+                                        Затраты: {formatCompact(input.cost)} дукат
+                                      </span>
+                                    </Tooltip>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          </div>
+                          </motion.div>
+                        );
+                      })()}
+                    </AnimatePresence>
+                  </div>
+                )}
               </article>
             ))}
+            {filteredCards.length === 0 && (
+              <div className="col-span-full rounded-lg border border-dashed border-white/15 bg-black/20 p-4 text-sm text-white/50">
+                По выбранным фильтрам ничего не найдено.
+              </div>
+            )}
           </div>
         </Dialog.Panel>
       </div>
