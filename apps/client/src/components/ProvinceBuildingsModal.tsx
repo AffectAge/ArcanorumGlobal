@@ -1,10 +1,10 @@
 import { Dialog } from "@headlessui/react";
 import type { WorldBase } from "@arcanorum/shared";
 import { motion } from "framer-motion";
-import { Building2, Factory, Hammer, Lock, MapPin, Plus, Trash2, Users, X } from "lucide-react";
+import { Building2, Coins, Factory, Hammer, Lock, MapPin, Plus, Trash2, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { cancelCountryBuild, fetchContentEntries, fetchCountries, type ContentEntry } from "../lib/api";
+import { cancelCountryBuild, fetchContentEntries, fetchCountries, fetchPublicGameUiSettings, type ContentEntry, type ResourceIconsMap } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 import { CustomSelect } from "./CustomSelect";
 import { Tooltip } from "./Tooltip";
@@ -45,13 +45,46 @@ type BuildAvailability = {
 };
 
 const fmt = (v: number) => new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.floor(v)));
+const formatCompact = (value: number): string => {
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  const units = [
+    { n: 1_000_000_000_000, s: "T" },
+    { n: 1_000_000_000, s: "B" },
+    { n: 1_000_000, s: "M" },
+    { n: 1_000, s: "K" },
+  ] as const;
+  for (const unit of units) {
+    if (abs >= unit.n) {
+      const scaled = abs / unit.n;
+      const text =
+        scaled >= 100
+          ? Math.floor(scaled).toString()
+          : scaled >= 10
+            ? scaled.toFixed(1).replace(/\.0$/, "")
+            : scaled.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+      return `${sign}${text}${unit.s}`;
+    }
+  }
+  return `${sign}${Math.floor(abs)}`;
+};
 
 export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, countryName, onQueueBuildOrder }: Props) {
   const [buildings, setBuildings] = useState<ContentEntry[]>([]);
   const [industries, setIndustries] = useState<ContentEntry[]>([]);
   const [companies, setCompanies] = useState<ContentEntry[]>([]);
   const [countries, setCountries] = useState<Array<{ id: string; name: string; flagUrl?: string | null }>>([]);
+  const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
+    culture: null,
+    science: null,
+    religion: null,
+    colonization: null,
+    construction: null,
+    ducats: null,
+    gold: null,
+  });
   const [constructionOpen, setConstructionOpen] = useState(false);
+  const [buildCountryId, setBuildCountryId] = useState("");
   const [provinceId, setProvinceId] = useState("");
   const [buildingId, setBuildingId] = useState("");
   const [ownerType, setOwnerType] = useState<"state" | "company">("state");
@@ -78,13 +111,20 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    Promise.all([fetchContentEntries("buildings"), fetchContentEntries("industries"), fetchContentEntries("companies"), fetchCountries()])
-      .then(([b, i, c, ctr]) => {
+    Promise.all([
+      fetchContentEntries("buildings"),
+      fetchContentEntries("industries"),
+      fetchContentEntries("companies"),
+      fetchCountries(),
+      fetchPublicGameUiSettings(),
+    ])
+      .then(([b, i, c, ctr, ui]) => {
         if (cancelled) return;
         setBuildings(b);
         setIndustries(i);
         setCompanies(c);
         setCountries(ctr);
+        setResourceIcons(ui.resourceIcons);
       })
       .catch(() => {
         if (cancelled) return;
@@ -92,6 +132,15 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         setIndustries([]);
         setCompanies([]);
         setCountries([]);
+        setResourceIcons({
+          culture: null,
+          science: null,
+          religion: null,
+          colonization: null,
+          construction: null,
+          ducats: null,
+          gold: null,
+        });
       });
     return () => {
       cancelled = true;
@@ -112,14 +161,46 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       .sort((a, b) => a.name.localeCompare(b.name, "ru"));
   }, [countryId, worldBase]);
 
+  const buildCountryOptions = useMemo(() => {
+    // TODO: add foreign countries here when diplomacy/build access permissions are implemented.
+    const own = countryById.get(countryId);
+    return [{ id: countryId, name: own?.name ?? countryName }];
+  }, [countryById, countryId, countryName]);
+
+  const ownerCountryOptions = useMemo(() => {
+    // Uses the same permission source as build-country selection.
+    return buildCountryOptions;
+  }, [buildCountryOptions]);
+
+  const buildProvinces = useMemo(() => {
+    if (!worldBase || !buildCountryId) return [];
+    return Object.entries(worldBase.provinceOwner)
+      .filter(([, owner]) => owner === buildCountryId)
+      .map(([id]) => ({ id, name: worldBase.provinceNameById[id] || id }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }, [buildCountryId, worldBase]);
+
   useEffect(() => {
     if (!open) return;
+    setBuildCountryId(countryId);
     setProvinceId(myProvinces[0]?.id ?? "");
     setBuildingId(buildings[0]?.id ?? "");
     setOwnerCountryId(countryId);
     setOwnerCompanyId(companies[0]?.id ?? "");
     setOwnerType("state");
   }, [open, myProvinces, buildings, companies, countryId]);
+
+  useEffect(() => {
+    if (!open) return;
+    setProvinceId(buildProvinces[0]?.id ?? "");
+  }, [buildProvinces, open]);
+
+  useEffect(() => {
+    if (!open || ownerType !== "state") return;
+    const hasSelected = ownerCountryOptions.some((country) => country.id === ownerCountryId);
+    if (hasSelected) return;
+    setOwnerCountryId(ownerCountryOptions[0]?.id ?? countryId);
+  }, [open, ownerType, ownerCountryOptions, ownerCountryId, countryId]);
 
   const cards = useMemo<Card[]>(() => {
     if (!worldBase) return [];
@@ -512,28 +593,21 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
               </button>
             </div>
 
-            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-              <Tooltip content="Очки строительства, которые будут распределены между всеми проектами при резолве хода.">
-                <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
-                  Доступно строительства: <span className="text-emerald-300">{fmt(availableConstruction)}</span>
-                </div>
-              </Tooltip>
-              <Tooltip content="Текущий запас дукатов страны. Используется для оплаты строительных проектов и других механик.">
-                <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
-                  Дукаты страны: <span className="text-amber-300">{fmt(availableDucats)}</span>
-                </div>
-              </Tooltip>
-              <Tooltip content="Сколько проектов сейчас находится в очереди строительства с учетом pending-приказов хода.">
-                <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
-                  Проектов в очереди: <span className="text-white">{fmt(constructionQueue.length)}</span>
-                </div>
-              </Tooltip>
-            </div>
-
             <div className="min-h-0 flex flex-1 flex-col gap-4">
               <section className="rounded-xl border border-white/10 bg-black/25 p-3">
                 <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Общие параметры строительства</div>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                  <label className="flex flex-col gap-1 text-xs text-white/65">
+                    <Tooltip content="Страна, в провинциях которой планируется строительство. По умолчанию выбрана ваша страна.">
+                      <span>Страна строительства</span>
+                    </Tooltip>
+                    <CustomSelect
+                      value={buildCountryId}
+                      onChange={setBuildCountryId}
+                      options={buildCountryOptions.map((country) => ({ value: country.id, label: country.name }))}
+                      placeholder="Выберите страну"
+                    />
+                  </label>
                   <label className="flex flex-col gap-1 text-xs text-white/65">
                     <Tooltip content="Выбранная провинция применяется ко всем добавляемым проектам из списка ниже.">
                       <span>Провинция</span>
@@ -541,7 +615,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     <CustomSelect
                       value={provinceId}
                       onChange={setProvinceId}
-                      options={myProvinces.map((p) => ({ value: p.id, label: p.name }))}
+                      options={buildProvinces.map((p) => ({ value: p.id, label: p.name }))}
                       placeholder="Выберите провинцию"
                     />
                   </label>
@@ -566,9 +640,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                       <CustomSelect
                         value={ownerCountryId}
                         onChange={setOwnerCountryId}
-                        options={Object.keys(worldBase?.resourcesByCountry ?? {}).map((id) => ({
-                          value: id,
-                          label: countryById.get(id)?.name ?? id,
+                        options={ownerCountryOptions.map((country) => ({
+                          value: country.id,
+                          label: country.name,
                         }))}
                         placeholder="Выберите страну"
                       />
@@ -591,7 +665,31 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
               <div className="min-h-0 flex-1 grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <section className="min-h-0 rounded-xl border border-white/10 bg-black/25 p-3 flex flex-col">
-                  <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Доступные здания</div>
+                  <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                    <div className="text-xs uppercase tracking-wide text-white/45">Доступные здания</div>
+                    <div className="flex items-center gap-1.5">
+                      <Tooltip content="Очки строительства страны (без текстовой плашки).">
+                        <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/35 px-2 py-1 text-[11px] text-white/75">
+                          {resourceIcons.construction ? (
+                            <img src={resourceIcons.construction} alt="" className="h-3.5 w-3.5 object-contain" />
+                          ) : (
+                            <Hammer size={12} className="text-emerald-300" />
+                          )}
+                          <span className="font-bold text-white/60">{formatCompact(availableConstruction)}</span>
+                        </div>
+                      </Tooltip>
+                      <Tooltip content="Дукаты страны (без текстовой плашки).">
+                        <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/35 px-2 py-1 text-[11px] text-white/75">
+                          {resourceIcons.ducats ? (
+                            <img src={resourceIcons.ducats} alt="" className="h-3.5 w-3.5 object-contain" />
+                          ) : (
+                            <Coins size={12} className="text-amber-300" />
+                          )}
+                          <span className="font-bold text-white/60">{formatCompact(availableDucats)}</span>
+                        </div>
+                      </Tooltip>
+                    </div>
+                  </div>
                   <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1 pt-1">
                     {buildableBuildingCards.map(({ building, availability }) => {
                       const costConstruction = Math.max(1, Math.floor(Number(building.costConstruction ?? 100)));
@@ -614,10 +712,27 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                             <div className="flex h-full items-center justify-between gap-2">
                               <div className="min-w-0">
                                 <div className="truncate text-sm font-semibold text-white/90">{building.name}</div>
+                                <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-white/40">
+                                  <Hammer size={10} className="text-white/40" />
+                                  <span>Стоимость строительства</span>
+                                </div>
                                 <div className="text-[11px] text-white/55">
-                                  Строительство: <span className="text-amber-300/90">{fmt(costConstruction)}</span>
-                                  {" · "}
-                                  Дукаты: <span className="text-amber-300/90">{fmt(costDucats)}</span>
+                                  <div className="flex items-center gap-1">
+                                    {resourceIcons.construction ? (
+                                      <img src={resourceIcons.construction} alt="" className="h-3.5 w-3.5 object-contain" />
+                                    ) : (
+                                      <Hammer size={12} className="text-emerald-300" />
+                                    )}
+                                    <span className="text-white/40">{formatCompact(costConstruction)}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    {resourceIcons.ducats ? (
+                                      <img src={resourceIcons.ducats} alt="" className="h-3.5 w-3.5 object-contain" />
+                                    ) : (
+                                      <Coins size={12} className="text-amber-300" />
+                                    )}
+                                    <span className="text-white/40">{formatCompact(costDucats)}</span>
+                                  </div>
                                 </div>
                                 <div className={`mt-1 text-[11px] ${canAdd ? "text-emerald-300/90" : "text-red-300/90"}`}>
                                   {canAdd ? "Доступно" : "Недоступно"}
@@ -654,7 +769,15 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 </section>
 
                 <section className="min-h-0 rounded-xl border border-white/10 bg-black/25 p-3 flex flex-col">
-                  <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Очередь строительства</div>
+                  <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                    <div className="text-xs uppercase tracking-wide text-white/45">Очередь строительства</div>
+                    <Tooltip content="Количество проектов в очереди строительства (включая pending текущего хода).">
+                      <div className="inline-flex items-center gap-1 rounded-md border border-amber-400/55 bg-[#14100a] px-2 py-0.5 text-[11px] font-bold text-amber-300">
+                        <Hammer size={11} className="text-amber-300" />
+                        <span>{formatCompact(constructionQueue.length)}</span>
+                      </div>
+                    </Tooltip>
+                  </div>
                   {constructionQueue.length === 0 && (
                     <div className="rounded-lg border border-dashed border-white/15 bg-black/20 p-3 text-xs text-white/45">
                       Очередь пуста
