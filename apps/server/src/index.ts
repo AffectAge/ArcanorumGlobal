@@ -1089,7 +1089,14 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       }
       const resultDucats = buildingRevenue - buildingInputCost - buildingWages;
       const prevDucats = buildingDucats[buildingId] ?? 0;
-      buildingDucats[buildingId] = Math.max(0, Number((prevDucats + resultDucats).toFixed(3)));
+      if (resultDucats >= 0) {
+        buildingDucats[buildingId] = Number((prevDucats + resultDucats).toFixed(3));
+      } else {
+        const loss = Math.abs(resultDucats);
+        const coveredByBuilding = Math.min(prevDucats, loss);
+        const nextBuildingDucats = Math.max(0, prevDucats - coveredByBuilding);
+        buildingDucats[buildingId] = Number(nextBuildingDucats.toFixed(3));
+      }
     }
 
     const provinceWages = totalEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;

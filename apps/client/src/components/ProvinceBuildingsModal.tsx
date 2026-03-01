@@ -760,8 +760,6 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     }
   };
 
-  const border = (c: Card) => (c.kind === "construction" ? "border-amber-400/50" : c.isActive ? "border-white/10" : "border-red-400/60");
-
   const demolishBuiltCard = async (target: {
     key: string;
     provinceId: string;
@@ -920,7 +918,22 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
           <div className="arc-scrollbar grid min-h-0 grid-cols-1 gap-3 overflow-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
             {filteredCards.map((c) => (
-              <article key={c.key} className={`rounded-2xl border bg-gradient-to-br from-white/5 to-transparent p-4 flex flex-col gap-4 shadow-lg shadow-black/30 ${border(c)}`}>
+              (() => {
+                const econ = c.kind === "built" ? getCardEconomy(c) : null;
+                const displayInactiveReasons = [...c.inactiveReasons];
+                if (c.kind === "built" && econ && econ.netPerTurn < 0 && econ.storageAmount <= 0) {
+                  displayInactiveReasons.push("Недостаточно дукатов: убыток не покрывается кассой здания");
+                }
+                const displayIsActive = displayInactiveReasons.length === 0;
+                const econData = c.kind === "built" ? (econ ?? getCardEconomy(c)) : null;
+                const cardBorder =
+                  c.kind === "construction"
+                    ? "border-amber-400/50"
+                    : displayIsActive
+                      ? "border-white/10"
+                      : "border-red-400/60";
+                return (
+              <article key={c.key} className={`rounded-2xl border bg-gradient-to-br from-white/5 to-transparent p-4 flex flex-col gap-4 shadow-lg shadow-black/30 ${cardBorder}`}>
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
                       <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">{c.iconUrl ? <img src={c.iconUrl} alt="" className="h-full w-full object-cover" /> : <Factory size={16} />}</div>
@@ -934,8 +947,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                         )}
                       </div>
                       <div className="text-[11px] text-white/45">Стоимость: {fmt(c.costConstruction)}</div>
-                      {!c.isActive && (
-                        <Tooltip content={c.inactiveReasons.join(", ")} placement="top">
+                      {!displayIsActive && (
+                        <Tooltip content={displayInactiveReasons.join(", ")} placement="top">
                           <span className="mt-1 inline-flex rounded-full border border-red-400/40 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200">Неактивное</span>
                         </Tooltip>
                       )}
@@ -1010,9 +1023,6 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 </div>
                 {c.kind === "built" && (
                   <div className="rounded-xl border border-white/10 bg-black/30">
-                    {(() => {
-                      const econ = getCardEconomy(c);
-                      return (
                     <button
                       type="button"
                       onClick={() =>
@@ -1025,13 +1035,13 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     >
                       <span>Экономика</span>
                       <div className="flex items-center gap-2">
-                        <Tooltip content={`Производительность: ${econ.productivity}%. Показывает, какую долю от максимальной мощности здание отрабатывает за ход.`}>
+                        <Tooltip content={`Производительность: ${econData?.productivity ?? 0}%. Показывает, какую долю от максимальной мощности здание отрабатывает за ход.`}>
                           <span className="inline-flex min-h-[22px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-black/40 px-2 py-1">
-                            <span className="text-[10px] font-semibold text-white/75">Производительность: {econ.productivity}%</span>
+                            <span className="text-[10px] font-semibold text-white/75">Производительность: {econData?.productivity ?? 0}%</span>
                             <span className="h-1.5 w-14 overflow-hidden rounded-full border border-white/15 bg-black/60">
                               <span
                                 className="block h-full bg-emerald-400/75"
-                                style={{ width: `${Math.max(0, Math.min(100, econ.productivity))}%` }}
+                                style={{ width: `${Math.max(0, Math.min(100, econData?.productivity ?? 0))}%` }}
                               />
                             </span>
                           </span>
@@ -1043,13 +1053,13 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                             ) : (
                               <Coins size={11} />
                             )}
-                            {formatCompact(econ.storageAmount)}
+                            {formatCompact(econData?.storageAmount ?? 0)}
                           </span>
                         </Tooltip>
                         <Tooltip content="Финансовый результат здания за ход (прибыль или убыток)">
                           <span
                             className={`inline-flex min-h-[22px] items-center justify-center rounded-md border px-2 py-1 text-[11px] font-bold leading-none ${
-                              econ.netPerTurn >= 0
+                              (econData?.netPerTurn ?? 0) >= 0
                                 ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-300"
                                 : "border-red-400/40 bg-red-500/15 text-red-300"
                             }`}
@@ -1061,8 +1071,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                 <Coins size={11} />
                               )}
                               <span>
-                                {econ.netPerTurn >= 0 ? "+" : ""}
-                                {formatCompact(econ.netPerTurn)}
+                                {(econData?.netPerTurn ?? 0) >= 0 ? "+" : ""}
+                                {formatCompact(econData?.netPerTurn ?? 0)}
                               </span>
                             </span>
                           </span>
@@ -1070,12 +1080,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                         {openEconomyByCardKey[c.key] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                       </div>
                     </button>
-                      );
-                    })()}
                     <AnimatePresence initial={false}>
-                      {openEconomyByCardKey[c.key] && (() => {
-                        const econ = getCardEconomy(c);
-                        return (
+                      {openEconomyByCardKey[c.key] && econData && (
                           <motion.div
                             key={`${c.key}-economy`}
                             initial={{ height: 0, opacity: 0 }}
@@ -1090,11 +1096,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               <Package size={12} className="shrink-0" />
                               <span>Склад</span>
                             </div>
-                            {econ.stockRows.length === 0 ? (
+                            {econData.stockRows.length === 0 ? (
                               <div className="text-white/50">пусто</div>
                             ) : (
                               <div className="space-y-1">
-                                {econ.stockRows.map((row, idx) => (
+                                {econData.stockRows.map((row, idx) => (
                                   <div key={`${c.key}-stock-${idx}`} className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
                                     <div className="flex items-center justify-between gap-2">
                                       <div className="inline-flex items-center gap-1.5 text-white/75">
@@ -1130,8 +1136,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               <ArrowUpRight size={12} className="shrink-0" />
                               <span>Торговля за ход</span>
                             </div>
-                            {econ.trade.length === 0 && <div className="text-white/50">пусто</div>}
-                            {econ.trade.map((item, idx) => {
+                            {econData.trade.length === 0 && <div className="text-white/50">пусто</div>}
+                            {econData.trade.map((item, idx) => {
                               const isBuy = item.kind === "buy";
                               const rowClass = isBuy
                                 ? "rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-white/70"
@@ -1176,8 +1182,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               <Factory size={12} className="shrink-0" />
                               <span>Производство</span>
                             </div>
-                            {econ.outputs.length === 0 && <div className="text-white/50">нет выходных товаров</div>}
-                            {econ.outputs.map((output, idx) => (
+                            {econData.outputs.length === 0 && <div className="text-white/50">нет выходных товаров</div>}
+                            {econData.outputs.map((output, idx) => (
                               <div
                                 key={`${c.key}-output-${idx}`}
                                 className="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-white/70"
@@ -1219,8 +1225,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               <ArrowDownLeft size={12} className="shrink-0" />
                               <span>Потребление</span>
                             </div>
-                            {econ.inputs.length === 0 && <div className="text-white/50">нет входных товаров</div>}
-                            {econ.inputs.map((input, idx) => (
+                            {econData.inputs.length === 0 && <div className="text-white/50">нет входных товаров</div>}
+                            {econData.inputs.map((input, idx) => (
                               <div
                                 key={`${c.key}-input-${idx}`}
                                 className="rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-white/70"
@@ -1259,12 +1265,13 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                           </div>
                           </div>
                           </motion.div>
-                        );
-                      })()}
+                      )}
                     </AnimatePresence>
                   </div>
                 )}
               </article>
+                );
+              })()
             ))}
             {filteredCards.length === 0 && (
               <div className="col-span-full rounded-lg border border-dashed border-white/15 bg-black/20 p-4 text-sm text-white/50">
