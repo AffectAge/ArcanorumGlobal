@@ -1,10 +1,11 @@
 import { Dialog } from "@headlessui/react";
 import type { WorldBase } from "@arcanorum/shared";
 import { motion } from "framer-motion";
-import { Building2, Factory, Hammer, MapPin, Trash2, Users, X } from "lucide-react";
+import { Building2, Factory, Hammer, MapPin, Plus, Trash2, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { fetchContentEntries, fetchCountries, type ContentEntry } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
+import { Tooltip } from "./Tooltip";
 
 type Props = {
   open: boolean;
@@ -34,6 +35,11 @@ type Card = {
   costConstruction: number;
   workersEmployed: number;
   workersDemand: number;
+};
+
+type BuildAvailability = {
+  available: boolean;
+  reasons: string[];
 };
 
 const fmt = (v: number) => new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.floor(v)));
@@ -76,6 +82,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   }, [open]);
 
   const buildingById = useMemo(() => new Map(buildings.map((x) => [x.id, x] as const)), [buildings]);
+  const sortedBuildings = useMemo(() => [...buildings].sort((a, b) => a.name.localeCompare(b.name, "ru")), [buildings]);
   const industryById = useMemo(() => new Map(industries.map((x) => [x.id, x] as const)), [industries]);
   const companyById = useMemo(() => new Map(companies.map((x) => [x.id, x] as const)), [companies]);
   const countryById = useMemo(() => new Map(countries.map((x) => [x.id, x] as const)), [countries]);
@@ -231,13 +238,67 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
   const availableConstruction = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.construction ?? 0)));
   const availableDucats = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.ducats ?? 0)));
-  const selectedBuilding = buildingById.get(buildingId) ?? null;
+  const constructionCardClass =
+    "h-[124px] rounded-lg border border-amber-400/55 bg-[#14100a] p-2 shadow-[0_0_0_1px_rgba(245,158,11,0.08)]";
+  const selectedProvinceBuildings = worldBase?.provinceBuildingsByProvince?.[provinceId] ?? {};
 
-  const submitBuild = () => {
-    if (!provinceId || !buildingId) return;
+  const getBuildingAvailability = (building: ContentEntry): BuildAvailability => {
+    const reasons: string[] = [];
+    if (!provinceId) {
+      reasons.push("Не выбрана провинция");
+    }
+    if (ownerType === "company" && !ownerCompanyId) {
+      reasons.push("Не выбрана компания-владелец");
+    }
+
+    const raw = building as unknown as Record<string, unknown>;
+    const allowedCountries = Array.isArray(raw.allowedCountries)
+      ? raw.allowedCountries.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : [];
+    if (allowedCountries.length > 0 && !allowedCountries.includes(countryId)) {
+      reasons.push("Страна не может строить это здание");
+    }
+
+    const dependencySource = Array.isArray(raw.requiredProvinceBuildingIds)
+      ? raw.requiredProvinceBuildingIds
+      : Array.isArray(raw.requiredBuildings)
+        ? raw.requiredBuildings
+        : Array.isArray(raw.dependencies)
+          ? raw.dependencies
+          : [];
+    const dependencies = dependencySource.filter(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    );
+    for (const depId of dependencies) {
+      if ((selectedProvinceBuildings[depId] ?? 0) <= 0) {
+        reasons.push(`Нужно здание в провинции: ${buildingById.get(depId)?.name ?? depId}`);
+      }
+    }
+
+    return { available: reasons.length === 0, reasons };
+  };
+
+  const buildableBuildingCards = useMemo(
+    () =>
+      sortedBuildings
+        .map((building) => ({
+          building,
+          availability: getBuildingAvailability(building),
+        }))
+        .sort(
+          (a, b) =>
+            Number(b.availability.available) - Number(a.availability.available) ||
+            a.building.name.localeCompare(b.building.name, "ru"),
+        ),
+    [sortedBuildings, provinceId, ownerType, ownerCompanyId, countryId, selectedProvinceBuildings, buildingById],
+  );
+
+  const submitBuild = (targetBuildingId: string) => {
+    if (!provinceId || !targetBuildingId) return;
+    if (ownerType === "company" && !ownerCompanyId) return;
     const owner = ownerType === "company" ? { type: "company", companyId: ownerCompanyId } : { type: "state", countryId: ownerCountryId || countryId };
-    onQueueBuildOrder(provinceId, { buildingId, owner });
-    setConstructionOpen(false);
+    onQueueBuildOrder(provinceId, { buildingId: targetBuildingId, owner });
+    setBuildingId(targetBuildingId);
   };
 
   const border = (c: Card) => (c.kind === "construction" ? "border-amber-400/50" : c.isActive ? "border-white/10" : "border-red-400/60");
@@ -264,10 +325,14 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     <div>
                       <div className="text-white/80 text-sm font-semibold">{c.buildingName || c.buildingId}</div>
                       <div className="text-[11px] text-white/45">Стоимость: {fmt(c.costConstruction)}</div>
-                      {!c.isActive && <span className="mt-1 inline-flex rounded-full border border-red-400/40 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200" title={c.inactiveReasons.join(", ")}>Неактивное</span>}
+                      {!c.isActive && (
+                        <Tooltip content={c.inactiveReasons.join(", ")} placement="top">
+                          <span className="mt-1 inline-flex rounded-full border border-red-400/40 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200">Неактивное</span>
+                        </Tooltip>
+                      )}
                     </div>
                   </div>
-                  <button type="button" disabled className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/35" title={c.kind === "construction" ? "Отмена строительства позже" : "Снос позже"}>{c.kind === "construction" ? <X size={14} /> : <Trash2 size={14} />}</button>
+                  <button type="button" disabled className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/35">{c.kind === "construction" ? <X size={14} /> : <Trash2 size={14} />}</button>
                 </div>
                 {c.kind === "construction" && (
                   <div>
@@ -309,23 +374,31 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
             </div>
 
             <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-              <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
-                Доступно строительства: <span className="text-emerald-300">{fmt(availableConstruction)}</span>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
-                Дукаты страны: <span className="text-amber-300">{fmt(availableDucats)}</span>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
-                Проектов в очереди: <span className="text-white">{fmt(constructionQueue.length)}</span>
-              </div>
+              <Tooltip content="Очки строительства, которые будут распределены между всеми проектами при резолве хода.">
+                <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
+                  Доступно строительства: <span className="text-emerald-300">{fmt(availableConstruction)}</span>
+                </div>
+              </Tooltip>
+              <Tooltip content="Текущий запас дукатов страны. Используется для оплаты строительных проектов и других механик.">
+                <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
+                  Дукаты страны: <span className="text-amber-300">{fmt(availableDucats)}</span>
+                </div>
+              </Tooltip>
+              <Tooltip content="Сколько проектов сейчас находится в очереди строительства с учетом pending-приказов хода.">
+                <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70">
+                  Проектов в очереди: <span className="text-white">{fmt(constructionQueue.length)}</span>
+                </div>
+              </Tooltip>
             </div>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4">
+            <div className="min-h-0 flex flex-1 flex-col gap-4">
               <section className="rounded-xl border border-white/10 bg-black/25 p-3">
-                <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Добавить проект</div>
-                <div className="grid grid-cols-1 gap-3">
+                <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Общие параметры строительства</div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   <label className="flex flex-col gap-1 text-xs text-white/65">
-                    Провинция
+                    <Tooltip content="Выбранная провинция применяется ко всем добавляемым проектам из списка ниже.">
+                      <span>Провинция</span>
+                    </Tooltip>
                     <select value={provinceId} onChange={(e) => setProvinceId(e.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
                       {myProvinces.map((p) => (
                         <option key={p.id} value={p.id}>
@@ -335,17 +408,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </select>
                   </label>
                   <label className="flex flex-col gap-1 text-xs text-white/65">
-                    Здание
-                    <select value={buildingId} onChange={(e) => setBuildingId(e.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
-                      {buildings.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs text-white/65">
-                    Владелец
+                    <Tooltip content="Кому будет принадлежать каждое добавленное здание: государству или компании.">
+                      <span>Владелец</span>
+                    </Tooltip>
                     <select value={ownerType} onChange={(e) => setOwnerType(e.target.value as "state" | "company")} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
                       <option value="state">Государство</option>
                       <option value="company">Компания</option>
@@ -353,7 +418,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                   </label>
                   {ownerType === "state" ? (
                     <label className="flex flex-col gap-1 text-xs text-white/65">
-                      Страна
+                      <Tooltip content="Страна, которая станет владельцем проекта при выбранном типе «Государство».">
+                        <span>Страна владельца</span>
+                      </Tooltip>
                       <select value={ownerCountryId} onChange={(e) => setOwnerCountryId(e.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
                         {Object.keys(worldBase?.resourcesByCountry ?? {}).map((id) => (
                           <option key={id} value={id}>
@@ -364,7 +431,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </label>
                   ) : (
                     <label className="flex flex-col gap-1 text-xs text-white/65">
-                      Компания
+                      <Tooltip content="Компания, которая станет владельцем проекта при выбранном типе «Компания».">
+                        <span>Компания владельца</span>
+                      </Tooltip>
                       <select value={ownerCompanyId} onChange={(e) => setOwnerCompanyId(e.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
                         {companies.map((c) => (
                           <option key={c.id} value={c.id}>
@@ -375,76 +444,120 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </label>
                   )}
                 </div>
-
-                <div className="mt-3 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/65">
-                  Стоимость проекта:{" "}
-                  <span className="text-white">
-                    {fmt(Math.max(1, Math.floor(Number(selectedBuilding?.costConstruction ?? 100))))}
-                  </span>
-                </div>
-
-                <div className="mt-4 flex items-center justify-end gap-2">
-                  <button type="button" onClick={() => setConstructionOpen(false)} className="inline-flex h-10 items-center justify-center rounded-lg border border-white/10 bg-black/35 px-4 text-sm text-white/70">
-                    Отмена
-                  </button>
-                  <button
-                    type="button"
-                    onClick={submitBuild}
-                    disabled={!provinceId || !buildingId || (ownerType === "company" && !ownerCompanyId)}
-                    className="inline-flex h-10 items-center justify-center rounded-lg border border-emerald-400/35 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-200 disabled:opacity-50"
-                  >
-                    Добавить в очередь
-                  </button>
-                </div>
               </section>
 
-              <section className="min-h-0 rounded-xl border border-white/10 bg-black/25 p-3 flex flex-col">
-                <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Очередь строительства</div>
-                {constructionQueue.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-white/15 bg-black/20 p-3 text-xs text-white/45">
-                    Очередь пуста
-                  </div>
-                )}
-                {constructionQueue.length > 0 && (
+              <div className="min-h-0 flex-1 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <section className="min-h-0 rounded-xl border border-white/10 bg-black/25 p-3 flex flex-col">
+                  <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Доступные здания</div>
                   <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1">
-                    {constructionQueue.map((card) => (
-                      <div key={card.key} className="rounded-lg border border-amber-400/55 bg-[#14100a] p-2 shadow-[0_0_0_1px_rgba(245,158,11,0.08)]">
-                        <div className="overflow-hidden rounded-md flex items-stretch">
-                          <div className="flex w-[84px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-amber-400/40 bg-black">
-                            {card.iconUrl ? (
-                              <img src={card.iconUrl} alt="" className="h-full w-full object-cover" />
-                            ) : (
-                              <Factory size={16} className="text-white/60" />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1 p-3">
-                            <div className="flex items-start justify-between gap-2">
+                    {buildableBuildingCards.map(({ building, availability }) => {
+                      const costConstruction = Math.max(1, Math.floor(Number(building.costConstruction ?? 100)));
+                      const costDucats = Math.max(0, Math.floor(Number(building.costDucats ?? 0)));
+                      const canAdd = availability.available;
+                      const cardClass = canAdd
+                        ? "h-[124px] rounded-lg border border-emerald-400/55 bg-[#0f1a13] p-2 shadow-[0_0_0_1px_rgba(16,185,129,0.1)]"
+                        : "h-[124px] rounded-lg border border-red-400/55 bg-[#1a1010] p-2 shadow-[0_0_0_1px_rgba(248,113,113,0.08)]";
+                      return (
+                        <div key={building.id} className={cardClass}>
+                          <div className="h-full overflow-hidden rounded-md flex items-stretch">
+                            <div className={`flex w-[84px] shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black ${canAdd ? "border border-emerald-400/40" : "border border-red-400/40"}`}>
+                              {building.logoUrl ? (
+                                <img src={building.logoUrl} alt="" className="h-10 w-10 object-contain" />
+                              ) : (
+                                <Factory size={16} className="text-white/60" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1 p-3">
+                            <div className="flex h-full items-center justify-between gap-2">
                               <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold text-white/90">{card.buildingName}</div>
-                                <div className="text-[11px] text-white/55">{card.provinceName}</div>
+                                <div className="truncate text-sm font-semibold text-white/90">{building.name}</div>
+                                <div className="text-[11px] text-white/55">
+                                  Строительство: <span className="text-amber-300/90">{fmt(costConstruction)}</span>
+                                  {" · "}
+                                  Дукаты: <span className="text-amber-300/90">{fmt(costDucats)}</span>
+                                </div>
+                                <div className={`mt-1 text-[11px] ${canAdd ? "text-emerald-300/90" : "text-red-300/90"}`}>
+                                  {canAdd ? "Доступно" : "Недоступно"}
+                                </div>
                               </div>
-                              <div className="text-[11px] text-amber-300/90">{card.progressPercent}%</div>
-                            </div>
-                            <div className="mt-2 h-1.5 overflow-hidden rounded-full border border-amber-400/30 bg-black/50">
-                              <div
-                                className="h-full"
-                                style={{
-                                  width: `${card.progressPercent}%`,
-                                  backgroundImage:
-                                    "repeating-linear-gradient(-45deg, rgba(245,158,11,0.95) 0 8px, rgba(15,23,42,0.95) 8px 16px)",
-                                }}
-                              />
-                            </div>
-                            <div className="mt-2 text-[11px] text-white/55">
-                              Владелец: <span className="text-white/80">{card.ownerLabel}</span>
+                                <Tooltip
+                                  content={
+                                    canAdd
+                                      ? `Добавить «${building.name}» в очередь строительства`
+                                      : availability.reasons.join(", ")
+                                  }
+                                  placement="left"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => submitBuild(building.id)}
+                                    disabled={!canAdd}
+                                    className={`inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full disabled:opacity-40 ${
+                                      canAdd
+                                        ? "border border-emerald-400/55 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+                                        : "border border-red-400/55 bg-red-500/20 text-red-200"
+                                    }`}
+                                  >
+                                    <Plus size={20} />
+                                  </button>
+                                </Tooltip>
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                )}
-              </section>
+                </section>
+
+                <section className="min-h-0 rounded-xl border border-white/10 bg-black/25 p-3 flex flex-col">
+                  <div className="mb-2 text-xs uppercase tracking-wide text-white/45">Очередь строительства</div>
+                  {constructionQueue.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-white/15 bg-black/20 p-3 text-xs text-white/45">
+                      Очередь пуста
+                    </div>
+                  )}
+                  {constructionQueue.length > 0 && (
+                    <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+                      {constructionQueue.map((card) => (
+                        <div key={card.key} className={constructionCardClass}>
+                          <div className="h-full overflow-hidden rounded-md flex items-stretch">
+                            <div className="flex w-[84px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-amber-400/40 bg-black">
+                              {card.iconUrl ? (
+                                <img src={card.iconUrl} alt="" className="h-10 w-10 object-contain" />
+                              ) : (
+                                <Factory size={16} className="text-white/60" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1 p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold text-white/90">{card.buildingName}</div>
+                                  <div className="text-[11px] text-white/55">{card.provinceName}</div>
+                                </div>
+                                <div className="text-[11px] text-amber-300/90">{card.progressPercent}%</div>
+                              </div>
+                              <div className="mt-2 h-1.5 overflow-hidden rounded-full border border-amber-400/30 bg-black/50">
+                                <div
+                                  className="h-full"
+                                  style={{
+                                    width: `${card.progressPercent}%`,
+                                    backgroundImage:
+                                      "repeating-linear-gradient(-45deg, rgba(245,158,11,0.95) 0 8px, rgba(15,23,42,0.95) 8px 16px)",
+                                  }}
+                                />
+                              </div>
+                              <div className="mt-2 text-[11px] text-white/55">
+                                Владелец: <span className="text-white/80">{card.ownerLabel}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </div>
             </div>
           </Dialog.Panel>
         </div>
