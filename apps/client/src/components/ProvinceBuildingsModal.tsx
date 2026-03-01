@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Building2, Coins, Factory, Hammer, Lock, MapPin, Plus, Trash2, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { cancelCountryBuild, fetchContentEntries, fetchCountries, fetchPublicGameUiSettings, type ContentEntry, type ResourceIconsMap } from "../lib/api";
+import { cancelCountryBuild, demolishCountryBuild, fetchContentEntries, fetchCountries, fetchPublicGameUiSettings, type ContentEntry, type ResourceIconsMap } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 import { CustomSelect } from "./CustomSelect";
 import { Tooltip } from "./Tooltip";
@@ -21,6 +21,8 @@ type Props = {
 type Card = {
   key: string;
   kind: "built" | "construction";
+  instanceId?: string;
+  queueId?: string;
   provinceId: string;
   provinceName: string;
   provinceOwnerCountryId: string;
@@ -84,6 +86,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     gold: null,
   });
   const [constructionOpen, setConstructionOpen] = useState(false);
+  const [demolitionCostConstructionPercent, setDemolitionCostConstructionPercent] = useState(20);
   const [buildCountryId, setBuildCountryId] = useState("");
   const [provinceId, setProvinceId] = useState("");
   const [buildingId, setBuildingId] = useState("");
@@ -91,6 +94,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [ownerCountryId, setOwnerCountryId] = useState("");
   const [ownerCompanyId, setOwnerCompanyId] = useState("");
   const [cancelingQueueKey, setCancelingQueueKey] = useState<string | null>(null);
+  const [demolishingCardKey, setDemolishingCardKey] = useState<string | null>(null);
   const [cancelConfirmTarget, setCancelConfirmTarget] = useState<
     | null
     | {
@@ -101,6 +105,18 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         orderId?: string;
         provinceId?: string;
         queueId?: string;
+      }
+  >(null);
+  const [demolishConfirmTarget, setDemolishConfirmTarget] = useState<
+    | null
+    | {
+        key: string;
+        provinceId: string;
+        buildingId: string;
+        instanceId?: string;
+        buildingName: string;
+        provinceName: string;
+        demolitionCostConstruction: number;
       }
   >(null);
   const auth = useGameStore((s) => s.auth);
@@ -125,6 +141,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         setCompanies(c);
         setCountries(ctr);
         setResourceIcons(ui.resourceIcons);
+        setDemolitionCostConstructionPercent(ui.economy?.demolitionCostConstructionPercent ?? 20);
       })
       .catch(() => {
         if (cancelled) return;
@@ -141,6 +158,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           ducats: null,
           gold: null,
         });
+        setDemolitionCostConstructionPercent(20);
       });
     return () => {
       cancelled = true;
@@ -208,20 +226,51 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     for (const prov of myProvinces) {
       const pid = prov.id;
       const pop = Math.max(0, worldBase.provincePopulationByProvince[pid]?.populationTotal ?? 0);
-      const levels = worldBase.provinceBuildingsByProvince[pid] ?? {};
-      for (const [bid, levelRaw] of Object.entries(levels)) {
+      const instances = worldBase.provinceBuildingsByProvince[pid] ?? [];
+      const countsByBuildingId = instances.reduce<Record<string, number>>((acc, instance) => {
+        acc[instance.buildingId] = (acc[instance.buildingId] ?? 0) + 1;
+        return acc;
+      }, {});
+      const workersDemandByBuildingId = Object.entries(countsByBuildingId).reduce<Record<string, number>>(
+        (acc, [buildingId, count]) => {
+          const b = buildingById.get(buildingId);
+          if (!b) return acc;
+          const perLevel = (b.workforceRequirements ?? []).reduce((s, r) => s + Math.max(0, r.workers), 0);
+          acc[buildingId] = Math.max(0, perLevel * count);
+          return acc;
+        },
+        {},
+      );
+      const totalWorkersDemand = Object.values(workersDemandByBuildingId).reduce((sum, value) => sum + value, 0);
+      const employmentRatio = totalWorkersDemand > 0 ? Math.max(0, Math.min(1, pop / totalWorkersDemand)) : 0;
+
+      const builtByBuildingId = new Map<string, number>();
+      for (const instance of instances) {
+        const bid = instance.buildingId;
         const b = buildingById.get(bid);
         if (!b) continue;
-        const level = Math.max(0, Math.floor(Number(levelRaw) || 0));
-        if (level <= 0) continue;
-        const workersDemand = (b.workforceRequirements ?? []).reduce((s, r) => s + Math.max(0, r.workers) * level, 0);
-        const workersEmployed = Math.min(workersDemand, pop);
-        const inactiveReasons = workersDemand > 0 && workersEmployed <= 0 ? ["Нет доступной рабочей силы"] : [];
+        const workersDemandPerLevel = (b.workforceRequirements ?? []).reduce(
+          (s, r) => s + Math.max(0, r.workers),
+          0,
+        );
+        const workersEmployed = Math.round(workersDemandPerLevel * employmentRatio);
+        const inactiveReasons = workersDemandPerLevel > 0 && workersEmployed <= 0 ? ["Нет доступной рабочей силы"] : [];
         const ind = industryById.get(((b as { industryId?: string }).industryId ?? "").trim());
-        const ownerCountry = countryById.get(worldBase.provinceOwner[pid] ?? "");
+        const ownerLabel =
+          instance.owner.type === "company"
+            ? companyById.get(instance.owner.companyId)?.name ?? instance.owner.companyId
+            : countryById.get(instance.owner.countryId)?.name ?? instance.owner.countryId;
+        const ownerLogo =
+          instance.owner.type === "company"
+            ? companyById.get(instance.owner.companyId)?.logoUrl ?? null
+            : countryById.get(instance.owner.countryId)?.flagUrl ?? null;
+        const level = (builtByBuildingId.get(bid) ?? 0) + 1;
+        builtByBuildingId.set(bid, level);
         res.push({
-          key: `${pid}-${bid}-built`,
+          key: `${pid}-${instance.instanceId}-built`,
           kind: "built",
+          instanceId: instance.instanceId,
+          queueId: undefined,
           provinceId: pid,
           provinceName: prov.name,
           provinceOwnerCountryId: worldBase.provinceOwner[pid] ?? "",
@@ -229,15 +278,15 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           buildingName: b.name,
           iconUrl: b.logoUrl ?? null,
           industryName: ind?.name ?? null,
-          ownerLabel: ownerCountry?.name ?? worldBase.provinceOwner[pid] ?? "—",
-          ownerLogo: ownerCountry?.flagUrl ?? null,
+          ownerLabel,
+          ownerLogo,
           isActive: inactiveReasons.length === 0,
           inactiveReasons,
           level,
           progressPercent: 100,
           costConstruction: Math.max(1, Math.floor(Number(b.costConstruction ?? 100))),
           workersEmployed,
-          workersDemand,
+          workersDemand: workersDemandPerLevel,
         });
       }
       for (const q of worldBase.provinceConstructionQueueByProvince[pid] ?? []) {
@@ -249,6 +298,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         res.push({
           key: `${pid}-${q.queueId}-construction`,
           kind: "construction",
+          queueId: q.queueId,
           provinceId: pid,
           provinceName: prov.name,
           provinceOwnerCountryId: worldBase.provinceOwner[pid] ?? "",
@@ -369,7 +419,13 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const availableDucats = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.ducats ?? 0)));
   const constructionCardClass =
     "relative z-0 h-[124px] rounded-lg border border-amber-400/55 bg-[#14100a] p-2 shadow-[0_0_0_1px_rgba(245,158,11,0.08)] transition-all duration-150 hover:z-10 hover:-translate-y-0.5 hover:border-amber-300/80 hover:shadow-[0_8px_24px_rgba(245,158,11,0.16)]";
-  const selectedProvinceBuildings = worldBase?.provinceBuildingsByProvince?.[provinceId] ?? {};
+  const selectedProvinceBuildings = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const instance of worldBase?.provinceBuildingsByProvince?.[provinceId] ?? []) {
+      counts[instance.buildingId] = (counts[instance.buildingId] ?? 0) + 1;
+    }
+    return counts;
+  }, [provinceId, worldBase?.provinceBuildingsByProvince]);
 
   const getBuildingAvailability = (building: ContentEntry): BuildAvailability => {
     const reasons: string[] = [];
@@ -396,7 +452,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     }
 
     const countBuiltAndQueued = Object.entries(worldBase?.provinceBuildingsByProvince ?? {}).reduce(
-      (sum, [, levels]) => sum + Math.max(0, Math.floor(Number(levels?.[building.id] ?? 0))),
+      (sum, [, instances]) =>
+        sum + (instances ?? []).filter((instance) => instance.buildingId === building.id).length,
       0,
     ) +
       Object.values(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce(
@@ -404,9 +461,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         0,
       );
     const countBuiltAndQueuedByCountry =
-      Object.entries(worldBase?.provinceBuildingsByProvince ?? {}).reduce((sum, [pid, levels]) => {
+      Object.entries(worldBase?.provinceBuildingsByProvince ?? {}).reduce((sum, [pid, instances]) => {
         if ((worldBase?.provinceOwner?.[pid] ?? "") !== countryId) return sum;
-        return sum + Math.max(0, Math.floor(Number(levels?.[building.id] ?? 0)));
+        return sum + (instances ?? []).filter((instance) => instance.buildingId === building.id).length;
       }, 0) +
       Object.entries(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce((sum, [pid, queue]) => {
         if ((worldBase?.provinceOwner?.[pid] ?? "") !== countryId) return sum;
@@ -523,6 +580,39 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
   const border = (c: Card) => (c.kind === "construction" ? "border-amber-400/50" : c.isActive ? "border-white/10" : "border-red-400/60");
 
+  const demolishBuiltCard = async (target: {
+    key: string;
+    provinceId: string;
+    buildingId: string;
+    instanceId?: string;
+  }) => {
+    if (!auth?.token) return;
+    setDemolishingCardKey(target.key);
+    try {
+      const result = await demolishCountryBuild(auth.token, {
+        provinceId: target.provinceId,
+        buildingId: target.buildingId,
+        instanceId: target.instanceId,
+      });
+      toast.success(
+        `Постройка снесена: -1 уровень (${formatCompact(result.demolitionCostConstruction)} очков строительства)`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "BUILD_DEMOLISH_FAILED";
+      if (message === "INSUFFICIENT_CONSTRUCTION_POINTS") {
+        toast.error("Недостаточно очков строительства для сноса");
+      } else if (message === "BUILDING_NOT_FOUND") {
+        toast.error("Постройка уже отсутствует");
+      } else if (message === "NOT_PROVINCE_OWNER") {
+        toast.error("Снос доступен только в ваших провинциях");
+      } else {
+        toast.error("Не удалось снести постройку");
+      }
+    } finally {
+      setDemolishingCardKey(null);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[206]">
       <motion.div aria-hidden="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
@@ -540,10 +630,17 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
             {cards.map((c) => (
               <article key={c.key} className={`rounded-2xl border bg-gradient-to-br from-white/5 to-transparent p-4 flex flex-col gap-4 shadow-lg shadow-black/30 ${border(c)}`}>
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">{c.iconUrl ? <img src={c.iconUrl} alt="" className="h-full w-full object-cover" /> : <Factory size={16} />}</div>
-                    <div>
-                      <div className="text-white/80 text-sm font-semibold">{c.buildingName || c.buildingId}</div>
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">{c.iconUrl ? <img src={c.iconUrl} alt="" className="h-full w-full object-cover" /> : <Factory size={16} />}</div>
+                      <div>
+                      <div className="flex items-center gap-2 text-white/80 text-sm font-semibold">
+                        <span>{c.buildingName || c.buildingId}</span>
+                        {c.kind === "built" && (
+                          <span className="inline-flex items-center rounded-full border border-white/15 bg-black/40 px-2 py-0.5 text-[10px] font-semibold text-white/70">
+                            Ур. {c.level}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[11px] text-white/45">Стоимость: {fmt(c.costConstruction)}</div>
                       {!c.isActive && (
                         <Tooltip content={c.inactiveReasons.join(", ")} placement="top">
@@ -552,7 +649,49 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                       )}
                     </div>
                   </div>
-                  <button type="button" disabled className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/35">{c.kind === "construction" ? <X size={14} /> : <Trash2 size={14} />}</button>
+                  {c.kind === "construction" ? (
+                    <Tooltip content="Отменить строительство">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCancelConfirmTarget({
+                            key: c.key,
+                            source: "queued",
+                            buildingName: c.buildingName,
+                            provinceName: c.provinceName,
+                            provinceId: c.provinceId,
+                            queueId: c.queueId,
+                          })
+                        }
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/60 transition hover:border-red-400/40 hover:text-red-300"
+                      >
+                        <X size={14} />
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip content="Снести один уровень постройки (стоимость в очках строительства)">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDemolishConfirmTarget({
+                            key: c.key,
+                            provinceId: c.provinceId,
+                            buildingId: c.buildingId,
+                            instanceId: c.instanceId,
+                            buildingName: c.buildingName,
+                            provinceName: c.provinceName,
+                            demolitionCostConstruction: Math.ceil(
+                              (Math.max(1, Math.floor(c.costConstruction)) * demolitionCostConstructionPercent) / 100,
+                            ),
+                          })
+                        }
+                        disabled={demolishingCardKey === c.key}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/60 transition hover:border-red-400/40 hover:text-red-300 disabled:opacity-40"
+                      >
+                        {demolishingCardKey === c.key ? "..." : <Trash2 size={14} />}
+                      </button>
+                    </Tooltip>
+                  )}
                 </div>
                 {c.kind === "construction" && (
                   <div>
@@ -571,6 +710,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 )}
                 <div className="flex flex-col gap-1.5 text-xs text-white/65">
                   <div className="flex items-center gap-2"><Factory size={13} /><span className="text-white/40">Отрасль:</span><span>{c.industryName ?? "—"}</span></div>
+                  {c.kind === "built" && <div className="flex items-center gap-2"><Hammer size={13} /><span className="text-white/40">Уровень:</span><span>{c.level}</span></div>}
                   <div className="flex items-center gap-2"><MapPin size={13} /><span className="text-white/40">Провинция:</span><span>{c.provinceName}</span></div>
                   <div className="flex items-center gap-2"><Building2 size={13} /><span className="text-white/40">Страна:</span><span>{countryById.get(c.provinceOwnerCountryId)?.name ?? (c.provinceOwnerCountryId || "—")}</span></div>
                   <div className="flex items-center gap-2"><Factory size={13} /><span className="text-white/40">Владелец:</span><span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-2 py-0.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}{c.ownerLabel}</span></div>
@@ -916,6 +1056,60 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     setCancelConfirmTarget(null);
                   }}
                   className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-400/55 bg-amber-500/20 px-3 text-xs font-semibold text-amber-200 hover:bg-amber-500/30"
+                >
+                  Да
+                </button>
+              </div>
+            </div>
+          </Dialog.Panel>
+        </div>
+      </Dialog>
+
+      <Dialog open={Boolean(demolishConfirmTarget)} onClose={() => setDemolishConfirmTarget(null)} className="relative z-[208]">
+        <motion.div aria-hidden="true" className="fixed inset-0 bg-black/65 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Panel className="glass panel-border w-full max-w-md rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
+            <div className="rounded-lg border border-red-400/55 bg-[#160d0d] p-3 shadow-[0_0_0_1px_rgba(248,113,113,0.08)]">
+              <Dialog.Title className="text-sm font-semibold text-white">Снести постройку?</Dialog.Title>
+              <div className="mt-2 text-xs text-white/70">
+                <div>
+                  Здание: <span className="text-white/90">{demolishConfirmTarget?.buildingName ?? "—"}</span>
+                </div>
+                <div>
+                  Провинция: <span className="text-white/90">{demolishConfirmTarget?.provinceName ?? "—"}</span>
+                </div>
+                <div className="mt-1">
+                  Стоимость сноса:{" "}
+                  <span className="text-white/90">
+                    {formatCompact(demolishConfirmTarget?.demolitionCostConstruction ?? 0)} очков строительства
+                  </span>
+                </div>
+                <div>
+                  Доступно: <span className="text-white/90">{formatCompact(availableConstruction)}</span>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDemolishConfirmTarget(null)}
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-white/15 bg-black/35 px-3 text-xs font-semibold text-white/75 hover:border-white/30"
+                >
+                  Нет
+                </button>
+                <button
+                  type="button"
+                  disabled={(demolishConfirmTarget?.demolitionCostConstruction ?? 0) > availableConstruction}
+                  onClick={() => {
+                    if (!demolishConfirmTarget) return;
+                    void demolishBuiltCard({
+                      key: demolishConfirmTarget.key,
+                      provinceId: demolishConfirmTarget.provinceId,
+                      buildingId: demolishConfirmTarget.buildingId,
+                      instanceId: demolishConfirmTarget.instanceId,
+                    });
+                    setDemolishConfirmTarget(null);
+                  }}
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-red-400/55 bg-red-500/20 px-3 text-xs font-semibold text-red-200 hover:bg-red-500/30 disabled:opacity-40"
                 >
                   Да
                 </button>

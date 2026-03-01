@@ -74,6 +74,13 @@ export type BuildingOwner =
   | { type: "state"; countryId: string }
   | { type: "company"; companyId: string };
 
+export type BuildingInstance = {
+  instanceId: string;
+  buildingId: string;
+  owner: BuildingOwner;
+  createdTurnId: number;
+};
+
 export type ProvinceConstructionProject = {
   queueId: string;
   requestedByCountryId: string;
@@ -93,7 +100,7 @@ export type WorldBase = {
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
   provincePopulationByProvince: Record<string, ProvincePopulation>;
-  provinceBuildingsByProvince: Record<string, Record<string, number>>;
+  provinceBuildingsByProvince: Record<string, BuildingInstance[]>;
   provinceBuildingDucatsByProvince: Record<string, Record<string, number>>;
   provincePopulationTreasuryByProvince: Record<string, number>;
   provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[]>;
@@ -123,7 +130,7 @@ export type WorldDelta = {
   p?: Record<string, Record<string, number> | null>;
   z?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
   u?: Record<string, ProvincePopulation | null>;
-  b?: Record<string, Record<string, number> | null>;
+  b?: Record<string, BuildingInstance[] | null>;
   y?: Record<string, number | null>;
   q?: Record<string, Record<string, number> | null>;
   r?: Record<string, ProvinceConstructionProject[] | null>;

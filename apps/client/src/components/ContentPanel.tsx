@@ -477,11 +477,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
             (byCountryByBuildingId[buildingId][countryId] ?? 0) + amount;
         };
 
-        for (const [provinceId, levels] of Object.entries(snapshot.worldBase.provinceBuildingsByProvince ?? {})) {
+        for (const [provinceId, instances] of Object.entries(snapshot.worldBase.provinceBuildingsByProvince ?? {})) {
           const ownerCountryId = snapshot.worldBase.provinceOwner?.[provinceId] ?? null;
-          for (const [buildingId, levelRaw] of Object.entries(levels ?? {})) {
-            const amount = Math.max(0, Math.floor(Number(levelRaw) || 0));
-            addUsage(buildingId, ownerCountryId, amount);
+          for (const instance of instances ?? []) {
+            addUsage(instance.buildingId, ownerCountryId, 1);
           }
         }
 

@@ -25,6 +25,7 @@ import {
   type OrderDelta,
   type ProvincePopulation,
   type ProvinceConstructionProject,
+  type BuildingInstance,
   type BuildingOwner,
   type ResourceTotals,
   type ServerStatus,
@@ -400,6 +401,7 @@ type GameSettings = {
     baseConstructionPerTurn: number;
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
+    demolitionCostConstructionPercent: number;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -826,23 +828,54 @@ function normalizeProvincePopulationMap(input: unknown): Record<string, Province
   return normalized;
 }
 
-function normalizeProvinceBuildingsMap(input: unknown): Record<string, Record<string, number>> {
-  const normalized: Record<string, Record<string, number>> = {};
+function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingInstance[]> {
+  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
+  const normalized: Record<string, BuildingInstance[]> = {};
   if (input && typeof input === "object") {
     for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
-      if (!raw || typeof raw !== "object") continue;
-      const byBuilding: Record<string, number> = {};
-      for (const [buildingId, levelRaw] of Object.entries(raw as Record<string, unknown>)) {
-        const level = typeof levelRaw === "number" && Number.isFinite(levelRaw) ? Math.max(0, Math.floor(levelRaw)) : 0;
-        if (!buildingId || level <= 0) continue;
-        byBuilding[buildingId] = level;
+      const instances: BuildingInstance[] = [];
+      if (Array.isArray(raw)) {
+        for (const item of raw) {
+          if (!item || typeof item !== "object") continue;
+          const source = item as Partial<BuildingInstance>;
+          const buildingId = typeof source.buildingId === "string" ? source.buildingId.trim() : "";
+          if (!buildingId) continue;
+          const createdTurnId =
+            typeof source.createdTurnId === "number" && Number.isFinite(source.createdTurnId)
+              ? Math.max(1, Math.floor(source.createdTurnId))
+              : turnId;
+          instances.push({
+            instanceId:
+              typeof source.instanceId === "string" && source.instanceId.trim()
+                ? source.instanceId.trim()
+                : randomUUID(),
+            buildingId,
+            owner: normalizeBuildingOwner(source.owner ?? { type: "state", countryId: fallbackCountryId }),
+            createdTurnId,
+          });
+        }
+      } else if (raw && typeof raw === "object") {
+        // Legacy migration: { [buildingId]: level } -> instance array.
+        for (const [buildingId, levelRaw] of Object.entries(raw as Record<string, unknown>)) {
+          const level =
+            typeof levelRaw === "number" && Number.isFinite(levelRaw) ? Math.max(0, Math.floor(levelRaw)) : 0;
+          if (!buildingId || level <= 0) continue;
+          for (let i = 0; i < level; i += 1) {
+            instances.push({
+              instanceId: randomUUID(),
+              buildingId,
+              owner: { type: "state", countryId: fallbackCountryId },
+              createdTurnId: turnId,
+            });
+          }
+        }
       }
-      normalized[provinceId] = byBuilding;
+      normalized[provinceId] = instances;
     }
   }
   for (const province of adm1ProvinceIndex) {
     if (!normalized[province.id]) {
-      normalized[province.id] = {};
+      normalized[province.id] = [];
     }
   }
   return normalized;
@@ -986,18 +1019,23 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     if (!worldBase.provinceOwner[provinceId]) continue;
 
     const population = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
-    const buildingLevels = worldBase.provinceBuildingsByProvince[provinceId] ?? {};
+    const buildingInstances = worldBase.provinceBuildingsByProvince[provinceId] ?? [];
+    const buildingCounts: Record<string, number> = {};
+    for (const instance of buildingInstances) {
+      if (!instance?.buildingId) continue;
+      buildingCounts[instance.buildingId] = (buildingCounts[instance.buildingId] ?? 0) + 1;
+    }
     const buildingDucats = { ...(worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {}) };
     const professionDemandById: Record<string, number> = {};
     let totalWorkforceDemand = 0;
 
-    for (const [buildingId, levelRaw] of Object.entries(buildingLevels)) {
-      const level = Math.max(0, Math.floor(levelRaw));
-      if (level <= 0) continue;
+    for (const [buildingId, levelRaw] of Object.entries(buildingCounts)) {
+      const count = Math.max(0, Math.floor(levelRaw));
+      if (count <= 0) continue;
       const building = buildingById.get(buildingId);
       if (!building) continue;
       for (const requirement of building.workforceRequirements ?? []) {
-        const workersDemand = Math.max(0, requirement.workers) * level;
+        const workersDemand = Math.max(0, requirement.workers) * count;
         if (workersDemand <= 0) continue;
         professionDemandById[requirement.professionId] = (professionDemandById[requirement.professionId] ?? 0) + workersDemand;
         totalWorkforceDemand += workersDemand;
@@ -1024,28 +1062,28 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       );
     }
 
-    for (const [buildingId, levelRaw] of Object.entries(buildingLevels)) {
-      const level = Math.max(0, Math.floor(levelRaw));
-      if (level <= 0) continue;
+    for (const [buildingId, levelRaw] of Object.entries(buildingCounts)) {
+      const count = Math.max(0, Math.floor(levelRaw));
+      if (count <= 0) continue;
       const building = buildingById.get(buildingId);
       if (!building) continue;
       let buildingRevenue = 0;
       let buildingInputCost = 0;
       let buildingWorkersDemand = 0;
       for (const requirement of building.workforceRequirements ?? []) {
-        buildingWorkersDemand += Math.max(0, requirement.workers) * level;
+        buildingWorkersDemand += Math.max(0, requirement.workers) * count;
       }
       const buildingEmployed = buildingWorkersDemand * employmentRatio;
       const buildingWages = buildingEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;
       for (const input of building.inputs ?? []) {
         const basePrice = goodBasePriceById.get(input.goodId) ?? 1;
-        const amount = Math.max(0, input.amount) * level * employmentRatio * BUILDING_BASE_THROUGHPUT;
+        const amount = Math.max(0, input.amount) * count * employmentRatio * BUILDING_BASE_THROUGHPUT;
         const totalCost = amount * basePrice;
         buildingInputCost += totalCost;
       }
       for (const output of building.outputs ?? []) {
         const basePrice = goodBasePriceById.get(output.goodId) ?? 1;
-        const amount = Math.max(0, output.amount) * level * employmentRatio * BUILDING_BASE_THROUGHPUT;
+        const amount = Math.max(0, output.amount) * count * employmentRatio * BUILDING_BASE_THROUGHPUT;
         const totalRevenue = amount * basePrice;
         buildingRevenue += totalRevenue;
       }
@@ -1282,6 +1320,7 @@ const defaultGameSettings = (): GameSettings => ({
     baseConstructionPerTurn: 5,
     baseDucatsPerTurn: 5,
     baseGoldPerTurn: 10,
+    demolitionCostConstructionPercent: 20,
   },
   colonization: {
     maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
@@ -1353,13 +1392,13 @@ function normalizeResourcesByCountryMap(input: unknown): Record<string, Resource
 function defaultWorldBase(currentTurnId: number): WorldBase {
   const domains = getPopulationDomainKeys();
   const provincePopulationByProvince: Record<string, ProvincePopulation> = {};
-  const provinceBuildingsByProvince: Record<string, Record<string, number>> = {};
+  const provinceBuildingsByProvince: Record<string, BuildingInstance[]> = {};
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number>> = {};
   const provincePopulationTreasuryByProvince: Record<string, number> = {};
   const provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[]> = {};
   for (const province of adm1ProvinceIndex) {
     provincePopulationByProvince[province.id] = buildDefaultProvincePopulation(province.id, domains);
-    provinceBuildingsByProvince[province.id] = {};
+    provinceBuildingsByProvince[province.id] = [];
     provinceBuildingDucatsByProvince[province.id] = {};
     provincePopulationTreasuryByProvince[province.id] = 0;
     provinceConstructionQueueByProvince[province.id] = [];
@@ -1463,6 +1502,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.economy?.baseGoldPerTurn === "number"
             ? Math.max(0, Math.floor(next.economy.baseGoldPerTurn))
             : defaults.economy.baseGoldPerTurn,
+        demolitionCostConstructionPercent:
+          typeof next.economy?.demolitionCostConstructionPercent === "number"
+            ? Math.max(0, Math.min(100, Math.floor(next.economy.demolitionCostConstructionPercent)))
+            : defaults.economy.demolitionCostConstructionPercent,
       },
       colonization: {
         maxActiveColonizations:
@@ -2536,14 +2579,43 @@ function isEqualConstructionQueue(
   return true;
 }
 
-function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> {
+function isEqualBuildingInstances(
+  prevValue: BuildingInstance[] | undefined,
+  nextValue: BuildingInstance[],
+): boolean {
+  if (!prevValue) return false;
+  if (prevValue.length !== nextValue.length) return false;
+  for (let i = 0; i < nextValue.length; i += 1) {
+    const prev = prevValue[i];
+    const next = nextValue[i];
+    if (!prev || !next) return false;
+    if (
+      prev.instanceId !== next.instanceId ||
+      prev.buildingId !== next.buildingId ||
+      prev.createdTurnId !== next.createdTurnId ||
+      prev.owner.type !== next.owner.type ||
+      (prev.owner.type === "state" && next.owner.type === "state" && prev.owner.countryId !== next.owner.countryId) ||
+      (prev.owner.type === "company" &&
+        next.owner.type === "company" &&
+        prev.owner.companyId !== next.owner.companyId)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildCompactWorldDelta(
+  prev: WorldBase,
+  next: WorldBase,
+): Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> {
   const resourcesByCountry: Record<string, ResourceTotals | null> = {};
   const provinceOwner: Record<string, string | null> = {};
   const provinceNameById: Record<string, string | null> = {};
   const colonyProgressByProvince: Record<string, Record<string, number> | null> = {};
   const provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null> = {};
   const provincePopulationByProvince: Record<string, ProvincePopulation | null> = {};
-  const provinceBuildingsByProvince: Record<string, Record<string, number> | null> = {};
+  const provinceBuildingsByProvince: Record<string, BuildingInstance[] | null> = {};
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number> | null> = {};
   const provincePopulationTreasuryByProvince: Record<string, number | null> = {};
   const provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[] | null> = {};
@@ -2641,7 +2713,7 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
       provinceBuildingsByProvince[key] = null;
       continue;
     }
-    if (!isEqualCountryProgressMap(prevValue, nextValue)) {
+    if (!isEqualBuildingInstances(prevValue, nextValue)) {
       provinceBuildingsByProvince[key] = nextValue;
     }
   }
@@ -2995,12 +3067,12 @@ function countBuildingOccurrences(
   let byCountry = 0;
   let global = 0;
 
-  for (const [provinceId, levels] of Object.entries(worldBase.provinceBuildingsByProvince)) {
-    const level = Math.max(0, Math.floor(Number(levels?.[buildingId] ?? 0)));
-    if (level <= 0) continue;
-    global += level;
+  for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince)) {
+    const amount = (instances ?? []).filter((instance) => instance.buildingId === buildingId).length;
+    if (amount <= 0) continue;
+    global += amount;
     if ((worldBase.provinceOwner[provinceId] ?? null) === countryId) {
-      byCountry += level;
+      byCountry += amount;
     }
   }
 
@@ -3151,15 +3223,20 @@ function resolveBuildingConstructionQueuesTurn(): void {
   for (const [provinceId, queue] of Object.entries(worldBase.provinceConstructionQueueByProvince ?? {})) {
     if (!Array.isArray(queue) || queue.length === 0) continue;
     const nextQueue: ProvinceConstructionProject[] = [];
-    const buildingLevels = { ...(worldBase.provinceBuildingsByProvince[provinceId] ?? {}) };
+    const buildingInstances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
     for (const project of queue) {
       if (project.progressConstruction + 1e-9 >= project.costConstruction) {
-        buildingLevels[project.buildingId] = (buildingLevels[project.buildingId] ?? 0) + 1;
+        buildingInstances.push({
+          instanceId: randomUUID(),
+          buildingId: project.buildingId,
+          owner: project.owner,
+          createdTurnId: turnId,
+        });
         continue;
       }
       nextQueue.push(project);
     }
-    worldBase.provinceBuildingsByProvince[provinceId] = buildingLevels;
+    worldBase.provinceBuildingsByProvince[provinceId] = buildingInstances;
     worldBase.provinceConstructionQueueByProvince[provinceId] = nextQueue;
   }
 }
@@ -3618,6 +3695,7 @@ const gameSettingsSchema = z.object({
       baseConstructionPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       baseDucatsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       baseGoldPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      demolitionCostConstructionPercent: z.coerce.number().int().min(0).max(100).optional(),
     })
     .optional(),
   colonization: z
@@ -4422,6 +4500,9 @@ app.patch("/admin/game-settings", async (req, res) => {
     if (typeof nextEconomy.baseGoldPerTurn === "number") {
       gameSettings.economy.baseGoldPerTurn = nextEconomy.baseGoldPerTurn;
     }
+    if (typeof nextEconomy.demolitionCostConstructionPercent === "number") {
+      gameSettings.economy.demolitionCostConstructionPercent = nextEconomy.demolitionCostConstructionPercent;
+    }
   }
 
   const nextColonization = parsed.data.colonization;
@@ -4572,6 +4653,12 @@ const buildCancelSchema = z
   .refine((value) => Boolean(value.orderId) || Boolean(value.provinceId && value.queueId), {
     message: "orderId or (provinceId + queueId) required",
   });
+
+const buildDemolishSchema = z.object({
+  provinceId: z.string().min(1),
+  buildingId: z.string().min(1),
+  instanceId: z.string().min(1).optional(),
+});
 
 const provinceRenameSchema = z.object({
   provinceId: z.string().min(1),
@@ -4798,6 +4885,88 @@ app.post("/country/build/cancel", async (req, res) => {
   }
 
   return res.json({ ok: true, canceledQueuedProject, canceledPendingOrder });
+});
+
+app.post("/country/build/demolish", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = buildDemolishSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, buildingId, instanceId } = parsed.data;
+  const provinceOwnerId = worldBase.provinceOwner[provinceId] ?? null;
+  if (!provinceOwnerId || provinceOwnerId !== auth.countryId) {
+    return res.status(403).json({ error: "NOT_PROVINCE_OWNER" });
+  }
+
+  const instances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
+  const matchingInstances = instances.filter((instance) => instance.buildingId === buildingId);
+  if (matchingInstances.length <= 0) {
+    return res.status(404).json({ error: "BUILDING_NOT_FOUND" });
+  }
+  const targetInstance =
+    typeof instanceId === "string" && instanceId.trim().length > 0
+      ? matchingInstances.find((instance) => instance.instanceId === instanceId.trim())
+      : matchingInstances[0];
+  if (!targetInstance) {
+    return res.status(404).json({ error: "BUILDING_INSTANCE_NOT_FOUND" });
+  }
+
+  const building = gameSettings.content.buildings.find((entry) => entry.id === buildingId);
+  if (!building) {
+    return res.status(404).json({ error: "BUILDING_DEFINITION_NOT_FOUND" });
+  }
+  const costConstruction = Math.max(1, Math.floor(Number(building.costConstruction ?? 100)));
+  const demolitionPercent = Math.max(0, Math.min(100, Math.floor(gameSettings.economy.demolitionCostConstructionPercent ?? 20)));
+  const demolitionCostConstruction = Math.ceil((costConstruction * demolitionPercent) / 100);
+
+  ensureCountryInWorldBase(auth.countryId);
+  const countryResource = worldBase.resourcesByCountry[auth.countryId];
+  if (!countryResource) {
+    return res.status(500).json({ error: "NO_RESOURCES" });
+  }
+  if (countryResource.construction < demolitionCostConstruction) {
+    return res.status(400).json({
+      error: "INSUFFICIENT_CONSTRUCTION_POINTS",
+      required: demolitionCostConstruction,
+      available: countryResource.construction,
+    });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(
+    WORLD_DELTA_MASK.resourcesByCountry |
+      WORLD_DELTA_MASK.provinceBuildingsByProvince |
+      WORLD_DELTA_MASK.provinceBuildingDucatsByProvince,
+  );
+  countryResource.construction = Math.max(0, countryResource.construction - demolitionCostConstruction);
+  const nextInstances = instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
+  worldBase.provinceBuildingsByProvince[provinceId] = nextInstances;
+  const buildingDucats = worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {};
+  const remainingByType = nextInstances.some((instance) => instance.buildingId === buildingId);
+  if (!remainingByType && Object.prototype.hasOwnProperty.call(buildingDucats, buildingId)) {
+    delete buildingDucats[buildingId];
+    worldBase.provinceBuildingDucatsByProvince[provinceId] = buildingDucats;
+  }
+
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+
+  return res.json({
+    ok: true,
+    provinceId,
+    buildingId,
+    removedInstanceId: targetInstance.instanceId,
+    previousCount: matchingInstances.length,
+    newCount: Math.max(0, matchingInstances.length - 1),
+    demolitionCostConstruction,
+    demolitionPercent,
+    constructionLeft: countryResource.construction,
+  });
 });
 
 app.get("/country/orders/current", async (req, res) => {

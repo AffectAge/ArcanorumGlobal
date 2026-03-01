@@ -496,6 +496,7 @@ export type GameSettings = {
     baseConstructionPerTurn: number;
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
+    demolitionCostConstructionPercent: number;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -716,7 +717,12 @@ export async function fetchGameSettings(token: string): Promise<GameSettings> {
 export async function updateGameSettings(
   token: string,
   payload: {
-    economy?: { baseConstructionPerTurn?: number; baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
+    economy?: {
+      baseConstructionPerTurn?: number;
+      baseDucatsPerTurn?: number;
+      baseGoldPerTurn?: number;
+      demolitionCostConstructionPercent?: number;
+    };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
     registration?: { requireAdminApproval?: boolean };
@@ -744,6 +750,45 @@ export async function updateGameSettings(
     ...data,
     map: normalizeMapSettings(data.map),
     resourceIcons: normalizeResourceIcons(data.resourceIcons),
+  };
+}
+
+export async function demolishCountryBuild(
+  token: string,
+  payload: { provinceId: string; buildingId: string; instanceId?: string },
+): Promise<{
+  ok: boolean;
+  provinceId: string;
+  buildingId: string;
+  removedInstanceId: string;
+  previousCount: number;
+  newCount: number;
+  demolitionCostConstruction: number;
+  demolitionPercent: number;
+  constructionLeft: number;
+}> {
+  const response = await fetch(`${API}/country/build/demolish`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "BUILD_DEMOLISH_FAILED");
+  }
+  return (await response.json()) as {
+    ok: boolean;
+    provinceId: string;
+    buildingId: string;
+    removedInstanceId: string;
+    previousCount: number;
+    newCount: number;
+    demolitionCostConstruction: number;
+    demolitionPercent: number;
+    constructionLeft: number;
   };
 }
 
