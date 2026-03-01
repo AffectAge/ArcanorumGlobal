@@ -4377,6 +4377,16 @@ const colonizationActionSchema = z.object({
   provinceId: z.string().min(1),
 });
 
+const buildCancelSchema = z
+  .object({
+    provinceId: z.string().min(1).optional(),
+    queueId: z.string().min(1).optional(),
+    orderId: z.string().min(1).optional(),
+  })
+  .refine((value) => Boolean(value.orderId) || Boolean(value.provinceId && value.queueId), {
+    message: "orderId or (provinceId + queueId) required",
+  });
+
 const provinceRenameSchema = z.object({
   provinceId: z.string().min(1),
   provinceName: z.string().trim().min(1).max(64),
@@ -4524,6 +4534,84 @@ app.post("/country/colonization/cancel", async (req, res) => {
   });
 
   return res.json({ ok: true, worldBase, turnId });
+});
+
+app.post("/country/build/cancel", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = buildCancelSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, queueId, orderId } = parsed.data;
+  let canceledQueuedProject = false;
+  let canceledPendingOrder = false;
+  let previousWorldBase: WorldBaseSectionSnapshot | null = null;
+
+  if (provinceId && queueId) {
+    const queue = worldBase.provinceConstructionQueueByProvince[provinceId] ?? [];
+    const nextQueue = queue.filter((project) => {
+      const shouldRemove =
+        project.queueId === queueId &&
+        project.requestedByCountryId === auth.countryId &&
+        (worldBase.provinceOwner[provinceId] ?? null) === auth.countryId;
+      if (shouldRemove) {
+        canceledQueuedProject = true;
+      }
+      return !shouldRemove;
+    });
+    if (canceledQueuedProject) {
+      previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceConstructionQueueByProvince);
+      worldBase.provinceConstructionQueueByProvince[provinceId] = nextQueue;
+    }
+  }
+
+  if (orderId) {
+    const turnOrders = ordersByTurn.get(turnId);
+    if (turnOrders) {
+      for (const [playerId, list] of turnOrders.entries()) {
+        const removed: Order[] = [];
+        const filtered = list.filter((order) => {
+          const shouldRemove =
+            order.id === orderId && order.type === "BUILD" && order.countryId === auth.countryId;
+          if (shouldRemove) {
+            removed.push(order);
+          }
+          return !shouldRemove;
+        });
+        if (removed.length > 0) {
+          canceledPendingOrder = true;
+          for (const order of removed) {
+            removeOrderFromTurnIndexes(order);
+          }
+          if (filtered.length > 0) {
+            turnOrders.set(playerId, filtered);
+          } else {
+            turnOrders.delete(playerId);
+          }
+        }
+      }
+      if (turnOrders.size === 0) {
+        ordersByTurn.delete(turnId);
+        dropTurnOrderIndexes(turnId);
+      }
+    }
+  }
+
+  if (!canceledQueuedProject && !canceledPendingOrder) {
+    return res.status(404).json({ error: "BUILD_CANCEL_NOT_FOUND" });
+  }
+
+  savePersistentState();
+  if (previousWorldBase) {
+    broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+  }
+
+  return res.json({ ok: true, canceledQueuedProject, canceledPendingOrder });
 });
 
 app.patch("/country/province-rename", async (req, res) => {

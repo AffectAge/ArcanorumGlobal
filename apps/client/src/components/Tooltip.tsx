@@ -30,7 +30,7 @@ export function Tooltip({ content, children, placement = "right" }: TooltipProps
           <div
             ref={refs.setFloating}
             style={floatingStyles}
-            className="panel-border z-[320] max-w-56 rounded-md bg-arc-panel/95 px-3 py-1 text-xs text-arc-accent"
+            className="panel-border z-[320] max-w-56 rounded-md bg-black px-3 py-1 text-xs text-arc-accent"
             {...getFloatingProps()}
           >
             {content}

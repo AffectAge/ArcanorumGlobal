@@ -911,6 +911,25 @@ export async function cancelCountryColonization(token: string, provinceId: strin
   }
 }
 
+export async function cancelCountryBuild(
+  token: string,
+  payload: { provinceId?: string; queueId?: string; orderId?: string },
+): Promise<{ canceledQueuedProject: boolean; canceledPendingOrder: boolean }> {
+  const response = await fetch(`${API}/country/build/cancel`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "BUILD_CANCEL_FAILED");
+  }
+  return (await response.json()) as { canceledQueuedProject: boolean; canceledPendingOrder: boolean };
+}
+
 export async function renameOwnedProvince(
   token: string,
   payload: { provinceId: string; provinceName: string },

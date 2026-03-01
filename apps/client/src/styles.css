@@ -141,3 +141,24 @@ body {
 .arc-scrollbar::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+.arc-scrollbar-construction {
+  scrollbar-color: rgba(251, 191, 36, 0.5) rgba(255, 255, 255, 0.04);
+}
+
+.arc-scrollbar-construction::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
+.arc-scrollbar-construction::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.56), rgba(217, 119, 6, 0.35));
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.arc-scrollbar-construction::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.72), rgba(217, 119, 6, 0.5));
+}

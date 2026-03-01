@@ -24,6 +24,7 @@ type GameState = {
   setWorldBase: (world: WorldBase, turnId: number, worldStateVersion: number) => void;
   applyWorldDelta: (delta: WorldDelta, turnId: number, worldStateVersion: number) => void;
   addOrder: (order: Order) => void;
+  removeOrder: (turnId: number, orderId: string) => void;
   setPresence: (ids: string[]) => void;
   setSelectedProvince: (id: string | null) => void;
   resetOverlay: (turnId: number) => void;
@@ -188,6 +189,25 @@ export const useGameStore = create<GameState>((set) => ({
       const list = [...(byPlayer.get(order.playerId) ?? []), order];
       byPlayer.set(order.playerId, list);
       turnMap.set(order.turnId, byPlayer);
+      return { ordersByTurn: turnMap };
+    }),
+  removeOrder: (targetTurnId, orderId) =>
+    set((state) => {
+      const turnMap = new Map(state.ordersByTurn);
+      const byPlayer = turnMap.get(targetTurnId);
+      if (!byPlayer) return state;
+      const nextByPlayer = new Map<string, Order[]>();
+      for (const [playerId, list] of byPlayer.entries()) {
+        const filtered = list.filter((order) => order.id !== orderId);
+        if (filtered.length > 0) {
+          nextByPlayer.set(playerId, filtered);
+        }
+      }
+      if (nextByPlayer.size > 0) {
+        turnMap.set(targetTurnId, nextByPlayer);
+      } else {
+        turnMap.delete(targetTurnId);
+      }
       return { ordersByTurn: turnMap };
     }),
   setPresence: (ids) => set({ onlinePlayerIds: ids }),

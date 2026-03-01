@@ -3,8 +3,10 @@ import type { WorldBase } from "@arcanorum/shared";
 import { motion } from "framer-motion";
 import { Building2, Factory, Hammer, MapPin, Plus, Trash2, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { fetchContentEntries, fetchCountries, type ContentEntry } from "../lib/api";
+import { toast } from "sonner";
+import { cancelCountryBuild, fetchContentEntries, fetchCountries, type ContentEntry } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
+import { CustomSelect } from "./CustomSelect";
 import { Tooltip } from "./Tooltip";
 
 type Props = {
@@ -55,8 +57,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [ownerType, setOwnerType] = useState<"state" | "company">("state");
   const [ownerCountryId, setOwnerCountryId] = useState("");
   const [ownerCompanyId, setOwnerCompanyId] = useState("");
+  const [cancelingQueueKey, setCancelingQueueKey] = useState<string | null>(null);
+  const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
+  const removeOrder = useGameStore((s) => s.removeOrder);
 
   useEffect(() => {
     if (!open) return;
@@ -175,17 +180,50 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
   const constructionQueue = useMemo(
     () => {
-      const committed = cards
-        .filter((card) => card.kind === "construction")
-        .sort((a, b) => a.provinceName.localeCompare(b.provinceName, "ru") || a.buildingName.localeCompare(b.buildingName, "ru"));
-
-      const pending: Array<{
+      const committed: Array<{
         key: string;
+        source: "queued";
+        provinceId: string;
         provinceName: string;
         buildingName: string;
         ownerLabel: string;
         progressPercent: number;
         iconUrl: string | null;
+        queueId: string;
+      }> = [];
+      for (const province of myProvinces) {
+        const queue = worldBase?.provinceConstructionQueueByProvince?.[province.id] ?? [];
+        for (const project of queue) {
+          const building = buildingById.get(project.buildingId);
+          if (!building) continue;
+          const ownerLabel =
+            project.owner.type === "company"
+              ? companyById.get(project.owner.companyId)?.name ?? project.owner.companyId
+              : countryById.get(project.owner.countryId)?.name ?? project.owner.countryId;
+          committed.push({
+            key: `queued-${province.id}-${project.queueId}`,
+            source: "queued",
+            provinceId: province.id,
+            provinceName: province.name,
+            buildingName: building.name,
+            ownerLabel,
+            progressPercent: Math.min(100, Math.round((project.progressConstruction / Math.max(1, project.costConstruction)) * 100)),
+            iconUrl: building.logoUrl ?? null,
+            queueId: project.queueId,
+          });
+        }
+      }
+
+      const pending: Array<{
+        key: string;
+        source: "pending";
+        provinceId: string;
+        provinceName: string;
+        buildingName: string;
+        ownerLabel: string;
+        progressPercent: number;
+        iconUrl: string | null;
+        orderId: string;
       }> = [];
       const byPlayer = ordersByTurn.get(turnId);
       if (byPlayer) {
@@ -212,28 +250,26 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 : countryById.get(owner?.countryId ?? countryId)?.name ?? owner?.countryId ?? countryId;
             pending.push({
               key: `pending-${order.id}`,
+              source: "pending",
+              provinceId: order.provinceId,
               provinceName: pendingProvinceName,
               buildingName: pendingBuildingName,
               ownerLabel,
               progressPercent: 0,
               iconUrl: buildingById.get(payloadBuildingId)?.logoUrl ?? null,
+              orderId: order.id,
             });
           }
         }
       }
-      return [
-        ...committed.map((c) => ({
-          key: c.key,
-          provinceName: c.provinceName,
-          buildingName: c.buildingName,
-          ownerLabel: c.ownerLabel,
-          progressPercent: c.progressPercent,
-          iconUrl: c.iconUrl,
-        })),
-        ...pending,
-      ].sort((a, b) => a.provinceName.localeCompare(b.provinceName, "ru") || a.buildingName.localeCompare(b.buildingName, "ru"));
+      return [...committed, ...pending].sort(
+        (a, b) =>
+          Number(a.source === "queued") - Number(b.source === "queued") ||
+          a.provinceName.localeCompare(b.provinceName, "ru") ||
+          a.buildingName.localeCompare(b.buildingName, "ru"),
+      );
     },
-    [cards, ordersByTurn, turnId, countryId, buildingById, myProvinces, worldBase?.provinceNameById, companyById, countryById],
+    [ordersByTurn, turnId, countryId, buildingById, myProvinces, worldBase?.provinceConstructionQueueByProvince, worldBase?.provinceNameById, companyById, countryById],
   );
 
   const availableConstruction = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.construction ?? 0)));
@@ -299,6 +335,35 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     const owner = ownerType === "company" ? { type: "company", companyId: ownerCompanyId } : { type: "state", countryId: ownerCountryId || countryId };
     onQueueBuildOrder(provinceId, { buildingId: targetBuildingId, owner });
     setBuildingId(targetBuildingId);
+  };
+
+  const cancelBuildQueueItem = async (
+    item:
+      | { key: string; source: "pending"; orderId: string }
+      | { key: string; source: "queued"; provinceId: string; queueId: string },
+  ) => {
+    if (!auth?.token) return;
+    setCancelingQueueKey(item.key);
+    try {
+      if (item.source === "pending") {
+        const result = await cancelCountryBuild(auth.token, { orderId: item.orderId });
+        if (result.canceledPendingOrder) {
+          removeOrder(turnId, item.orderId);
+        }
+      } else {
+        await cancelCountryBuild(auth.token, { provinceId: item.provinceId, queueId: item.queueId });
+      }
+      toast.success("Строительство отменено");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "BUILD_CANCEL_FAILED";
+      if (message === "BUILD_CANCEL_NOT_FOUND") {
+        toast.error("Проект уже не найден");
+      } else {
+        toast.error("Не удалось отменить строительство");
+      }
+    } finally {
+      setCancelingQueueKey(null);
+    }
   };
 
   const border = (c: Card) => (c.kind === "construction" ? "border-amber-400/50" : c.isActive ? "border-white/10" : "border-red-400/60");
@@ -399,48 +464,52 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     <Tooltip content="Выбранная провинция применяется ко всем добавляемым проектам из списка ниже.">
                       <span>Провинция</span>
                     </Tooltip>
-                    <select value={provinceId} onChange={(e) => setProvinceId(e.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
-                      {myProvinces.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                    <CustomSelect
+                      value={provinceId}
+                      onChange={setProvinceId}
+                      options={myProvinces.map((p) => ({ value: p.id, label: p.name }))}
+                      placeholder="Выберите провинцию"
+                    />
                   </label>
                   <label className="flex flex-col gap-1 text-xs text-white/65">
                     <Tooltip content="Кому будет принадлежать каждое добавленное здание: государству или компании.">
                       <span>Владелец</span>
                     </Tooltip>
-                    <select value={ownerType} onChange={(e) => setOwnerType(e.target.value as "state" | "company")} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
-                      <option value="state">Государство</option>
-                      <option value="company">Компания</option>
-                    </select>
+                    <CustomSelect
+                      value={ownerType}
+                      onChange={(value) => setOwnerType(value as "state" | "company")}
+                      options={[
+                        { value: "state", label: "Государство" },
+                        { value: "company", label: "Компания" },
+                      ]}
+                    />
                   </label>
                   {ownerType === "state" ? (
                     <label className="flex flex-col gap-1 text-xs text-white/65">
                       <Tooltip content="Страна, которая станет владельцем проекта при выбранном типе «Государство».">
                         <span>Страна владельца</span>
                       </Tooltip>
-                      <select value={ownerCountryId} onChange={(e) => setOwnerCountryId(e.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
-                        {Object.keys(worldBase?.resourcesByCountry ?? {}).map((id) => (
-                          <option key={id} value={id}>
-                            {countryById.get(id)?.name ?? id}
-                          </option>
-                        ))}
-                      </select>
+                      <CustomSelect
+                        value={ownerCountryId}
+                        onChange={setOwnerCountryId}
+                        options={Object.keys(worldBase?.resourcesByCountry ?? {}).map((id) => ({
+                          value: id,
+                          label: countryById.get(id)?.name ?? id,
+                        }))}
+                        placeholder="Выберите страну"
+                      />
                     </label>
                   ) : (
                     <label className="flex flex-col gap-1 text-xs text-white/65">
                       <Tooltip content="Компания, которая станет владельцем проекта при выбранном типе «Компания».">
                         <span>Компания владельца</span>
                       </Tooltip>
-                      <select value={ownerCompanyId} onChange={(e) => setOwnerCompanyId(e.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/35 px-3 text-sm text-white">
-                        {companies.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
+                      <CustomSelect
+                        value={ownerCompanyId}
+                        onChange={setOwnerCompanyId}
+                        options={companies.map((c) => ({ value: c.id, label: c.name }))}
+                        placeholder="Выберите компанию"
+                      />
                     </label>
                   )}
                 </div>
@@ -518,7 +587,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </div>
                   )}
                   {constructionQueue.length > 0 && (
-                    <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+                    <div className="arc-scrollbar arc-scrollbar-construction min-h-0 flex-1 space-y-2 overflow-auto pr-1">
                       {constructionQueue.map((card) => (
                         <div key={card.key} className={constructionCardClass}>
                           <div className="h-full overflow-hidden rounded-md flex items-stretch">
@@ -535,21 +604,48 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                   <div className="truncate text-sm font-semibold text-white/90">{card.buildingName}</div>
                                   <div className="text-[11px] text-white/55">{card.provinceName}</div>
                                 </div>
-                                <div className="text-[11px] text-amber-300/90">{card.progressPercent}%</div>
                               </div>
-                              <div className="mt-2 h-1.5 overflow-hidden rounded-full border border-amber-400/30 bg-black/50">
-                                <div
-                                  className="h-full"
-                                  style={{
-                                    width: `${card.progressPercent}%`,
-                                    backgroundImage:
-                                      "repeating-linear-gradient(-45deg, rgba(245,158,11,0.95) 0 8px, rgba(15,23,42,0.95) 8px 16px)",
-                                  }}
-                                />
+                              <div className="mt-2 flex items-center gap-2">
+                                <div className="w-10 shrink-0 text-[11px] text-amber-300/90">{card.progressPercent}%</div>
+                                <div className="h-1.5 flex-1 overflow-hidden rounded-full border border-amber-400/30 bg-black/50">
+                                  <div
+                                    className="h-full"
+                                    style={{
+                                      width: `${card.progressPercent}%`,
+                                      backgroundImage:
+                                        "repeating-linear-gradient(-45deg, rgba(245,158,11,0.95) 0 8px, rgba(15,23,42,0.95) 8px 16px)",
+                                    }}
+                                  />
+                                </div>
                               </div>
                               <div className="mt-2 text-[11px] text-white/55">
                                 Владелец: <span className="text-white/80">{card.ownerLabel}</span>
                               </div>
+                            </div>
+                            <div className="flex w-16 shrink-0 items-center justify-center">
+                              <Tooltip
+                                content={
+                                  card.source === "pending"
+                                    ? "Отменить проект до резолва текущего хода"
+                                    : "Удалить проект из очереди строительства"
+                                }
+                                placement="left"
+                              >
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void cancelBuildQueueItem(
+                                        card.source === "pending"
+                                          ? { key: card.key, source: "pending", orderId: card.orderId }
+                                          : { key: card.key, source: "queued", provinceId: card.provinceId, queueId: card.queueId },
+                                      )
+                                    }
+                                    disabled={cancelingQueueKey === card.key}
+                                    className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-amber-400/55 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 disabled:opacity-40"
+                                  >
+                                    {cancelingQueueKey === card.key ? "..." : <X size={20} />}
+                                  </button>
+                              </Tooltip>
                             </div>
                           </div>
                         </div>

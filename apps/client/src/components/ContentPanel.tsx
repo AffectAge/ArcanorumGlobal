@@ -4,6 +4,7 @@ import { Briefcase, Building2, Factory, FileText, Flame, Package, Palette, Plus,
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
+import { CustomSelect } from "./CustomSelect";
 import {
   adminCreateContentEntry,
   adminDeleteContentEntry,
@@ -82,6 +83,7 @@ const CONTENT_UI_SCHEMA = {
       enabled: true,
       sections: [
         { id: "general", label: "Основная информация", icon: FileText },
+        { id: "economy", label: "Экономика и производство", icon: Factory },
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
@@ -92,6 +94,7 @@ const CONTENT_UI_SCHEMA = {
       enabled: true,
       sections: [
         { id: "general", label: "Основная информация", icon: FileText },
+        { id: "economy", label: "Экономика товара", icon: Factory },
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
@@ -118,7 +121,7 @@ const CONTENT_UI_SCHEMA = {
   ] as const,
 } as const;
 type PanelCategory = ContentEntryKind;
-type PanelSection = "general" | "branding";
+type PanelSection = "general" | "economy" | "branding";
 type GoodFlowDraft = { goodId: string; amount: string };
 type WorkforceRequirementDraft = { professionId: string; workers: string };
 
@@ -883,208 +886,228 @@ export function ContentPanel({ open, token, onClose }: Props) {
                           <div className="mt-1 text-right text-[11px] text-white/45">{draftDescription.length}/5000</div>
                         </label>
 
-                        {activeCategory === "goods" && (
-                          <div className="mt-4 rounded-xl border border-white/10 bg-[#131a22] p-3">
-                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Экономика товара</div>
-                            <label className="block">
-                              <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
-                              <input
-                                value={draftBasePrice}
-                                onChange={(e) => setDraftBasePrice(e.target.value)}
-                                inputMode="decimal"
-                                placeholder="1"
-                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
-                              />
-                            </label>
-                            <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
-                          </div>
-                        )}
+                      </section>
+                    )}
 
-                        {activeCategory === "buildings" && (
-                          <div className="mt-4 space-y-4">
-                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                    {contentSection === "economy" && activeCategory === "buildings" && (
+                      <section className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="space-y-4">
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <Tooltip content="Базовые затраты на добавление одного уровня здания в очередь строительства.">
                               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Стоимость строительства</div>
-                              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                                <label className="block">
+                            </Tooltip>
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <label className="block">
+                                <Tooltip content="Сколько очков строительства требуется на завершение проекта.">
                                   <span className="mb-1 block text-xs text-white/60">Очки строительства</span>
-                                  <input
-                                    value={draftCostConstruction}
-                                    onChange={(e) => setDraftCostConstruction(e.target.value)}
-                                    inputMode="numeric"
-                                    placeholder="100"
-                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
-                                  />
-                                </label>
-                                <label className="block">
+                                </Tooltip>
+                                <input
+                                  value={draftCostConstruction}
+                                  onChange={(e) => setDraftCostConstruction(e.target.value)}
+                                  inputMode="numeric"
+                                  placeholder="100"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Сколько дукатов суммарно спишется при полном завершении проекта.">
                                   <span className="mb-1 block text-xs text-white/60">Дукаты</span>
-                                  <input
-                                    value={draftCostDucats}
-                                    onChange={(e) => setDraftCostDucats(e.target.value)}
-                                    inputMode="decimal"
-                                    placeholder="10"
-                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
-                                  />
-                                </label>
-                              </div>
+                                </Tooltip>
+                                <input
+                                  value={draftCostDucats}
+                                  onChange={(e) => setDraftCostDucats(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="10"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
                             </div>
+                          </div>
 
-                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                              <div className="mb-2 flex items-center justify-between">
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <Tooltip content="Товары, которые здание потребляет каждый ход при производстве.">
                                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Входные товары</div>
+                              </Tooltip>
+                              <Tooltip content="Добавить новую строку входного товара.">
                                 <button
                                   type="button"
                                   onClick={() => setDraftInputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
-                                  className="rounded-md border border-white/15 px-2 py-1 text-[11px] text-white/75 hover:border-white/30"
+                                  className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
                                 >
-                                  + Добавить
+                                  Добавить
                                 </button>
-                              </div>
-                              <div className="space-y-2">
-                                {draftInputs.map((row, index) => (
-                                  <div key={`input-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
-                                    <select
-                                      value={row.goodId}
-                                      onChange={(e) =>
-                                        setDraftInputs((prev) => prev.map((r, i) => (i === index ? { ...r, goodId: e.target.value } : r)))
-                                      }
-                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
-                                    >
-                                      <option value="">Выберите товар</option>
-                                      {goodsOptions.map((option) => (
-                                        <option key={option.id} value={option.id}>
-                                          {option.name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      value={row.amount}
-                                      onChange={(e) =>
-                                        setDraftInputs((prev) => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
-                                      }
-                                      inputMode="decimal"
-                                      placeholder="0"
-                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => setDraftInputs((prev) => prev.filter((_, i) => i !== index))}
-                                      className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
-                                    >
-                                      ×
-                                    </button>
-                                  </div>
-                                ))}
-                                {draftInputs.length === 0 && <div className="text-xs text-white/45">Нет входных товаров</div>}
-                              </div>
+                              </Tooltip>
                             </div>
+                            <div className="space-y-2">
+                              {draftInputs.map((row, index) => (
+                                <div key={`input-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                  <CustomSelect
+                                    value={row.goodId}
+                                    onChange={(value) =>
+                                      setDraftInputs((prev) => prev.map((r, i) => (i === index ? { ...r, goodId: value } : r)))
+                                    }
+                                    options={[
+                                      { value: "", label: "Выберите товар" },
+                                      ...goodsOptions.map((option) => ({ value: option.id, label: option.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
+                                  />
+                                  <input
+                                    value={row.amount}
+                                    onChange={(e) =>
+                                      setDraftInputs((prev) => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
+                                    }
+                                    inputMode="decimal"
+                                    placeholder="0"
+                                    className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftInputs((prev) => prev.filter((_, i) => i !== index))}
+                                    className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                              {draftInputs.length === 0 && <div className="text-xs text-white/45">Нет входных товаров</div>}
+                            </div>
+                          </div>
 
-                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                              <div className="mb-2 flex items-center justify-between">
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <Tooltip content="Товары, которые здание производит каждый ход.">
                                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Выходные товары</div>
+                              </Tooltip>
+                              <Tooltip content="Добавить новую строку выходного товара.">
                                 <button
                                   type="button"
                                   onClick={() => setDraftOutputs((prev) => [...prev, { goodId: goodsOptions[0]?.id ?? "", amount: "1" }])}
-                                  className="rounded-md border border-white/15 px-2 py-1 text-[11px] text-white/75 hover:border-white/30"
+                                  className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
                                 >
-                                  + Добавить
+                                  Добавить
                                 </button>
-                              </div>
-                              <div className="space-y-2">
-                                {draftOutputs.map((row, index) => (
-                                  <div key={`output-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
-                                    <select
-                                      value={row.goodId}
-                                      onChange={(e) =>
-                                        setDraftOutputs((prev) => prev.map((r, i) => (i === index ? { ...r, goodId: e.target.value } : r)))
-                                      }
-                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
-                                    >
-                                      <option value="">Выберите товар</option>
-                                      {goodsOptions.map((option) => (
-                                        <option key={option.id} value={option.id}>
-                                          {option.name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      value={row.amount}
-                                      onChange={(e) =>
-                                        setDraftOutputs((prev) => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
-                                      }
-                                      inputMode="decimal"
-                                      placeholder="0"
-                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => setDraftOutputs((prev) => prev.filter((_, i) => i !== index))}
-                                      className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
-                                    >
-                                      ×
-                                    </button>
-                                  </div>
-                                ))}
-                                {draftOutputs.length === 0 && <div className="text-xs text-white/45">Нет выходных товаров</div>}
-                              </div>
+                              </Tooltip>
                             </div>
+                            <div className="space-y-2">
+                              {draftOutputs.map((row, index) => (
+                                <div key={`output-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                  <CustomSelect
+                                    value={row.goodId}
+                                    onChange={(value) =>
+                                      setDraftOutputs((prev) => prev.map((r, i) => (i === index ? { ...r, goodId: value } : r)))
+                                    }
+                                    options={[
+                                      { value: "", label: "Выберите товар" },
+                                      ...goodsOptions.map((option) => ({ value: option.id, label: option.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
+                                  />
+                                  <input
+                                    value={row.amount}
+                                    onChange={(e) =>
+                                      setDraftOutputs((prev) => prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)))
+                                    }
+                                    inputMode="decimal"
+                                    placeholder="0"
+                                    className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftOutputs((prev) => prev.filter((_, i) => i !== index))}
+                                    className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                              {draftOutputs.length === 0 && <div className="text-xs text-white/45">Нет выходных товаров</div>}
+                            </div>
+                          </div>
 
-                            <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
-                              <div className="mb-2 flex items-center justify-between">
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <Tooltip content="Требуемые профессии и количество рабочих мест по каждой профессии.">
                                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Профессии и рабочие места</div>
+                              </Tooltip>
+                              <Tooltip content="Добавить новую строку требования по профессии.">
                                 <button
                                   type="button"
                                   onClick={() =>
                                     setDraftWorkforceRequirements((prev) => [...prev, { professionId: professionOptions[0]?.id ?? "", workers: "100" }])
                                   }
-                                  className="rounded-md border border-white/15 px-2 py-1 text-[11px] text-white/75 hover:border-white/30"
+                                  className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
                                 >
-                                  + Добавить
+                                  Добавить
                                 </button>
-                              </div>
-                              <div className="space-y-2">
-                                {draftWorkforceRequirements.map((row, index) => (
-                                  <div key={`workforce-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
-                                    <select
-                                      value={row.professionId}
-                                      onChange={(e) =>
-                                        setDraftWorkforceRequirements((prev) =>
-                                          prev.map((r, i) => (i === index ? { ...r, professionId: e.target.value } : r)),
-                                        )
-                                      }
-                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
-                                    >
-                                      <option value="">Выберите профессию</option>
-                                      {professionOptions.map((option) => (
-                                        <option key={option.id} value={option.id}>
-                                          {option.name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      value={row.workers}
-                                      onChange={(e) =>
-                                        setDraftWorkforceRequirements((prev) =>
-                                          prev.map((r, i) => (i === index ? { ...r, workers: e.target.value } : r)),
-                                        )
-                                      }
-                                      inputMode="numeric"
-                                      placeholder="0"
-                                      className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => setDraftWorkforceRequirements((prev) => prev.filter((_, i) => i !== index))}
-                                      className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
-                                    >
-                                      ×
-                                    </button>
-                                  </div>
-                                ))}
-                                {draftWorkforceRequirements.length === 0 && <div className="text-xs text-white/45">Нет требований по профессиям</div>}
-                              </div>
+                              </Tooltip>
+                            </div>
+                            <div className="space-y-2">
+                              {draftWorkforceRequirements.map((row, index) => (
+                                <div key={`workforce-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                  <CustomSelect
+                                    value={row.professionId}
+                                    onChange={(value) =>
+                                      setDraftWorkforceRequirements((prev) =>
+                                        prev.map((r, i) => (i === index ? { ...r, professionId: value } : r)),
+                                      )
+                                    }
+                                    options={[
+                                      { value: "", label: "Выберите профессию" },
+                                      ...professionOptions.map((option) => ({ value: option.id, label: option.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
+                                  />
+                                  <input
+                                    value={row.workers}
+                                    onChange={(e) =>
+                                      setDraftWorkforceRequirements((prev) =>
+                                        prev.map((r, i) => (i === index ? { ...r, workers: e.target.value } : r)),
+                                      )
+                                    }
+                                    inputMode="numeric"
+                                    placeholder="0"
+                                    className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftWorkforceRequirements((prev) => prev.filter((_, i) => i !== index))}
+                                    className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                              {draftWorkforceRequirements.length === 0 && <div className="text-xs text-white/45">Нет требований по профессиям</div>}
                             </div>
                           </div>
-                        )}
+                        </div>
+                      </section>
+                    )}
+
+                    {contentSection === "economy" && activeCategory === "goods" && (
+                      <section className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <Tooltip content="Параметры товара для экономической модели до подключения полноценного рынка.">
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Экономика товара</div>
+                          </Tooltip>
+                          <label className="block">
+                            <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
+                              <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
+                            </Tooltip>
+                            <input
+                              value={draftBasePrice}
+                              onChange={(e) => setDraftBasePrice(e.target.value)}
+                              inputMode="decimal"
+                              placeholder="1"
+                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                            />
+                          </label>
+                          <Tooltip content="После внедрения рынка это значение будет стартовой/референсной ценой.">
+                            <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
+                          </Tooltip>
+                        </div>
                       </section>
                     )}
 
