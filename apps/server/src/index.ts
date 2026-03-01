@@ -22,8 +22,7 @@ import {
   type LoginPayload,
   type Order,
   type OrderDelta,
-  type PopulationCountrySummary,
-  type PopulationPop,
+  type ProvincePopulation,
   type ResourceTotals,
   type ServerStatus,
   type WorldBase,
@@ -277,8 +276,29 @@ const DEFAULT_MAX_ACTIVE_COLONIZATIONS = 3;
 const DEFAULT_COLONIZATION_POINTS_PER_TURN = 30;
 const COLONIZATION_GOAL = 100;
 const DEFAULT_PROVINCE_COLONIZATION_COST = 100;
-const DEFAULT_POPULATION_MAX_GROUPS_PER_PROVINCE = 25;
 const SETTINGS_MAX_NUMBER = 1_000_000_000_000;
+const POPULATION_MIN_TOTAL = 100;
+const POPULATION_DEFAULT_BASE_TOTAL = 10_000;
+const POPULATION_BIRTH_RATE = 0.012;
+const POPULATION_DEATH_RATE = 0.008;
+
+type PopulationDimensionKey = "culturePct" | "ideologyPct" | "religionPct" | "racePct" | "professionPct";
+
+type PopulationDomainKeys = {
+  culturePct: string[];
+  ideologyPct: string[];
+  religionPct: string[];
+  racePct: string[];
+  professionPct: string[];
+};
+
+const POPULATION_FALLBACK_KEY_BY_DIMENSION: Record<PopulationDimensionKey, string> = {
+  culturePct: "culture:default",
+  ideologyPct: "ideology:default",
+  religionPct: "religion:default",
+  racePct: "race:default",
+  professionPct: "profession:default",
+};
 
 function invalidateCountryQueryCache(): void {
   countryQueryCache.clear();
@@ -366,11 +386,6 @@ type GameSettings = {
       sections: Array<{ title: string; paragraphs: string[] }>;
     }>;
   };
-  population: {
-    nextPopId: number;
-    maxGroupsPerProvince: number;
-    pops: PopulationPop[];
-  };
   economy: {
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
@@ -453,6 +468,273 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
 
 function normalizeContentRaces(input: unknown): GameSettings["content"]["races"] {
   return normalizeContentCultures(input);
+}
+
+function hashStringToUInt32(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function normalizePercentageMap(input: unknown, allowedKeys: string[], fallbackKey: string): Record<string, number> {
+  const fallback = fallbackKey.trim() || "default";
+  const normalizedKeys = [...new Set(allowedKeys.map((key) => key.trim()).filter(Boolean))];
+  const keys = normalizedKeys.length > 0 ? normalizedKeys : [fallback];
+  const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const rawByKey = new Map<string, number>();
+  let total = 0;
+
+  for (const key of keys) {
+    const raw = source[key];
+    const value = typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 0;
+    rawByKey.set(key, value);
+    total += value;
+  }
+
+  if (total <= 0) {
+    return { [keys[0]]: 100 };
+  }
+
+  const unitsByKey = new Map<string, number>();
+  const fractional: Array<{ key: string; remainder: number }> = [];
+  let usedUnits = 0;
+  for (const key of keys) {
+    const scaled = (rawByKey.get(key) ?? 0) * 10000 / total;
+    const baseUnits = Math.floor(scaled);
+    unitsByKey.set(key, baseUnits);
+    usedUnits += baseUnits;
+    fractional.push({ key, remainder: scaled - baseUnits });
+  }
+
+  fractional.sort((a, b) => b.remainder - a.remainder || a.key.localeCompare(b.key));
+  let remainingUnits = 10000 - usedUnits;
+  let index = 0;
+  while (remainingUnits > 0 && fractional.length > 0) {
+    const row = fractional[index % fractional.length];
+    unitsByKey.set(row.key, (unitsByKey.get(row.key) ?? 0) + 1);
+    remainingUnits -= 1;
+    index += 1;
+  }
+
+  const result: Record<string, number> = {};
+  for (const key of keys) {
+    const units = unitsByKey.get(key) ?? 0;
+    if (units <= 0) continue;
+    result[key] = units / 100;
+  }
+  return Object.keys(result).length > 0 ? result : { [keys[0]]: 100 };
+}
+
+function getPopulationDomainKeys(): PopulationDomainKeys {
+  return {
+    culturePct: gameSettings.content.cultures.map((entry) => entry.id),
+    ideologyPct: gameSettings.content.ideologies.map((entry) => entry.id),
+    religionPct: gameSettings.content.religions.map((entry) => entry.id),
+    racePct: gameSettings.content.races.map((entry) => entry.id),
+    professionPct: gameSettings.content.professions.map((entry) => entry.id),
+  };
+}
+
+function buildDeterministicPctMap(keys: string[], seed: string, fallbackKey: string): Record<string, number> {
+  if (keys.length <= 1) {
+    const key = (keys[0] ?? fallbackKey).trim() || fallbackKey;
+    return { [key]: 100 };
+  }
+  const weighted: Record<string, number> = {};
+  for (const key of keys) {
+    weighted[key] = (hashStringToUInt32(`${seed}:${key}`) % 1000) + 1;
+  }
+  return normalizePercentageMap(weighted, keys, fallbackKey);
+}
+
+function buildRandomPctMap(keys: string[], fallbackKey: string): Record<string, number> {
+  const sourceKeys = keys.length > 0 ? keys : [fallbackKey];
+  const weights: Record<string, number> = {};
+  for (const key of sourceKeys) {
+    weights[key] = Math.random() * 100 + 1;
+  }
+  return normalizePercentageMap(weights, sourceKeys, fallbackKey);
+}
+
+function isEqualPercentageMap(prevValue: Record<string, number> | undefined, nextValue: Record<string, number>): boolean {
+  if (!prevValue) {
+    return false;
+  }
+  const prevKeys = Object.keys(prevValue);
+  const nextKeys = Object.keys(nextValue);
+  if (prevKeys.length !== nextKeys.length) {
+    return false;
+  }
+  for (const key of nextKeys) {
+    if ((prevValue[key] ?? Number.NaN) !== nextValue[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isEqualProvincePopulation(prevValue: ProvincePopulation | undefined, nextValue: ProvincePopulation): boolean {
+  if (!prevValue) {
+    return false;
+  }
+  return (
+    prevValue.populationTotal === nextValue.populationTotal &&
+    isEqualPercentageMap(prevValue.culturePct, nextValue.culturePct) &&
+    isEqualPercentageMap(prevValue.ideologyPct, nextValue.ideologyPct) &&
+    isEqualPercentageMap(prevValue.religionPct, nextValue.religionPct) &&
+    isEqualPercentageMap(prevValue.racePct, nextValue.racePct) &&
+    isEqualPercentageMap(prevValue.professionPct, nextValue.professionPct)
+  );
+}
+
+function buildDefaultProvincePopulation(provinceId: string, domains: PopulationDomainKeys): ProvincePopulation {
+  const areaKm2 = Math.max(1, adm1ProvinceAreaById.get(provinceId) ?? 1_000);
+  const seed = hashStringToUInt32(provinceId);
+  const areaBasedPopulation = Math.floor(areaKm2 * 120);
+  const populationTotal = Math.max(POPULATION_MIN_TOTAL, areaBasedPopulation + POPULATION_DEFAULT_BASE_TOTAL + (seed % 5000));
+  return {
+    populationTotal,
+    culturePct: buildDeterministicPctMap(
+      domains.culturePct,
+      `${provinceId}:culture`,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct,
+    ),
+    ideologyPct: buildDeterministicPctMap(
+      domains.ideologyPct,
+      `${provinceId}:ideology`,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct,
+    ),
+    religionPct: buildDeterministicPctMap(
+      domains.religionPct,
+      `${provinceId}:religion`,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct,
+    ),
+    racePct: buildDeterministicPctMap(
+      domains.racePct,
+      `${provinceId}:race`,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct,
+    ),
+    professionPct: buildDeterministicPctMap(
+      domains.professionPct,
+      `${provinceId}:profession`,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct,
+    ),
+  };
+}
+
+function normalizeProvincePopulation(
+  input: unknown,
+  provinceId: string,
+  domains: PopulationDomainKeys,
+): ProvincePopulation {
+  const fallback = buildDefaultProvincePopulation(provinceId, domains);
+  if (!input || typeof input !== "object") {
+    return fallback;
+  }
+  const row = input as Partial<ProvincePopulation>;
+  const rawTotal = row.populationTotal;
+  const populationTotal =
+    typeof rawTotal === "number" && Number.isFinite(rawTotal)
+      ? (rawTotal <= 0 ? 0 : Math.max(POPULATION_MIN_TOTAL, Math.floor(rawTotal)))
+      : fallback.populationTotal;
+  return {
+    populationTotal,
+    culturePct: normalizePercentageMap(
+      row.culturePct,
+      domains.culturePct,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct,
+    ),
+    ideologyPct: normalizePercentageMap(
+      row.ideologyPct,
+      domains.ideologyPct,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct,
+    ),
+    religionPct: normalizePercentageMap(
+      row.religionPct,
+      domains.religionPct,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct,
+    ),
+    racePct: normalizePercentageMap(row.racePct, domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct),
+    professionPct: normalizePercentageMap(
+      row.professionPct,
+      domains.professionPct,
+      POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct,
+    ),
+  };
+}
+
+function buildRandomProvincePopulation(
+  provinceId: string,
+  domains: PopulationDomainKeys,
+  populationTotalOverride?: number,
+): ProvincePopulation {
+  const fallback = buildDefaultProvincePopulation(provinceId, domains);
+  const total =
+    typeof populationTotalOverride === "number" && Number.isFinite(populationTotalOverride)
+      ? Math.max(0, Math.floor(populationTotalOverride))
+      : fallback.populationTotal;
+  return {
+    populationTotal: total,
+    culturePct: buildRandomPctMap(domains.culturePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct),
+    ideologyPct: buildRandomPctMap(domains.ideologyPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct),
+    religionPct: buildRandomPctMap(domains.religionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct),
+    racePct: buildRandomPctMap(domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct),
+    professionPct: buildRandomPctMap(domains.professionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct),
+  };
+}
+
+function normalizeProvincePopulationMap(input: unknown): Record<string, ProvincePopulation> {
+  const domains = getPopulationDomainKeys();
+  const normalized: Record<string, ProvincePopulation> = {};
+  if (input && typeof input === "object") {
+    for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
+      normalized[provinceId] = normalizeProvincePopulation(raw, provinceId, domains);
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (!normalized[province.id]) {
+      normalized[province.id] = buildDefaultProvincePopulation(province.id, domains);
+    }
+  }
+  return normalized;
+}
+
+function resolvePopulationTurnForProvince(currentPopulation: ProvincePopulation): ProvincePopulation {
+  if (currentPopulation.populationTotal <= 0) {
+    return currentPopulation;
+  }
+  const growthRate = POPULATION_BIRTH_RATE - POPULATION_DEATH_RATE;
+  const populationTotal = Math.max(
+    POPULATION_MIN_TOTAL,
+    Math.floor(currentPopulation.populationTotal * Math.max(0.8, 1 + growthRate)),
+  );
+  return {
+    populationTotal,
+    culturePct: currentPopulation.culturePct,
+    ideologyPct: currentPopulation.ideologyPct,
+    religionPct: currentPopulation.religionPct,
+    racePct: currentPopulation.racePct,
+    professionPct: currentPopulation.professionPct,
+  };
+}
+
+function resolvePopulationTurn(): void {
+  const domains = getPopulationDomainKeys();
+  for (const province of adm1ProvinceIndex) {
+    const provinceId = province.id;
+    const currentPopulation = normalizeProvincePopulation(
+      worldBase.provincePopulationByProvince[provinceId],
+      provinceId,
+      domains,
+    );
+    const nextPopulation = resolvePopulationTurnForProvince(currentPopulation);
+    if (!isEqualProvincePopulation(worldBase.provincePopulationByProvince[provinceId], nextPopulation)) {
+      worldBase.provincePopulationByProvince[provinceId] = nextPopulation;
+    }
+  }
 }
 
 function defaultCivilopediaEntries(): GameSettings["civilopedia"]["entries"] {
@@ -636,57 +918,6 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
   return [...base];
 }
 
-function normalizePopulationPops(input: unknown, startId = 1): { pops: PopulationPop[]; nextPopId: number } {
-  if (!Array.isArray(input)) {
-    return { pops: [], nextPopId: Math.max(1, Math.floor(startId)) };
-  }
-  const next: PopulationPop[] = [];
-  const seen = new Set<number>();
-  let nextPopId = Math.max(1, Math.floor(startId));
-  for (const raw of input) {
-    if (!raw || typeof raw !== "object") continue;
-    const row = raw as Record<string, unknown>;
-    const rawId = row.id;
-    const parsedId =
-      typeof rawId === "number" && Number.isFinite(rawId)
-        ? Math.max(1, Math.floor(rawId))
-        : typeof rawId === "string" && /^\d+$/.test(rawId.trim())
-          ? Math.max(1, Number(rawId.trim()))
-          : nextPopId;
-    const id = parsedId;
-    if (seen.has(id)) continue;
-    const countryId = typeof row.countryId === "string" && row.countryId.trim() ? row.countryId.trim() : "";
-    const provinceId = typeof row.provinceId === "string" && row.provinceId.trim() ? row.provinceId.trim() : "";
-    const cultureId = typeof row.cultureId === "string" && row.cultureId.trim() ? row.cultureId.trim() : "";
-    const religionId = typeof row.religionId === "string" && row.religionId.trim() ? row.religionId.trim() : "";
-    const raceId = typeof row.raceId === "string" && row.raceId.trim() ? row.raceId.trim() : "";
-    if (!countryId || !provinceId || !cultureId || !religionId || !raceId) continue;
-    const size = typeof row.size === "number" && Number.isFinite(row.size) ? Math.max(1, Math.floor(row.size)) : 1;
-    const createdAt =
-      typeof row.createdAt === "string" && row.createdAt.trim()
-        ? row.createdAt
-        : new Date().toISOString();
-    const updatedAt =
-      typeof row.updatedAt === "string" && row.updatedAt.trim()
-        ? row.updatedAt
-        : createdAt;
-    next.push({
-      id,
-      countryId,
-      provinceId,
-      size,
-      cultureId,
-      religionId,
-      raceId,
-      createdAt,
-      updatedAt,
-    });
-    seen.add(id);
-    nextPopId = Math.max(nextPopId, id + 1);
-  }
-  return { pops: next, nextPopId };
-}
-
 const defaultGameSettings = (): GameSettings => ({
   content: {
     races: [],
@@ -699,11 +930,6 @@ const defaultGameSettings = (): GameSettings => ({
   civilopedia: {
     categories: defaultCivilopediaCategories(),
     entries: defaultCivilopediaEntries(),
-  },
-  population: {
-    nextPopId: 1,
-    maxGroupsPerProvince: DEFAULT_POPULATION_MAX_GROUPS_PER_PROVINCE,
-    pops: [],
   },
   economy: {
     baseDucatsPerTurn: 5,
@@ -747,6 +973,11 @@ const defaultGameSettings = (): GameSettings => ({
 });
 
 function defaultWorldBase(currentTurnId: number): WorldBase {
+  const domains = getPopulationDomainKeys();
+  const provincePopulationByProvince: Record<string, ProvincePopulation> = {};
+  for (const province of adm1ProvinceIndex) {
+    provincePopulationByProvince[province.id] = buildDefaultProvincePopulation(province.id, domains);
+  }
   return {
     turnId: currentTurnId,
     resourcesByCountry: {
@@ -761,6 +992,7 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
+    provincePopulationByProvince,
   };
 }
 
@@ -768,81 +1000,6 @@ let gameSettings: GameSettings = defaultGameSettings();
 let worldBase: WorldBase = defaultWorldBase(turnId);
 let currentTurnStartedAtMs = Date.now();
 let isResolvingTurnNow = false;
-const populationById = new Map<number, PopulationPop>();
-const populationPopIdsByCountry = new Map<string, Set<number>>();
-const populationPopIdsByProvince = new Map<string, Set<number>>();
-const populationTotalSizeByCountry = new Map<string, number>();
-
-function indexPopulationPop(pop: PopulationPop): void {
-  populationById.set(pop.id, pop);
-  const byCountry = populationPopIdsByCountry.get(pop.countryId) ?? new Set<number>();
-  byCountry.add(pop.id);
-  populationPopIdsByCountry.set(pop.countryId, byCountry);
-  const byProvince = populationPopIdsByProvince.get(pop.provinceId) ?? new Set<number>();
-  byProvince.add(pop.id);
-  populationPopIdsByProvince.set(pop.provinceId, byProvince);
-  populationTotalSizeByCountry.set(
-    pop.countryId,
-    (populationTotalSizeByCountry.get(pop.countryId) ?? 0) + pop.size,
-  );
-}
-
-function unindexPopulationPop(pop: PopulationPop): void {
-  populationById.delete(pop.id);
-  const byCountry = populationPopIdsByCountry.get(pop.countryId);
-  if (byCountry) {
-    byCountry.delete(pop.id);
-    if (byCountry.size === 0) {
-      populationPopIdsByCountry.delete(pop.countryId);
-    }
-  }
-  const byProvince = populationPopIdsByProvince.get(pop.provinceId);
-  if (byProvince) {
-    byProvince.delete(pop.id);
-    if (byProvince.size === 0) {
-      populationPopIdsByProvince.delete(pop.provinceId);
-    }
-  }
-  const nextCountryTotal = (populationTotalSizeByCountry.get(pop.countryId) ?? 0) - pop.size;
-  if (nextCountryTotal <= 0) {
-    populationTotalSizeByCountry.delete(pop.countryId);
-  } else {
-    populationTotalSizeByCountry.set(pop.countryId, nextCountryTotal);
-  }
-}
-
-function rebuildPopulationIndexes(): void {
-  populationById.clear();
-  populationPopIdsByCountry.clear();
-  populationPopIdsByProvince.clear();
-  populationTotalSizeByCountry.clear();
-  for (const pop of gameSettings.population.pops) {
-    indexPopulationPop(pop);
-  }
-}
-
-function upsertPopulationPop(pop: PopulationPop): void {
-  const prev = populationById.get(pop.id);
-  if (prev) {
-    unindexPopulationPop(prev);
-  }
-  indexPopulationPop(pop);
-}
-
-function removePopulationPop(popId: number): PopulationPop | null {
-  const prev = populationById.get(popId);
-  if (!prev) return null;
-  unindexPopulationPop(prev);
-  return prev;
-}
-
-function replaceAllPopulationPops(pops: PopulationPop[]): void {
-  gameSettings.population.pops = pops;
-  gameSettings.population.nextPopId = pops.reduce((maxId, pop) => Math.max(maxId, pop.id + 1), 1);
-  rebuildPopulationIndexes();
-}
-
-rebuildPopulationIndexes();
 
 const persistedStatePath = resolve(__dirname, "../data/game-state.json");
 const GAME_STATE_ROW_ID = "primary";
@@ -885,12 +1042,6 @@ function parseAndApplyPersistentState(input: unknown): boolean {
   if (parsed.gameSettings && typeof parsed.gameSettings === "object") {
     const next = parsed.gameSettings as Partial<GameSettings>;
     const defaults = defaultGameSettings();
-    const normalizedPopulation = normalizePopulationPops(
-      (next as Partial<{ population?: { pops?: unknown } }>).population?.pops,
-      typeof (next as Partial<{ population?: { nextPopId?: unknown } }>).population?.nextPopId === "number"
-        ? Number((next as Partial<{ population?: { nextPopId?: unknown } }>).population?.nextPopId)
-        : defaults.population.nextPopId,
-    );
     const civilopediaEntries = normalizeCivilopediaEntries((next as Partial<{ civilopedia?: { entries?: unknown } }>).civilopedia?.entries);
     gameSettings = {
       content: {
@@ -904,14 +1055,6 @@ function parseAndApplyPersistentState(input: unknown): boolean {
       civilopedia: {
         categories: normalizeCivilopediaCategories((next as Partial<{ civilopedia?: { categories?: unknown } }>).civilopedia?.categories, civilopediaEntries),
         entries: civilopediaEntries,
-      },
-      population: {
-        nextPopId: normalizedPopulation.nextPopId,
-        maxGroupsPerProvince:
-          typeof next.population?.maxGroupsPerProvince === "number"
-            ? Math.max(1, Math.floor(next.population.maxGroupsPerProvince))
-            : defaults.population.maxGroupsPerProvince,
-        pops: normalizedPopulation.pops,
       },
       economy: {
         baseDucatsPerTurn:
@@ -1029,6 +1172,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         provinceColonizationByProvince: normalizeProvinceColonizationMap(
           (candidate as Partial<WorldBase> & { provinceColonizationByProvince?: unknown }).provinceColonizationByProvince,
         ),
+        provincePopulationByProvince: normalizeProvincePopulationMap(
+          (candidate as Partial<WorldBase> & { provincePopulationByProvince?: unknown }).provincePopulationByProvince,
+        ),
       };
     } else {
       worldBase = defaultWorldBase(turnId);
@@ -1087,7 +1233,6 @@ function parseAndApplyPersistentState(input: unknown): boolean {
 
   rebuildTurnOrderIndexes();
   rebuildEconomyTickCountryIndexFromWorldBase();
-  rebuildPopulationIndexes();
 
   return true;
 }
@@ -1808,6 +1953,7 @@ type WorldBaseSectionSnapshot = {
   provinceNameById?: WorldBase["provinceNameById"];
   colonyProgressByProvince?: WorldBase["colonyProgressByProvince"];
   provinceColonizationByProvince?: WorldBase["provinceColonizationByProvince"];
+  provincePopulationByProvince?: WorldBase["provincePopulationByProvince"];
 };
 
 function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
@@ -1830,6 +1976,9 @@ function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
   }
   if ((mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0) {
     snapshot.provinceColonizationByProvince = structuredClone(worldBase.provinceColonizationByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0) {
+    snapshot.provincePopulationByProvince = structuredClone(worldBase.provincePopulationByProvince);
   }
 
   return snapshot;
@@ -1920,6 +2069,7 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
   const provinceNameById: Record<string, string | null> = {};
   const colonyProgressByProvince: Record<string, Record<string, number> | null> = {};
   const provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null> = {};
+  const provincePopulationByProvince: Record<string, ProvincePopulation | null> = {};
 
   for (const key of new Set([...Object.keys(prev.resourcesByCountry), ...Object.keys(next.resourcesByCountry)])) {
     const prevValue = prev.resourcesByCountry[key];
@@ -1994,6 +2144,18 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
     }
   }
 
+  for (const key of new Set([...Object.keys(prev.provincePopulationByProvince), ...Object.keys(next.provincePopulationByProvince)])) {
+    const prevValue = prev.provincePopulationByProvince[key];
+    const nextValue = next.provincePopulationByProvince[key];
+    if (!nextValue) {
+      provincePopulationByProvince[key] = null;
+      continue;
+    }
+    if (!isEqualProvincePopulation(prevValue, nextValue)) {
+      provincePopulationByProvince[key] = nextValue;
+    }
+  }
+
   let mask = 0;
   const compact: Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> = { mask: 0 };
   if (Object.keys(resourcesByCountry).length > 0) {
@@ -2015,6 +2177,10 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
   if (Object.keys(provinceColonizationByProvince).length > 0) {
     mask |= WORLD_DELTA_MASK.provinceColonizationByProvince;
     compact.z = provinceColonizationByProvince;
+  }
+  if (Object.keys(provincePopulationByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provincePopulationByProvince;
+    compact.u = provincePopulationByProvince;
   }
   compact.mask = mask;
   return compact;
@@ -2043,6 +2209,10 @@ function toWorldBaseForDeltaDiff(previous: WorldBaseSectionSnapshot, next: World
       (previous.mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0 && previous.provinceColonizationByProvince
         ? previous.provinceColonizationByProvince
         : next.provinceColonizationByProvince,
+    provincePopulationByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0 && previous.provincePopulationByProvince
+        ? previous.provincePopulationByProvince
+        : next.provincePopulationByProvince,
   };
 }
 
@@ -2071,6 +2241,7 @@ function broadcastWorldDeltaFromSectionSnapshot(
     n: compact.n,
     p: compact.p,
     z: compact.z,
+    u: compact.u,
     rejectedOrders,
   };
   const baselinePayload = {
@@ -2083,6 +2254,7 @@ function broadcastWorldDeltaFromSectionSnapshot(
       provinceNameById: compact.n,
       colonyProgressByProvince: compact.p,
       provinceColonizationByProvince: compact.z,
+      provincePopulationByProvince: compact.u,
     },
     rejectedOrders,
   };
@@ -2199,7 +2371,8 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
   const previousWorldBase = cloneWorldBaseSectionSnapshot(
     WORLD_DELTA_MASK.resourcesByCountry |
       WORLD_DELTA_MASK.provinceOwner |
-      WORLD_DELTA_MASK.colonyProgressByProvince,
+      WORLD_DELTA_MASK.colonyProgressByProvince |
+      WORLD_DELTA_MASK.provincePopulationByProvince,
   );
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldDelta["rejectedOrders"] = [];
@@ -2355,6 +2528,8 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
     resource.ducats += gameSettings.economy.baseDucatsPerTurn;
     resource.gold += gameSettings.economy.baseGoldPerTurn;
   }
+
+  resolvePopulationTurn();
 
   turnId += 1;
   worldBase = {
@@ -2613,11 +2788,6 @@ const gameSettingsSchema = z.object({
       pointsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       pointsCostPer1000Km2: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
       ducatsCostPer1000Km2: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
-    })
-    .optional(),
-  population: z
-    .object({
-      maxGroupsPerProvince: z.coerce.number().int().min(1).max(200).optional(),
     })
     .optional(),
   customization: z
@@ -3142,15 +3312,6 @@ app.delete("/admin/content/entries/:kind/:entryId", async (req, res) => {
   if (index < 0) {
     return res.status(404).json({ error: "NOT_FOUND" });
   }
-  if (kind === "cultures" && gameSettings.population.pops.some((pop) => pop.cultureId === entryId)) {
-    return res.status(409).json({ error: "CONTENT_IN_USE_BY_POPULATION" });
-  }
-  if (kind === "religions" && gameSettings.population.pops.some((pop) => pop.religionId === entryId)) {
-    return res.status(409).json({ error: "CONTENT_IN_USE_BY_POPULATION" });
-  }
-  if (kind === "races" && gameSettings.population.pops.some((pop) => pop.raceId === entryId)) {
-    return res.status(409).json({ error: "CONTENT_IN_USE_BY_POPULATION" });
-  }
   const [removed] = items.splice(index, 1);
   if (removed?.logoUrl) {
     removeUploadedByUrl(removed.logoUrl);
@@ -3312,466 +3473,6 @@ app.delete("/admin/content/cultures/:cultureId", async (req, res) => {
   return res.json({ ok: true, cultures: gameSettings.content.cultures });
 });
 
-const populationListQuerySchema = z.object({
-  countryId: z.string().trim().min(1).max(120).optional(),
-  provinceId: z.string().trim().min(1).max(120).optional(),
-  limit: z.coerce.number().int().min(1).max(1000).optional(),
-  offset: z.coerce.number().int().min(0).max(1_000_000).optional(),
-});
-const populationCountryStatsQuerySchema = z.object({
-  countryId: z.string().trim().min(1).max(120).optional(),
-});
-
-const populationCreateSchema = z.object({
-  countryId: z.string().trim().min(1).max(120),
-  provinceId: z.string().trim().min(1).max(120),
-  size: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER),
-  cultureId: z.string().trim().min(1).max(120),
-  religionId: z.string().trim().min(1).max(120),
-  raceId: z.string().trim().min(1).max(120),
-});
-
-const populationUpdateSchema = z.object({
-  countryId: z.string().trim().min(1).max(120).optional(),
-  provinceId: z.string().trim().min(1).max(120).optional(),
-  size: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
-  cultureId: z.string().trim().min(1).max(120).optional(),
-  religionId: z.string().trim().min(1).max(120).optional(),
-  raceId: z.string().trim().min(1).max(120).optional(),
-});
-
-const populationGenerateSchema = z.object({
-  countryId: z.string().trim().min(1).max(120).optional(),
-  provinceId: z.string().trim().min(1).max(120).optional(),
-  count: z.coerce.number().int().min(1).max(5000).default(100),
-  minSize: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).default(100),
-  maxSize: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).default(2000),
-  cultureId: z.string().trim().min(1).max(120).optional(),
-  religionId: z.string().trim().min(1).max(120).optional(),
-  raceId: z.string().trim().min(1).max(120).optional(),
-});
-
-function hasCountryForPopulation(countryId: string): boolean {
-  return Boolean(worldBase.resourcesByCountry[countryId]);
-}
-
-function hasProvinceForPopulation(provinceId: string): boolean {
-  return adm1ProvinceAreaById.has(provinceId);
-}
-
-function hasCultureForPopulation(cultureId: string): boolean {
-  return gameSettings.content.cultures.some((item) => item.id === cultureId);
-}
-
-function hasReligionForPopulation(religionId: string): boolean {
-  return gameSettings.content.religions.some((item) => item.id === religionId);
-}
-
-function hasRaceForPopulation(raceId: string): boolean {
-  return gameSettings.content.races.some((item) => item.id === raceId);
-}
-
-function randomIntInclusive(min: number, max: number): number {
-  if (max <= min) return min;
-  return min + Math.floor(Math.random() * (max - min + 1));
-}
-
-function getPopulationSummary(): PopulationCountrySummary[] {
-  const summaries: PopulationCountrySummary[] = [];
-  for (const [countryId, totalSize] of populationTotalSizeByCountry.entries()) {
-    summaries.push({
-      countryId,
-      totalSize,
-      popCount: populationPopIdsByCountry.get(countryId)?.size ?? 0,
-    });
-  }
-  summaries.sort((a, b) => b.totalSize - a.totalSize || b.popCount - a.popCount || a.countryId.localeCompare(b.countryId));
-  return summaries;
-}
-
-function getCountryPopulationStats(countryId: string): {
-  countryId: string;
-  totalSize: number;
-  popCount: number;
-  byCulture: Array<{ id: string; popCount: number; totalSize: number }>;
-  byReligion: Array<{ id: string; popCount: number; totalSize: number }>;
-  byRace: Array<{ id: string; popCount: number; totalSize: number }>;
-  byProvince: Array<{ id: string; popCount: number; totalSize: number }>;
-} {
-  const topNLimit = Math.max(1, Math.floor(gameSettings.population.maxGroupsPerProvince || DEFAULT_POPULATION_MAX_GROUPS_PER_PROVINCE));
-  const applyTopNWithOther = (
-    rows: Array<{ id: string; popCount: number; totalSize: number }>,
-    otherId: string,
-  ): Array<{ id: string; popCount: number; totalSize: number }> => {
-    if (rows.length <= topNLimit) return rows;
-    const kept = rows.slice(0, topNLimit);
-    const folded = rows.slice(topNLimit).reduce(
-      (acc, row) => {
-        acc.popCount += row.popCount;
-        acc.totalSize += row.totalSize;
-        return acc;
-      },
-      { id: otherId, popCount: 0, totalSize: 0 },
-    );
-    if (folded.popCount > 0 || folded.totalSize > 0) {
-      kept.push(folded);
-    }
-    return kept;
-  };
-  const ids = populationPopIdsByCountry.get(countryId) ?? new Set<number>();
-  const aggregate = <K extends string>(rows: Map<K, { popCount: number; totalSize: number }>) =>
-    [...rows.entries()]
-      .map(([id, value]) => ({ id, ...value }))
-      .sort((a, b) => b.totalSize - a.totalSize || b.popCount - a.popCount || a.id.localeCompare(b.id));
-  const byCulture = new Map<string, { popCount: number; totalSize: number }>();
-  const byReligion = new Map<string, { popCount: number; totalSize: number }>();
-  const byRace = new Map<string, { popCount: number; totalSize: number }>();
-  const byProvince = new Map<string, { popCount: number; totalSize: number }>();
-  let popCount = 0;
-  let totalSize = 0;
-
-  for (const popId of ids) {
-    const pop = populationById.get(popId);
-    if (!pop) continue;
-    popCount += 1;
-    totalSize += pop.size;
-
-    const add = (map: Map<string, { popCount: number; totalSize: number }>, key: string) => {
-      const current = map.get(key) ?? { popCount: 0, totalSize: 0 };
-      current.popCount += 1;
-      current.totalSize += pop.size;
-      map.set(key, current);
-    };
-    add(byCulture, pop.cultureId);
-    add(byReligion, pop.religionId);
-    add(byRace, pop.raceId);
-    add(byProvince, pop.provinceId);
-  }
-
-  return {
-    countryId,
-    totalSize,
-    popCount,
-    byCulture: applyTopNWithOther(aggregate(byCulture), "__other_cultures__"),
-    byReligion: applyTopNWithOther(aggregate(byReligion), "__other_religions__"),
-    byRace: applyTopNWithOther(aggregate(byRace), "__other_races__"),
-    byProvince: applyTopNWithOther(aggregate(byProvince), "__other_provinces__"),
-  };
-}
-
-function readPopulationRows(params: {
-  countryId?: string;
-  provinceId?: string;
-  offset: number;
-  limit: number;
-}): { total: number; items: PopulationPop[] } {
-  const byCountry = params.countryId ? populationPopIdsByCountry.get(params.countryId) ?? null : null;
-  const byProvince = params.provinceId ? populationPopIdsByProvince.get(params.provinceId) ?? null : null;
-
-  let candidateIds: number[];
-  if (byCountry && byProvince) {
-    const [small, large] = byCountry.size <= byProvince.size ? [byCountry, byProvince] : [byProvince, byCountry];
-    candidateIds = [];
-    for (const id of small) {
-      if (large.has(id)) candidateIds.push(id);
-    }
-  } else if (byCountry) {
-    candidateIds = [...byCountry];
-  } else if (byProvince) {
-    candidateIds = [...byProvince];
-  } else {
-    candidateIds = gameSettings.population.pops.map((pop) => pop.id);
-  }
-
-  const total = candidateIds.length;
-  if (total === 0) {
-    return { total: 0, items: [] };
-  }
-
-  const start = Math.max(0, Math.min(params.offset, total));
-  const end = Math.min(total, start + params.limit);
-  const items: PopulationPop[] = [];
-  for (let i = start; i < end; i += 1) {
-    const id = candidateIds[i];
-    const pop = populationById.get(id);
-    if (pop) items.push(pop);
-  }
-  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  return { total, items };
-}
-
-app.get("/population/pops", (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth) {
-    return res.status(401).json({ error: "UNAUTHORIZED" });
-  }
-  const parsed = populationListQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "INVALID_QUERY", issues: parsed.error.issues });
-  }
-  const { countryId, provinceId, limit = 200, offset = 0 } = parsed.data;
-  const result = readPopulationRows({ countryId, provinceId, limit, offset });
-  return res.json({
-    total: result.total,
-    items: result.items,
-    summaryByCountry: getPopulationSummary(),
-  });
-});
-
-app.get("/population/country-stats", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth) {
-    return res.status(401).json({ error: "UNAUTHORIZED" });
-  }
-  const parsed = populationCountryStatsQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "INVALID_QUERY", issues: parsed.error.issues });
-  }
-  const requestedCountryId = parsed.data.countryId?.trim();
-  const isAdmin = await isAdminCountry(auth.countryId);
-  const countryId = requestedCountryId || auth.countryId;
-  if (countryId !== auth.countryId && !isAdmin) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-  if (!hasCountryForPopulation(countryId)) {
-    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
-  }
-  return res.json(getCountryPopulationStats(countryId));
-});
-
-app.get("/admin/population/pops", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth || !(await isAdminCountry(auth.countryId))) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-  const parsed = populationListQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "INVALID_QUERY", issues: parsed.error.issues });
-  }
-  const { countryId, provinceId, limit = 500, offset = 0 } = parsed.data;
-  const result = readPopulationRows({ countryId, provinceId, limit, offset });
-  return res.json({
-    total: result.total,
-    items: result.items,
-    summaryByCountry: getPopulationSummary(),
-  });
-});
-
-app.post("/admin/population/pops", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth || !(await isAdminCountry(auth.countryId))) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-  const parsed = populationCreateSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
-  }
-
-  if (!hasCountryForPopulation(parsed.data.countryId)) {
-    return res.status(400).json({ error: "POP_COUNTRY_NOT_FOUND" });
-  }
-  if (!hasProvinceForPopulation(parsed.data.provinceId)) {
-    return res.status(400).json({ error: "POP_PROVINCE_NOT_FOUND" });
-  }
-  if (!hasCultureForPopulation(parsed.data.cultureId)) {
-    return res.status(400).json({ error: "POP_CULTURE_NOT_FOUND" });
-  }
-  if (!hasReligionForPopulation(parsed.data.religionId)) {
-    return res.status(400).json({ error: "POP_RELIGION_NOT_FOUND" });
-  }
-  if (!hasRaceForPopulation(parsed.data.raceId)) {
-    return res.status(400).json({ error: "POP_RACE_NOT_FOUND" });
-  }
-
-  const now = new Date().toISOString();
-  const pop: PopulationPop = {
-    id: gameSettings.population.nextPopId++,
-    countryId: parsed.data.countryId,
-    provinceId: parsed.data.provinceId,
-    size: Math.max(1, Math.floor(parsed.data.size)),
-    cultureId: parsed.data.cultureId,
-    religionId: parsed.data.religionId,
-    raceId: parsed.data.raceId,
-    createdAt: now,
-    updatedAt: now,
-  };
-  gameSettings.population.pops.unshift(pop);
-  upsertPopulationPop(pop);
-  savePersistentState();
-  return res.json({ item: pop, total: gameSettings.population.pops.length, summaryByCountry: getPopulationSummary() });
-});
-
-app.patch("/admin/population/pops/:popId", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth || !(await isAdminCountry(auth.countryId))) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-  const parsed = populationUpdateSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
-  }
-  if (Object.keys(parsed.data).length === 0) {
-    return res.status(400).json({ error: "EMPTY_PAYLOAD" });
-  }
-  const popId = Number(req.params.popId);
-  if (!Number.isInteger(popId) || popId < 1) {
-    return res.status(400).json({ error: "INVALID_POP_ID" });
-  }
-  const popIndex = gameSettings.population.pops.findIndex((item) => item.id === popId);
-  if (popIndex < 0) {
-    return res.status(404).json({ error: "POP_NOT_FOUND" });
-  }
-  const current = gameSettings.population.pops[popIndex];
-  const next: PopulationPop = {
-    ...current,
-    countryId: parsed.data.countryId ?? current.countryId,
-    provinceId: parsed.data.provinceId ?? current.provinceId,
-    size: parsed.data.size != null ? Math.max(1, Math.floor(parsed.data.size)) : current.size,
-    cultureId: parsed.data.cultureId ?? current.cultureId,
-    religionId: parsed.data.religionId ?? current.religionId,
-    raceId: parsed.data.raceId ?? current.raceId,
-    updatedAt: new Date().toISOString(),
-  };
-
-  if (!hasCountryForPopulation(next.countryId)) {
-    return res.status(400).json({ error: "POP_COUNTRY_NOT_FOUND" });
-  }
-  if (!hasProvinceForPopulation(next.provinceId)) {
-    return res.status(400).json({ error: "POP_PROVINCE_NOT_FOUND" });
-  }
-  if (!hasCultureForPopulation(next.cultureId)) {
-    return res.status(400).json({ error: "POP_CULTURE_NOT_FOUND" });
-  }
-  if (!hasReligionForPopulation(next.religionId)) {
-    return res.status(400).json({ error: "POP_RELIGION_NOT_FOUND" });
-  }
-  if (!hasRaceForPopulation(next.raceId)) {
-    return res.status(400).json({ error: "POP_RACE_NOT_FOUND" });
-  }
-
-  gameSettings.population.pops[popIndex] = next;
-  upsertPopulationPop(next);
-  savePersistentState();
-  return res.json({ item: next, total: gameSettings.population.pops.length, summaryByCountry: getPopulationSummary() });
-});
-
-app.delete("/admin/population/pops/:popId", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth || !(await isAdminCountry(auth.countryId))) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-  const popId = Number(req.params.popId);
-  if (!Number.isInteger(popId) || popId < 1) {
-    return res.status(400).json({ error: "INVALID_POP_ID" });
-  }
-  const popIndex = gameSettings.population.pops.findIndex((item) => item.id === popId);
-  if (popIndex < 0) {
-    return res.status(404).json({ error: "POP_NOT_FOUND" });
-  }
-  gameSettings.population.pops.splice(popIndex, 1);
-  removePopulationPop(popId);
-  savePersistentState();
-  return res.json({ ok: true, total: gameSettings.population.pops.length, summaryByCountry: getPopulationSummary() });
-});
-
-app.post("/admin/population/generate", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth || !(await isAdminCountry(auth.countryId))) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-  const parsed = populationGenerateSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
-  }
-
-  const availableCultures = gameSettings.content.cultures.map((item) => item.id);
-  const availableReligions = gameSettings.content.religions.map((item) => item.id);
-  const availableRaces = gameSettings.content.races.map((item) => item.id);
-  if (availableCultures.length === 0 || availableReligions.length === 0 || availableRaces.length === 0) {
-    return res.status(400).json({ error: "POP_GENERATION_REQUIRES_CONTENT" });
-  }
-
-  const countryPool = parsed.data.countryId
-    ? [parsed.data.countryId]
-    : Object.keys(worldBase.resourcesByCountry);
-  const provincePool = parsed.data.provinceId
-    ? [parsed.data.provinceId]
-    : adm1ProvinceIndex.map((item) => item.id);
-  if (countryPool.length === 0 || provincePool.length === 0) {
-    return res.status(400).json({ error: "POP_GENERATION_EMPTY_WORLD" });
-  }
-  if (parsed.data.countryId && !hasCountryForPopulation(parsed.data.countryId)) {
-    return res.status(400).json({ error: "POP_COUNTRY_NOT_FOUND" });
-  }
-  if (parsed.data.provinceId && !hasProvinceForPopulation(parsed.data.provinceId)) {
-    return res.status(400).json({ error: "POP_PROVINCE_NOT_FOUND" });
-  }
-  if (parsed.data.cultureId && !hasCultureForPopulation(parsed.data.cultureId)) {
-    return res.status(400).json({ error: "POP_CULTURE_NOT_FOUND" });
-  }
-  if (parsed.data.religionId && !hasReligionForPopulation(parsed.data.religionId)) {
-    return res.status(400).json({ error: "POP_RELIGION_NOT_FOUND" });
-  }
-  if (parsed.data.raceId && !hasRaceForPopulation(parsed.data.raceId)) {
-    return res.status(400).json({ error: "POP_RACE_NOT_FOUND" });
-  }
-
-  const minSize = Math.min(parsed.data.minSize, parsed.data.maxSize);
-  const maxSize = Math.max(parsed.data.minSize, parsed.data.maxSize);
-  const nowIso = new Date().toISOString();
-  const generated: PopulationPop[] = [];
-  for (let i = 0; i < parsed.data.count; i += 1) {
-    const pop: PopulationPop = {
-      id: gameSettings.population.nextPopId++,
-      countryId: countryPool[randomIntInclusive(0, countryPool.length - 1)]!,
-      provinceId: provincePool[randomIntInclusive(0, provincePool.length - 1)]!,
-      size: randomIntInclusive(minSize, maxSize),
-      cultureId: parsed.data.cultureId ?? availableCultures[randomIntInclusive(0, availableCultures.length - 1)]!,
-      religionId: parsed.data.religionId ?? availableReligions[randomIntInclusive(0, availableReligions.length - 1)]!,
-      raceId: parsed.data.raceId ?? availableRaces[randomIntInclusive(0, availableRaces.length - 1)]!,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    };
-    generated.push(pop);
-  }
-
-  replaceAllPopulationPops([...generated, ...gameSettings.population.pops]);
-  savePersistentState();
-  return res.json({
-    createdCount: generated.length,
-    total: gameSettings.population.pops.length,
-    summaryByCountry: getPopulationSummary(),
-  });
-});
-
-app.post("/admin/population/clear", async (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth || !(await isAdminCountry(auth.countryId))) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
-
-  const removedCount = gameSettings.population.pops.length;
-  replaceAllPopulationPops([]);
-  savePersistentState();
-  return res.json({
-    ok: true,
-    removedCount,
-    total: gameSettings.population.pops.length,
-    summaryByCountry: getPopulationSummary(),
-  });
-});
-
-app.get("/population/summary", (req, res) => {
-  const auth = parseAuthHeader(req);
-  if (!auth) {
-    return res.status(401).json({ error: "UNAUTHORIZED" });
-  }
-  return res.json({
-    totalPops: gameSettings.population.pops.length,
-    summaryByCountry: getPopulationSummary(),
-  });
-});
-
 app.get("/admin/game-settings", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth || !(await isAdminCountry(auth.countryId))) {
@@ -3852,13 +3553,6 @@ app.patch("/admin/game-settings", async (req, res) => {
     }
   }
 
-  const nextPopulation = parsed.data.population;
-  if (nextPopulation) {
-    if (typeof nextPopulation.maxGroupsPerProvince === "number") {
-      gameSettings.population.maxGroupsPerProvince = nextPopulation.maxGroupsPerProvince;
-    }
-  }
-
   const nextRegistration = parsed.data.registration;
   if (nextRegistration) {
     if (typeof nextRegistration.requireAdminApproval === "boolean") {
@@ -3913,7 +3607,6 @@ app.patch("/admin/game-settings", async (req, res) => {
   const changedSections = [
     parsed.data.economy ? "экономика" : null,
     parsed.data.colonization ? "колонизация" : null,
-    parsed.data.population ? "население" : null,
     parsed.data.customization ? "кастомизация" : null,
     parsed.data.eventLog ? "журнал событий" : null,
     parsed.data.turnTimer ? "таймер хода" : null,
@@ -4169,6 +3862,68 @@ const adminProvinceColonizationSchema = z.object({
   resetColonizationCostToAuto: z.boolean().optional(),
 });
 
+const populationScopeSchema = z.enum(["province", "country", "world"]);
+const populationBreakdownSchema = z.record(z.string().min(1), z.coerce.number().min(0)).optional();
+
+const adminPopulationGenerateSchema = z.object({
+  scope: populationScopeSchema,
+  provinceId: z.string().min(1).optional(),
+  countryId: z.string().min(1).optional(),
+  strategy: z.enum(["random", "custom"]),
+  populationTotal: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+  culturePct: populationBreakdownSchema,
+  ideologyPct: populationBreakdownSchema,
+  religionPct: populationBreakdownSchema,
+  racePct: populationBreakdownSchema,
+  professionPct: populationBreakdownSchema,
+});
+
+const adminPopulationUpdateProvinceSchema = z.object({
+  populationTotal: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+  culturePct: populationBreakdownSchema,
+  ideologyPct: populationBreakdownSchema,
+  religionPct: populationBreakdownSchema,
+  racePct: populationBreakdownSchema,
+  professionPct: populationBreakdownSchema,
+});
+
+const adminPopulationClearSchema = z.object({
+  scope: populationScopeSchema,
+  provinceId: z.string().min(1).optional(),
+  countryId: z.string().min(1).optional(),
+});
+
+function resolvePopulationTargetProvinceIds(
+  scope: z.infer<typeof populationScopeSchema>,
+  params: { provinceId?: string; countryId?: string },
+): string[] {
+  if (scope === "world") {
+    return adm1ProvinceIndex.map((province) => province.id);
+  }
+  if (scope === "province") {
+    const provinceId = params.provinceId?.trim();
+    if (!provinceId) {
+      throw new Error("PROVINCE_ID_REQUIRED");
+    }
+    const exists = adm1ProvinceIndex.some((province) => province.id === provinceId);
+    if (!exists) {
+      throw new Error("PROVINCE_NOT_FOUND");
+    }
+    return [provinceId];
+  }
+  const countryId = params.countryId?.trim();
+  if (!countryId) {
+    throw new Error("COUNTRY_ID_REQUIRED");
+  }
+  const provinceIds = adm1ProvinceIndex
+    .map((province) => province.id)
+    .filter((provinceId) => worldBase.provinceOwner[provinceId] === countryId);
+  if (provinceIds.length === 0) {
+    throw new Error("COUNTRY_HAS_NO_PROVINCES");
+  }
+  return provinceIds;
+}
+
 app.get("/admin/provinces", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth || !(await isAdminCountry(auth.countryId))) {
@@ -4196,6 +3951,7 @@ app.get("/admin/provinces", async (req, res) => {
     const provinceId = province.id;
     const provinceName = province.name;
     const cfg = getProvinceColonizationConfig(provinceId);
+    const population = worldBase.provincePopulationByProvince[provinceId] ?? null;
     return {
       id: provinceId,
       name: provinceName,
@@ -4205,6 +3961,7 @@ app.get("/admin/provinces", async (req, res) => {
       colonizationDisabled: cfg.disabled,
       manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
+      population,
     };
   });
 
@@ -4213,6 +3970,179 @@ app.get("/admin/provinces", async (req, res) => {
     total,
     offset,
     limit,
+  });
+});
+
+app.post("/admin/population/generate", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const parsed = adminPopulationGenerateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  let targetProvinceIds: string[] = [];
+  try {
+    targetProvinceIds = resolvePopulationTargetProvinceIds(parsed.data.scope, {
+      provinceId: parsed.data.provinceId,
+      countryId: parsed.data.countryId,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : "INVALID_SCOPE_TARGET" });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provincePopulationByProvince);
+  const domains = getPopulationDomainKeys();
+  let updatedCount = 0;
+  for (const provinceId of targetProvinceIds) {
+    const current = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
+    const next =
+      parsed.data.strategy === "random"
+        ? buildRandomProvincePopulation(provinceId, domains, parsed.data.populationTotal)
+        : {
+            populationTotal:
+              typeof parsed.data.populationTotal === "number"
+                ? Math.max(0, Math.floor(parsed.data.populationTotal))
+                : current.populationTotal,
+            culturePct:
+              parsed.data.culturePct != null
+                ? normalizePercentageMap(parsed.data.culturePct, domains.culturePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct)
+                : current.culturePct,
+            ideologyPct:
+              parsed.data.ideologyPct != null
+                ? normalizePercentageMap(parsed.data.ideologyPct, domains.ideologyPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct)
+                : current.ideologyPct,
+            religionPct:
+              parsed.data.religionPct != null
+                ? normalizePercentageMap(parsed.data.religionPct, domains.religionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct)
+                : current.religionPct,
+            racePct:
+              parsed.data.racePct != null
+                ? normalizePercentageMap(parsed.data.racePct, domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct)
+                : current.racePct,
+            professionPct:
+              parsed.data.professionPct != null
+                ? normalizePercentageMap(parsed.data.professionPct, domains.professionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct)
+                : current.professionPct,
+          };
+    if (!isEqualProvincePopulation(worldBase.provincePopulationByProvince[provinceId], next)) {
+      worldBase.provincePopulationByProvince[provinceId] = next;
+      updatedCount += 1;
+    }
+  }
+
+  savePersistentState();
+  if (updatedCount > 0) {
+    broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+  }
+  return res.json({ ok: true, updatedCount, scope: parsed.data.scope, strategy: parsed.data.strategy });
+});
+
+app.post("/admin/population/clear", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const parsed = adminPopulationClearSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  let targetProvinceIds: string[] = [];
+  try {
+    targetProvinceIds = resolvePopulationTargetProvinceIds(parsed.data.scope, {
+      provinceId: parsed.data.provinceId,
+      countryId: parsed.data.countryId,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : "INVALID_SCOPE_TARGET" });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provincePopulationByProvince);
+  const domains = getPopulationDomainKeys();
+  let updatedCount = 0;
+  for (const provinceId of targetProvinceIds) {
+    const current = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
+    const next: ProvincePopulation = {
+      populationTotal: 0,
+      culturePct: current.culturePct,
+      ideologyPct: current.ideologyPct,
+      religionPct: current.religionPct,
+      racePct: current.racePct,
+      professionPct: current.professionPct,
+    };
+    if (!isEqualProvincePopulation(worldBase.provincePopulationByProvince[provinceId], next)) {
+      worldBase.provincePopulationByProvince[provinceId] = next;
+      updatedCount += 1;
+    }
+  }
+
+  savePersistentState();
+  if (updatedCount > 0) {
+    broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+  }
+  return res.json({ ok: true, updatedCount, scope: parsed.data.scope });
+});
+
+app.patch("/admin/population/provinces/:provinceId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth || !(await isAdminCountry(auth.countryId))) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+
+  const provinceId = String(req.params.provinceId);
+  const provinceIndexEntry = adm1ProvinceIndex.find((f) => f.id === provinceId);
+  if (!provinceIndexEntry) {
+    return res.status(404).json({ error: "PROVINCE_NOT_FOUND" });
+  }
+
+  const parsed = adminPopulationUpdateProvinceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provincePopulationByProvince);
+  const domains = getPopulationDomainKeys();
+  const current = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
+  const next: ProvincePopulation = {
+    populationTotal:
+      typeof parsed.data.populationTotal === "number" ? Math.max(0, Math.floor(parsed.data.populationTotal)) : current.populationTotal,
+    culturePct:
+      parsed.data.culturePct != null
+        ? normalizePercentageMap(parsed.data.culturePct, domains.culturePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct)
+        : current.culturePct,
+    ideologyPct:
+      parsed.data.ideologyPct != null
+        ? normalizePercentageMap(parsed.data.ideologyPct, domains.ideologyPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct)
+        : current.ideologyPct,
+    religionPct:
+      parsed.data.religionPct != null
+        ? normalizePercentageMap(parsed.data.religionPct, domains.religionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct)
+        : current.religionPct,
+    racePct:
+      parsed.data.racePct != null
+        ? normalizePercentageMap(parsed.data.racePct, domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct)
+        : current.racePct,
+    professionPct:
+      parsed.data.professionPct != null
+        ? normalizePercentageMap(parsed.data.professionPct, domains.professionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct)
+        : current.professionPct,
+  };
+  worldBase.provincePopulationByProvince[provinceId] = next;
+
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+  return res.json({
+    province: {
+      id: provinceId,
+      name: provinceIndexEntry.name,
+      areaKm2: provinceIndexEntry.areaKm2,
+      population: worldBase.provincePopulationByProvince[provinceId],
+    },
   });
 });
 
@@ -4312,6 +4242,7 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
       colonizationDisabled: cfg.disabled,
       manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
+      population: worldBase.provincePopulationByProvince[provinceId] ?? null,
     },
   });
 });
@@ -4957,10 +4888,6 @@ app.patch("/admin/registrations/:countryId/review", async (req, res) => {
   invalidateCountryQueryCache();
 
   delete worldBase.resourcesByCountry[targetId];
-  if (populationPopIdsByCountry.has(targetId)) {
-    const left = gameSettings.population.pops.filter((pop) => pop.countryId !== targetId);
-    replaceAllPopulationPops(left);
-  }
   removeCountryFromEconomyTick(targetId);
   for (const [provinceId, ownerId] of Object.entries(worldBase.provinceOwner)) {
     if (ownerId === targetId) delete worldBase.provinceOwner[provinceId];

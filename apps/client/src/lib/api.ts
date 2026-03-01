@@ -1,4 +1,4 @@
-import type { Country, LoginPayload, PopulationCountrySummary, PopulationPop, ServerStatus, WorldBase, WsOutMessage } from "@arcanorum/shared";
+import type { Country, LoginPayload, ProvincePopulation, ServerStatus, WorldBase, WsOutMessage } from "@arcanorum/shared";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -15,17 +15,6 @@ export type ContentCulture = {
 };
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind = "cultures" | "religions" | "professions" | "ideologies" | "races";
-export type PopulationItem = PopulationPop;
-export type PopulationSummaryItem = PopulationCountrySummary;
-export type PopulationCountryStats = {
-  countryId: string;
-  totalSize: number;
-  popCount: number;
-  byCulture: Array<{ id: string; popCount: number; totalSize: number }>;
-  byReligion: Array<{ id: string; popCount: number; totalSize: number }>;
-  byRace: Array<{ id: string; popCount: number; totalSize: number }>;
-  byProvince: Array<{ id: string; popCount: number; totalSize: number }>;
-};
 
 
 function withAssetBase(url?: string | null): string | null | undefined {
@@ -205,172 +194,6 @@ export async function adminDeleteContentEntry(token: string, kind: ContentEntryK
   }
   const data = (await response.json()) as { items: ContentEntry[] };
   return { items: data.items.map(normalizeContentEntry) };
-}
-
-export async function fetchPopulation(
-  token: string,
-  query?: { countryId?: string; provinceId?: string; limit?: number; offset?: number },
-): Promise<{ total: number; items: PopulationItem[]; summaryByCountry: PopulationSummaryItem[] }> {
-  const params = new URLSearchParams();
-  if (query?.countryId) params.set("countryId", query.countryId);
-  if (query?.provinceId) params.set("provinceId", query.provinceId);
-  if (query?.limit != null) params.set("limit", String(query.limit));
-  if (query?.offset != null) params.set("offset", String(query.offset));
-  const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(`${API}/population/pops${suffix}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "POPULATION_FETCH_FAILED");
-  }
-  return (await response.json()) as {
-    total: number;
-    items: PopulationItem[];
-    summaryByCountry: PopulationSummaryItem[];
-  };
-}
-
-export async function adminFetchPopulation(
-  token: string,
-  query?: { countryId?: string; provinceId?: string; limit?: number; offset?: number },
-): Promise<{ total: number; items: PopulationItem[]; summaryByCountry: PopulationSummaryItem[] }> {
-  const params = new URLSearchParams();
-  if (query?.countryId) params.set("countryId", query.countryId);
-  if (query?.provinceId) params.set("provinceId", query.provinceId);
-  if (query?.limit != null) params.set("limit", String(query.limit));
-  if (query?.offset != null) params.set("offset", String(query.offset));
-  const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(`${API}/admin/population/pops${suffix}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "ADMIN_POPULATION_FETCH_FAILED");
-  }
-  return (await response.json()) as {
-    total: number;
-    items: PopulationItem[];
-    summaryByCountry: PopulationSummaryItem[];
-  };
-}
-
-export async function adminCreatePopulationPop(
-  token: string,
-  payload: {
-    countryId: string;
-    provinceId: string;
-    size: number;
-    cultureId: string;
-    religionId: string;
-    raceId: string;
-  },
-): Promise<{ item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] }> {
-  const response = await fetch(`${API}/admin/population/pops`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "ADMIN_POPULATION_CREATE_FAILED");
-  }
-  return (await response.json()) as { item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] };
-}
-
-export async function adminUpdatePopulationPop(
-  token: string,
-  popId: number,
-  payload: Partial<{
-    countryId: string;
-    provinceId: string;
-    size: number;
-    cultureId: string;
-    religionId: string;
-    raceId: string;
-  }>,
-): Promise<{ item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] }> {
-  const response = await fetch(`${API}/admin/population/pops/${encodeURIComponent(popId)}`, {
-    method: "PATCH",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "ADMIN_POPULATION_UPDATE_FAILED");
-  }
-  return (await response.json()) as { item: PopulationItem; total: number; summaryByCountry: PopulationSummaryItem[] };
-}
-
-export async function adminDeletePopulationPop(
-  token: string,
-  popId: number,
-): Promise<{ ok: true; total: number; summaryByCountry: PopulationSummaryItem[] }> {
-  const response = await fetch(`${API}/admin/population/pops/${encodeURIComponent(popId)}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "ADMIN_POPULATION_DELETE_FAILED");
-  }
-  return (await response.json()) as { ok: true; total: number; summaryByCountry: PopulationSummaryItem[] };
-}
-
-export async function adminGeneratePopulation(
-  token: string,
-  payload: Partial<{
-    countryId: string;
-    provinceId: string;
-    count: number;
-    minSize: number;
-    maxSize: number;
-    cultureId: string;
-    religionId: string;
-    raceId: string;
-  }>,
-): Promise<{ createdCount: number; total: number; summaryByCountry: PopulationSummaryItem[] }> {
-  const response = await fetch(`${API}/admin/population/generate`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "ADMIN_POPULATION_GENERATE_FAILED");
-  }
-  return (await response.json()) as { createdCount: number; total: number; summaryByCountry: PopulationSummaryItem[] };
-}
-
-export async function adminClearPopulation(
-  token: string,
-): Promise<{ ok: true; removedCount: number; total: number; summaryByCountry: PopulationSummaryItem[] }> {
-  const response = await fetch(`${API}/admin/population/clear`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "ADMIN_POPULATION_CLEAR_FAILED");
-  }
-  return (await response.json()) as { ok: true; removedCount: number; total: number; summaryByCountry: PopulationSummaryItem[] };
-}
-
-export async function fetchPopulationCountryStats(
-  token: string,
-  countryId?: string,
-): Promise<PopulationCountryStats> {
-  const params = new URLSearchParams();
-  if (countryId) params.set("countryId", countryId);
-  const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(`${API}/population/country-stats${suffix}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error ?? "POPULATION_COUNTRY_STATS_FAILED");
-  }
-  return (await response.json()) as PopulationCountryStats;
 }
 
 export async function adminUploadRacePortrait(
@@ -620,9 +443,6 @@ export async function markUiNotificationViewed(token: string, notificationId: st
 }
 
 export type GameSettings = {
-  population: {
-    maxGroupsPerProvince: number;
-  };
   economy: {
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
@@ -846,7 +666,6 @@ export async function updateGameSettings(
   payload: {
     economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
-    population?: { maxGroupsPerProvince?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
     registration?: { requireAdminApproval?: boolean };
     eventLog?: { retentionTurns?: number };
@@ -1017,7 +836,12 @@ export type AdminProvinceItem = {
   colonizationDisabled: boolean;
   manualCost?: boolean;
   colonyProgressByCountry: Record<string, number>;
+  population?: ProvincePopulation | null;
 };
+
+export type AdminPopulationScope = "province" | "country" | "world";
+export type AdminPopulationStrategy = "random" | "custom";
+export type PopulationMapInput = Record<string, number>;
 
 export async function startCountryColonization(token: string, provinceId: string): Promise<void> {
   const response = await fetch(`${API}/country/colonization/start`, {
@@ -1121,4 +945,81 @@ export async function adminRecalculateAutoProvinceCosts(token: string): Promise<
   }
   const data = (await response.json()) as { ok: true; updatedCount: number };
   return { updatedCount: data.updatedCount };
+}
+
+export async function adminGeneratePopulation(
+  token: string,
+  payload: {
+    scope: AdminPopulationScope;
+    provinceId?: string;
+    countryId?: string;
+    strategy: AdminPopulationStrategy;
+    populationTotal?: number;
+    culturePct?: PopulationMapInput;
+    ideologyPct?: PopulationMapInput;
+    religionPct?: PopulationMapInput;
+    racePct?: PopulationMapInput;
+    professionPct?: PopulationMapInput;
+  },
+): Promise<{ ok: true; updatedCount: number; scope: AdminPopulationScope; strategy: AdminPopulationStrategy }> {
+  const response = await fetch(`${API}/admin/population/generate`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_POPULATION_GENERATE_FAILED");
+  }
+  return (await response.json()) as { ok: true; updatedCount: number; scope: AdminPopulationScope; strategy: AdminPopulationStrategy };
+}
+
+export async function adminClearPopulation(
+  token: string,
+  payload: { scope: AdminPopulationScope; provinceId?: string; countryId?: string },
+): Promise<{ ok: true; updatedCount: number; scope: AdminPopulationScope }> {
+  const response = await fetch(`${API}/admin/population/clear`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_POPULATION_CLEAR_FAILED");
+  }
+  return (await response.json()) as { ok: true; updatedCount: number; scope: AdminPopulationScope };
+}
+
+export async function adminUpdateProvincePopulation(
+  token: string,
+  provinceId: string,
+  payload: {
+    populationTotal?: number;
+    culturePct?: PopulationMapInput;
+    ideologyPct?: PopulationMapInput;
+    religionPct?: PopulationMapInput;
+    racePct?: PopulationMapInput;
+    professionPct?: PopulationMapInput;
+  },
+): Promise<{ id: string; name: string; areaKm2: number; population: ProvincePopulation | null }> {
+  const response = await fetch(`${API}/admin/population/provinces/${encodeURIComponent(provinceId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "ADMIN_POPULATION_UPDATE_FAILED");
+  }
+  const data = (await response.json()) as { province: { id: string; name: string; areaKm2: number; population: ProvincePopulation | null } };
+  return data.province;
 }

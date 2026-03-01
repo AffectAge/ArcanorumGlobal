@@ -120,6 +120,17 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
+      if ((delta.mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0 && delta.u) {
+        nextWorldBase.provincePopulationByProvince = { ...nextWorldBase.provincePopulationByProvince };
+        for (const [provinceId, value] of Object.entries(delta.u)) {
+          if (!value) {
+            delete nextWorldBase.provincePopulationByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provincePopulationByProvince[provinceId] = value;
+        }
+      }
+
       return {
         worldBase: nextWorldBase,
         turnId: nextTurnId,

@@ -344,13 +344,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setSelectedEntryId(result.items[0]?.id ?? "");
       setDeleteConfirmOpen(false);
       toast.success("Запись удалена");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "ADMIN_DELETE_CONTENT_ENTRY_FAILED";
-      if (msg === "CONTENT_IN_USE_BY_POPULATION") {
-        toast.error("Нельзя удалить запись: она используется населением");
-      } else {
-        toast.error("Не удалось удалить запись");
-      }
+    } catch {
+      toast.error("Не удалось удалить запись");
     } finally {
       setSaving(false);
     }

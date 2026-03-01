@@ -25,24 +25,6 @@ export type ResourceTotals = {
   gold: number;
 };
 
-export type PopulationPop = {
-  id: number;
-  countryId: string;
-  provinceId: string;
-  size: number;
-  cultureId: string;
-  religionId: string;
-  raceId: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type PopulationCountrySummary = {
-  countryId: string;
-  totalSize: number;
-  popCount: number;
-};
-
 export type EventCategory = "system" | "colonization" | "politics" | "economy" | "military" | "diplomacy";
 export type EventPriority = "low" | "medium" | "high";
 export type EventVisibility = "public" | "private";
@@ -78,6 +60,15 @@ export type OrderDelta = {
   order: Omit<Order, "id" | "createdAt">;
 };
 
+export type ProvincePopulation = {
+  populationTotal: number;
+  culturePct: Record<string, number>;
+  ideologyPct: Record<string, number>;
+  religionPct: Record<string, number>;
+  racePct: Record<string, number>;
+  professionPct: Record<string, number>;
+};
+
 export type WorldBase = {
   turnId: number;
   resourcesByCountry: Record<string, ResourceTotals>;
@@ -85,6 +76,7 @@ export type WorldBase = {
   provinceNameById: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
+  provincePopulationByProvince: Record<string, ProvincePopulation>;
 };
 
 export const WORLD_DELTA_MASK = {
@@ -93,6 +85,7 @@ export const WORLD_DELTA_MASK = {
   provinceNameById: 1 << 2,
   colonyProgressByProvince: 1 << 3,
   provinceColonizationByProvince: 1 << 4,
+  provincePopulationByProvince: 1 << 5,
 } as const;
 
 export type WorldDelta = {
@@ -105,6 +98,7 @@ export type WorldDelta = {
   n?: Record<string, string | null>;
   p?: Record<string, Record<string, number> | null>;
   z?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
+  u?: Record<string, ProvincePopulation | null>;
   rejectedOrders: Array<{ playerId: string; reason: string; tempOrderId?: string }>;
 };
 

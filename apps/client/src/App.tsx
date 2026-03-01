@@ -1118,7 +1118,7 @@ export default function App() {
             turnTimer={turnTimerUi}
           />
           <SideNav
-            onSelect={(key) => {
+            onItemClick={(key) => {
               if (key === "population") {
                 setPopulationStatsOpen(true);
               }
@@ -1143,12 +1143,13 @@ export default function App() {
         />
       )}
 
-      {auth?.token && auth?.countryId && (
+      {auth && (
         <PopulationStatsModal
           open={populationStatsOpen}
-          token={auth.token}
-          countryId={auth.countryId}
           onClose={() => setPopulationStatsOpen(false)}
+          worldBase={worldBase}
+          countryId={auth.countryId}
+          countryName={country?.name ?? auth.countryId}
         />
       )}
 
@@ -1360,6 +1361,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 

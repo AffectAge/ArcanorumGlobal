@@ -1,207 +1,380 @@
 import { Dialog } from "@headlessui/react";
+import type { ProvincePopulation, WorldBase } from "@arcanorum/shared";
+import * as echarts from "echarts";
 import { motion } from "framer-motion";
-import { BarChart3, MapPin, Palette, ScrollText, UserRound, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
-import {
-  fetchContentEntries,
-  fetchCountries,
-  fetchPopulationCountryStats,
-  fetchProvinceIndex,
-  type ContentEntry,
-  type PopulationCountryStats,
-  type ProvinceIndexItem,
-} from "../lib/api";
+import { BarChart3, Briefcase, FileText, Flame, Globe2, MapPinned, Palette, ScrollText, Sticker, UserRound, Users, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchContentEntries, type ContentEntryKind } from "../lib/api";
 
 type Props = {
   open: boolean;
-  token: string;
-  countryId: string;
   onClose: () => void;
+  worldBase: WorldBase | null;
+  countryId: string;
+  countryName: string;
 };
 
-type StatsRow = { id: string; popCount: number; totalSize: number };
-type StatsSection = "overview";
-type StatsSubsection = "provinces" | "cultures" | "religions" | "races";
+type ViewMode = "country" | "world";
+type PanelSection = "general" | "religions" | "cultures" | "professions" | "ideologies" | "races" | "branding";
+type PopulationDimensionKey = "culturePct" | "ideologyPct" | "religionPct" | "racePct" | "professionPct";
 
-const SECTIONS: Array<{ id: StatsSection; label: string; icon: typeof BarChart3 }> = [
-  { id: "overview", label: "Обзор страны", icon: BarChart3 },
-];
-
-const OVERVIEW_SUBSECTIONS: Array<{ id: StatsSubsection; label: string; icon: typeof MapPin }> = [
-  { id: "provinces", label: "Провинции", icon: MapPin },
-  { id: "cultures", label: "Культуры", icon: Palette },
-  { id: "religions", label: "Религии", icon: ScrollText },
-  { id: "races", label: "Расы", icon: UserRound },
-];
-const DERIVED_OTHER_LABELS = new Map<string, string>([
-  ["__other_provinces__", "Другие провинции"],
-  ["__other_cultures__", "Другие культуры"],
-  ["__other_religions__", "Другие религии"],
-  ["__other_races__", "Другие расы"],
-]);
-
-function SectionList({
-  title,
-  rows,
-  nameById,
-  totalPopulation,
-}: {
-  title: string;
-  rows: StatsRow[];
-  nameById: Map<string, string>;
+type PopulationAggregate = {
   totalPopulation: number;
-}) {
-  return (
-    <div className="panel-border flex h-full min-h-0 flex-col rounded-xl bg-black/20 p-3">
-      <div className="mb-2 text-xs uppercase tracking-wide text-white/50">{title}</div>
-      <div className="arc-scrollbar min-h-0 flex-1 space-y-2 overflow-auto pr-1">
-        {rows.map((row) => (
-          <div key={row.id} className="rounded-md border border-white/10 bg-black/25 px-2 py-2 text-xs text-slate-200">
-            <div className="text-slate-100">{DERIVED_OTHER_LABELS.get(row.id) ?? nameById.get(row.id) ?? row.id}</div>
-            <div className="mt-1 text-slate-400">POP: {new Intl.NumberFormat("ru-RU").format(row.popCount)}</div>
-            <div className="text-slate-400">Население: {new Intl.NumberFormat("ru-RU").format(row.totalSize)}</div>
-            <div className="mt-2">
-              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                <span>Доля населения</span>
-                <span className="font-medium text-arc-accent">
-                  {totalPopulation > 0
-                    ? `${((row.totalSize / totalPopulation) * 100).toFixed(1)}%`
-                    : "0.0%"}
-                </span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-white/10">
-                <div
-                  className="h-1.5 rounded-full bg-arc-accent/80 transition-all"
-                  style={{
-                    width: `${Math.max(
-                      0,
-                      Math.min(100, totalPopulation > 0 ? (row.totalSize / totalPopulation) * 100 : 0),
-                    )}%`,
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        ))}
-        {rows.length === 0 && <div className="text-xs text-slate-500">Нет данных</div>}
-      </div>
-    </div>
-  );
+  provinceCount: number;
+  breakdown: Record<PopulationDimensionKey, Record<string, number>>;
+};
+
+type ContentEntryMeta = {
+  name: string;
+  color: string;
+  logoUrl: string | null;
+  malePortraitUrl: string | null;
+  femalePortraitUrl: string | null;
+};
+
+type BreakdownRow = {
+  id: string;
+  label: string;
+  pct: number;
+  color: string;
+  imageUrl: string | null;
+};
+
+const DIMENSION_LABELS: Array<{ key: PopulationDimensionKey; label: string }> = [
+  { key: "culturePct", label: "Культуры" },
+  { key: "ideologyPct", label: "Идеологии" },
+  { key: "religionPct", label: "Религии" },
+  { key: "racePct", label: "Расы" },
+  { key: "professionPct", label: "Профессии" },
+];
+
+const STAT_TABS: Array<{
+  id: PanelSection;
+  label: string;
+  icon: typeof FileText;
+  dimension?: PopulationDimensionKey;
+}> = [
+  { id: "general", label: "Основная информация", icon: FileText },
+  { id: "religions", label: "Религии", icon: ScrollText, dimension: "religionPct" },
+  { id: "cultures", label: "Культуры", icon: Palette, dimension: "culturePct" },
+  { id: "professions", label: "Профессии", icon: Briefcase, dimension: "professionPct" },
+  { id: "ideologies", label: "Идеологии", icon: Flame, dimension: "ideologyPct" },
+  { id: "races", label: "Расы", icon: UserRound, dimension: "racePct" },
+  { id: "branding", label: "Логотип и стиль", icon: Sticker },
+];
+
+const KIND_BY_DIMENSION: Record<PopulationDimensionKey, ContentEntryKind> = {
+  culturePct: "cultures",
+  ideologyPct: "ideologies",
+  religionPct: "religions",
+  racePct: "races",
+  professionPct: "professions",
+};
+
+function formatInt(value: number): string {
+  return new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.floor(value)));
 }
 
-export function PopulationStatsModal({ open, token, countryId, onClose }: Props) {
-  const [loading, setLoading] = useState(false);
-  const [stats, setStats] = useState<PopulationCountryStats | null>(null);
-  const [activeSection, setActiveSection] = useState<StatsSection>("overview");
-  const [activeSubsection, setActiveSubsection] = useState<StatsSubsection>("provinces");
-  const [countries, setCountries] = useState<Array<{ id: string; name: string }>>([]);
-  const [cultures, setCultures] = useState<ContentEntry[]>([]);
-  const [religions, setReligions] = useState<ContentEntry[]>([]);
-  const [races, setRaces] = useState<ContentEntry[]>([]);
-  const [provinces, setProvinces] = useState<ProvinceIndexItem[]>([]);
+function aggregatePopulation(
+  worldBase: WorldBase | null,
+  scope: "country" | "world",
+  countryId: string,
+): PopulationAggregate {
+  const empty: PopulationAggregate = {
+    totalPopulation: 0,
+    provinceCount: 0,
+    breakdown: {
+      culturePct: {},
+      ideologyPct: {},
+      religionPct: {},
+      racePct: {},
+      professionPct: {},
+    },
+  };
+  if (!worldBase) return empty;
 
-  const countryNameById = useMemo(() => new Map(countries.map((item) => [item.id, item.name] as const)), [countries]);
-  const cultureNameById = useMemo(() => new Map(cultures.map((item) => [item.id, item.name] as const)), [cultures]);
-  const religionNameById = useMemo(() => new Map(religions.map((item) => [item.id, item.name] as const)), [religions]);
-  const raceNameById = useMemo(() => new Map(races.map((item) => [item.id, item.name] as const)), [races]);
-  const provinceNameById = useMemo(() => new Map(provinces.map((item) => [item.id, item.name] as const)), [provinces]);
+  const byProvince = worldBase.provincePopulationByProvince ?? {};
+  const ownerByProvince = worldBase.provinceOwner ?? {};
+  const provinceIds = Object.keys(byProvince).filter((provinceId) => scope === "world" || ownerByProvince[provinceId] === countryId);
+  if (provinceIds.length === 0) {
+    return empty;
+  }
+
+  let totalPopulation = 0;
+  const weighted: PopulationAggregate["breakdown"] = {
+    culturePct: {},
+    ideologyPct: {},
+    religionPct: {},
+    racePct: {},
+    professionPct: {},
+  };
+
+  for (const provinceId of provinceIds) {
+    const population = byProvince[provinceId] as ProvincePopulation | undefined;
+    if (!population) continue;
+    const provinceTotal = Math.max(0, population.populationTotal);
+    if (provinceTotal <= 0) continue;
+    totalPopulation += provinceTotal;
+    for (const { key } of DIMENSION_LABELS) {
+      const map = population[key] ?? {};
+      for (const [valueKey, valuePct] of Object.entries(map)) {
+        if (typeof valuePct !== "number" || !Number.isFinite(valuePct) || valuePct <= 0) continue;
+        weighted[key][valueKey] = (weighted[key][valueKey] ?? 0) + provinceTotal * (valuePct / 100);
+      }
+    }
+  }
+
+  if (totalPopulation <= 0) {
+    return {
+      totalPopulation: 0,
+      provinceCount: provinceIds.length,
+      breakdown: {
+        culturePct: {},
+        ideologyPct: {},
+        religionPct: {},
+        racePct: {},
+        professionPct: {},
+      },
+    };
+  }
+
+  const normalized: PopulationAggregate["breakdown"] = {
+    culturePct: {},
+    ideologyPct: {},
+    religionPct: {},
+    racePct: {},
+    professionPct: {},
+  };
+  for (const { key } of DIMENSION_LABELS) {
+    for (const [valueKey, weightedValue] of Object.entries(weighted[key])) {
+      normalized[key][valueKey] = (weightedValue / totalPopulation) * 100;
+    }
+  }
+
+  return {
+    totalPopulation,
+    provinceCount: provinceIds.length,
+    breakdown: normalized,
+  };
+}
+
+export function PopulationStatsModal({ open, onClose, worldBase, countryId, countryName }: Props) {
+  const [mode, setMode] = useState<ViewMode>("country");
+  const [section, setSection] = useState<PanelSection>("general");
+  const [entryByKindById, setEntryByKindById] = useState<Record<ContentEntryKind, Record<string, ContentEntryMeta>>>({
+    cultures: {},
+    ideologies: {},
+    religions: {},
+    races: {},
+    professions: {},
+  });
+  const pieRef = useRef<HTMLDivElement | null>(null);
+
+  const countryStats = useMemo(() => aggregatePopulation(worldBase, "country", countryId), [countryId, worldBase]);
+  const worldStats = useMemo(() => aggregatePopulation(worldBase, "world", countryId), [countryId, worldBase]);
+  const stats = mode === "country" ? countryStats : worldStats;
+  const title = mode === "country" ? `Население: ${countryName}` : "Население мира";
+  const subtitle = mode === "country" ? "Статистика по вашим провинциям" : "Сводная статистика по всем провинциям";
+  const activeTab = STAT_TABS.find((tab) => tab.id === section) ?? STAT_TABS[0];
+  const activeDimension = activeTab.dimension ?? null;
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoading(true);
     Promise.all([
-      fetchPopulationCountryStats(token, countryId),
-      fetchCountries(),
       fetchContentEntries("cultures"),
+      fetchContentEntries("ideologies"),
       fetchContentEntries("religions"),
       fetchContentEntries("races"),
-      fetchProvinceIndex(),
+      fetchContentEntries("professions"),
     ])
-      .then(([statsData, countriesData, culturesData, religionsData, racesData, provincesData]) => {
+      .then(([cultures, ideologies, religions, races, professions]) => {
         if (cancelled) return;
-        setStats(statsData);
-        setCountries(countriesData.map((item) => ({ id: item.id, name: item.name })));
-        setCultures(culturesData);
-        setReligions(religionsData);
-        setRaces(racesData);
-        setProvinces(provincesData);
+        setEntryByKindById({
+          cultures: Object.fromEntries(
+            cultures.map((entry) => [entry.id, { name: entry.name, color: entry.color, logoUrl: entry.logoUrl ?? null, malePortraitUrl: null, femalePortraitUrl: null }]),
+          ),
+          ideologies: Object.fromEntries(
+            ideologies.map((entry) => [entry.id, { name: entry.name, color: entry.color, logoUrl: entry.logoUrl ?? null, malePortraitUrl: null, femalePortraitUrl: null }]),
+          ),
+          religions: Object.fromEntries(
+            religions.map((entry) => [entry.id, { name: entry.name, color: entry.color, logoUrl: entry.logoUrl ?? null, malePortraitUrl: null, femalePortraitUrl: null }]),
+          ),
+          races: Object.fromEntries(
+            races.map((entry) => [
+              entry.id,
+              {
+                name: entry.name,
+                color: entry.color,
+                logoUrl: entry.logoUrl ?? null,
+                malePortraitUrl: entry.malePortraitUrl ?? null,
+                femalePortraitUrl: entry.femalePortraitUrl ?? null,
+              },
+            ]),
+          ),
+          professions: Object.fromEntries(
+            professions.map((entry) => [entry.id, { name: entry.name, color: entry.color, logoUrl: entry.logoUrl ?? null, malePortraitUrl: null, femalePortraitUrl: null }]),
+          ),
+        });
       })
       .catch(() => {
-        if (!cancelled) {
-          toast.error("Не удалось загрузить статистику населения");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setEntryByKindById({
+          cultures: {},
+          ideologies: {},
+          religions: {},
+          races: {},
+          professions: {},
+        });
       });
+
     return () => {
       cancelled = true;
     };
-  }, [countryId, open, token]);
+  }, [open]);
 
-  const renderSection = () => {
-    if (!stats) {
-      return <div className="text-sm text-slate-400">Статистика недоступна</div>;
-    }
+  const activeRows: BreakdownRow[] = useMemo(() => {
+    if (!activeDimension) return [];
+    const kind = KIND_BY_DIMENSION[activeDimension];
+    const entryById = entryByKindById[kind] ?? {};
+    return Object.entries(stats.breakdown[activeDimension])
+      .map(([id, rawPct]) => {
+        const pct = Math.max(0, Math.min(100, rawPct));
+        const entry = entryById[id];
+        return {
+          id,
+          label: entry?.name ?? id,
+          pct,
+          color: entry?.color ?? "#9ca3af",
+          imageUrl:
+            kind === "races"
+              ? (entry?.malePortraitUrl ?? entry?.femalePortraitUrl ?? entry?.logoUrl ?? null)
+              : (entry?.logoUrl ?? null),
+        } satisfies BreakdownRow;
+      })
+      .filter((row) => row.pct > 0)
+      .sort((a, b) => b.pct - a.pct)
+      .slice(0, 200);
+  }, [activeDimension, entryByKindById, stats]);
 
-    if (activeSection !== "overview") {
-      return <div className="text-sm text-slate-400">Раздел недоступен</div>;
-    }
+  useEffect(() => {
+    if (!activeDimension) return;
+    if (!pieRef.current) return;
 
-    if (activeSubsection === "provinces") {
-      return (
-        <div className="grid h-full min-h-0 gap-3 md:grid-cols-2">
-          <div className="panel-border rounded-xl bg-black/20 p-4 text-sm text-slate-300">
-            <div className="mb-2 text-xs uppercase tracking-wide text-white/50">Общая статистика</div>
-            <div>Страна: <span className="text-slate-100">{countryNameById.get(countryId) ?? countryId}</span></div>
-            <div className="mt-1">POP: <span className="text-slate-100">{new Intl.NumberFormat("ru-RU").format(stats.popCount)}</span></div>
-            <div className="mt-1">Население: <span className="text-slate-100">{new Intl.NumberFormat("ru-RU").format(stats.totalSize)}</span></div>
-          </div>
-          <div className="min-h-0">
-            <SectionList
-              title="Распределение по провинциям"
-              rows={stats.byProvince}
-              nameById={provinceNameById}
-              totalPopulation={stats.totalSize}
-            />
-          </div>
-        </div>
-      );
-    }
-    if (activeSubsection === "cultures") {
-      return (
-        <SectionList
-          title="Распределение по культурам"
-          rows={stats.byCulture}
-          nameById={cultureNameById}
-          totalPopulation={stats.totalSize}
-        />
-      );
-    }
-    if (activeSubsection === "religions") {
-      return (
-        <SectionList
-          title="Распределение по религиям"
-          rows={stats.byReligion}
-          nameById={religionNameById}
-          totalPopulation={stats.totalSize}
-        />
-      );
-    }
+    const chart = echarts.init(pieRef.current);
+
+    chart.setOption({
+      animationDuration: 280,
+      backgroundColor: "transparent",
+      tooltip: {
+        trigger: "item",
+        formatter: (params: { seriesName: string; name: string; value: number; percent: number }) =>
+          `${params.seriesName} <br/>${params.name} : ${params.value.toFixed(2)} (${params.percent.toFixed(2)}%)`,
+      },
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        right: 8,
+        top: 20,
+        bottom: 20,
+        width: "36%",
+        pageIconColor: "#4ade80",
+        pageTextStyle: { color: "#94a3b8" },
+        textStyle: { color: "#cbd5e1", fontSize: 11 },
+      },
+      series: [
+        {
+          name: activeTab.label,
+          type: "pie",
+          radius: "52%",
+          center: ["34%", "50%"],
+          label: {
+            show: true,
+            color: "#e2e8f0",
+            formatter: "{d}%",
+            fontSize: 10,
+          },
+          labelLine: { length: 10, length2: 6 },
+          data: activeRows.map((row) => ({
+            name: row.label,
+            value: row.pct,
+            itemStyle: { color: row.color },
+          })),
+          emphasis: {
+            scale: true,
+            itemStyle: {
+              shadowBlur: 10,
+              shadowOffsetX: 0,
+              shadowColor: "rgba(0, 0, 0, 0.5)",
+            },
+          },
+        },
+      ],
+    });
+
+    const onResize = () => chart.resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.dispose();
+    };
+  }, [activeDimension, activeRows, activeTab.label]);
+
+  const renderDimensionStats = (dimension: PopulationDimensionKey) => {
+    const dimensionLabel = DIMENSION_LABELS.find((item) => item.key === dimension)?.label ?? "Статистика";
+
     return (
-      <SectionList
-        title="Распределение по расам"
-        rows={stats.byRace}
-        nameById={raceNameById}
-        totalPopulation={stats.totalSize}
-      />
+      <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+          <div className="mb-2 text-xs text-white/60">{dimensionLabel}</div>
+          {activeRows.length === 0 ? (
+            <div className="flex h-[420px] items-center justify-center text-sm text-white/45">Нет данных</div>
+          ) : (
+            <div ref={pieRef} className="h-[420px] w-full" />
+          )}
+        </section>
+        <section className="min-h-0 rounded-xl border border-white/10 bg-[#131a22] p-3">
+          <div className="mb-2 text-xs text-white/60">Легенда ({activeRows.length})</div>
+          <div className="arc-scrollbar max-h-[420px] space-y-2 overflow-auto pr-1">
+            {activeRows.map((row) => (
+              <div
+                key={row.id}
+                className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2.5 py-2 text-left"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  {row.imageUrl ? (
+                    <img
+                      src={row.imageUrl}
+                      alt=""
+                      className={`h-5 w-5 rounded-sm object-cover ${dimension === "racePct" ? "border border-white/15" : ""}`}
+                    />
+                  ) : (
+                    <span
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-sm border text-[10px]"
+                      style={{ borderColor: `${row.color}99`, backgroundColor: `${row.color}22`, color: row.color }}
+                    >
+                      {row.label.slice(0, 1).toUpperCase()}
+                    </span>
+                  )}
+                  <span className="truncate text-sm text-white/85">{row.label}</span>
+                </span>
+                <span className="ml-2 shrink-0 text-right">
+                  <span className="block tabular-nums text-xs text-arc-accent">{row.pct.toFixed(2)}%</span>
+                  <span className="block tabular-nums text-[11px] text-white/60">
+                    {formatInt((stats.totalPopulation * row.pct) / 100)} чел.
+                  </span>
+                </span>
+              </div>
+            ))}
+            {activeRows.length === 0 && <div className="text-xs text-white/45">Нет данных</div>}
+          </div>
+        </section>
+      </div>
     );
   };
 
   return (
-    <Dialog open={open} onClose={onClose} className="relative z-[206]">
+    <Dialog open={open} onClose={onClose} className="relative z-[205]">
       <motion.div
         aria-hidden="true"
         className="fixed inset-0 bg-black/70 backdrop-blur-sm"
@@ -220,8 +393,8 @@ export function PopulationStatsModal({ open, token, countryId, onClose }: Props)
           <Dialog.Panel className="glass panel-border flex h-full flex-col rounded-2xl bg-[#0b111b] p-4 shadow-2xl">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <Dialog.Title className="font-display text-2xl tracking-wide text-arc-accent">Статистика населения</Dialog.Title>
-                <div className="mt-1 text-xs text-white/60">{countryNameById.get(countryId) ?? countryId}</div>
+                <Dialog.Title className="font-display text-2xl tracking-wide text-arc-accent">Панель населения</Dialog.Title>
+                <span className="mt-1 block text-xs text-white/60">{subtitle}</span>
               </div>
               <button
                 type="button"
@@ -233,79 +406,114 @@ export function PopulationStatsModal({ open, token, countryId, onClose }: Props)
               </button>
             </div>
 
-            {loading ? (
-              <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[260px_1fr]">
-                <aside className="arc-scrollbar panel-border rounded-xl bg-black/25 p-2 overflow-auto">
-                  <div className="mb-2 h-4 w-24 animate-pulse rounded bg-white/10" />
-                  <div className="space-y-2">
-                    {[0, 1, 2].map((i) => (
-                      <div key={i} className="h-10 w-full animate-pulse rounded-lg border border-white/10 bg-black/20" />
-                    ))}
-                  </div>
-                </aside>
-                <section className="arc-scrollbar panel-border min-h-0 rounded-xl bg-black/25 p-4 overflow-auto">
-                  <div className="mb-4 flex items-center gap-5 border-b border-white/10 px-1 pb-2">
-                    {[0, 1, 2, 3].map((i) => (
-                      <div key={i} className="h-4 w-20 animate-pulse rounded bg-white/10" />
-                    ))}
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {[0, 1, 2, 3].map((i) => (
-                      <div key={i} className="panel-border rounded-xl bg-black/20 p-3">
-                        <div className="space-y-2">
-                          <div className="h-3 w-24 animate-pulse rounded bg-white/10" />
-                          <div className="h-3 w-40 animate-pulse rounded bg-white/10" />
-                          <div className="h-3 w-32 animate-pulse rounded bg-white/10" />
-                          <div className="h-1.5 w-full animate-pulse rounded bg-white/10" />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              </div>
-            ) : (
-              <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[260px_1fr]">
-                <aside className="arc-scrollbar panel-border rounded-xl bg-black/25 p-2 overflow-auto">
-                  <span className="mb-2 block px-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Разделы</span>
-                  {SECTIONS.map((section) => (
-                    <button
-                      key={section.id}
-                      type="button"
-                      onClick={() => setActiveSection(section.id)}
-                      className={`mb-2 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition ${
-                        activeSection === section.id
-                          ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
-                          : "border-white/10 bg-black/20 text-white/70 hover:border-white/15 hover:text-white"
-                      }`}
-                    >
-                      <section.icon size={15} />
-                      <span>{section.label}</span>
-                    </button>
-                  ))}
-                </aside>
+            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+              <aside className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-3">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">Область</span>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => setMode("country")}
+                    className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm ${
+                      mode === "country"
+                        ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
+                        : "border-white/10 bg-black/20 text-white/70"
+                    }`}
+                  >
+                    <MapPinned size={15} />
+                    <span>{countryName}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMode("world")}
+                    className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm ${
+                      mode === "world"
+                        ? "border-arc-accent/30 bg-arc-accent/10 text-arc-accent"
+                        : "border-white/10 bg-black/20 text-white/70"
+                    }`}
+                  >
+                    <Globe2 size={15} />
+                    <span>Мир</span>
+                  </button>
+                </div>
+              </aside>
 
-                <section className="panel-border flex min-h-0 flex-col rounded-xl bg-black/25 p-4 overflow-hidden">
-                  <div className="mb-4 flex items-center gap-5 border-b border-white/10 px-1">
-                    {OVERVIEW_SUBSECTIONS.map((subsection) => (
+              <div className="grid min-h-0 gap-4 lg:grid-rows-[auto_minmax(0,1fr)]">
+                <div className="arc-scrollbar flex items-center gap-5 overflow-auto border-b border-white/10 px-1">
+                  {STAT_TABS.map((tab) => {
+                    const TabIcon = tab.icon;
+                    return (
                       <button
-                        key={subsection.id}
+                        key={tab.id}
                         type="button"
-                        onClick={() => setActiveSubsection(subsection.id)}
-                        className={`inline-flex items-center gap-1.5 pb-2 text-sm transition ${
-                          activeSubsection === subsection.id
+                        onClick={() => setSection(tab.id)}
+                        className={`inline-flex shrink-0 items-center gap-1.5 pb-2 text-sm transition ${
+                          section === tab.id
                             ? "border-b-2 border-arc-accent text-arc-accent"
                             : "border-b-2 border-transparent text-white/60 hover:text-white"
                         }`}
                       >
-                        <subsection.icon size={14} />
-                        {subsection.label}
+                        <TabIcon size={14} />
+                        {tab.label}
                       </button>
-                    ))}
-                  </div>
-                  <div className="min-h-0 flex-1">{renderSection()}</div>
-                </section>
+                    );
+                  })}
+                </div>
+
+                <div className="min-h-0 overflow-auto rounded-xl border border-white/10 bg-black/20 p-4">
+                  {section === "general" && (
+                    <>
+                      <div className="mb-4">
+                        <div className="text-lg font-semibold text-white">{title}</div>
+                        <div className="text-xs text-white/50">Агрегированные данные по населению</div>
+                      </div>
+
+                      <div className="mb-4 grid gap-3 md:grid-cols-2">
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="flex items-center gap-2 text-xs text-white/60">
+                            <Users size={13} />
+                            <span>Общее население</span>
+                          </div>
+                          <div className="mt-2 text-2xl font-semibold text-white">{formatInt(stats.totalPopulation)}</div>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="flex items-center gap-2 text-xs text-white/60">
+                            <BarChart3 size={13} />
+                            <span>Провинций в расчете</span>
+                          </div>
+                          <div className="mt-2 text-2xl font-semibold text-white">{formatInt(stats.provinceCount)}</div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        {DIMENSION_LABELS.map((dimension) => (
+                          <section key={dimension.key} className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{dimension.label}</div>
+                            <div className="text-sm text-white/70">
+                              Откройте вкладку <span className="font-semibold text-white">{dimension.label}</span> для детальной статистики.
+                            </div>
+                          </section>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {activeDimension && renderDimensionStats(activeDimension)}
+
+                  {section === "branding" && (
+                    <div className="space-y-4">
+                      <div>
+                        <div className="text-lg font-semibold text-white">Логотип и стиль</div>
+                        <div className="text-xs text-white/50">Подготовка визуальных настроек панели населения</div>
+                      </div>
+                      <section className="rounded-xl border border-white/10 bg-[#131a22] p-4">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Статус</div>
+                        <div className="text-sm text-white/75">Раздел зарезервирован под будущие механики визуализации населения.</div>
+                      </section>
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
+            </div>
           </Dialog.Panel>
         </motion.div>
       </div>
