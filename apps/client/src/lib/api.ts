@@ -473,6 +473,7 @@ export async function markUiNotificationViewed(token: string, notificationId: st
 
 export type GameSettings = {
   economy: {
+    baseConstructionPerTurn: number;
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
   };
@@ -509,6 +510,7 @@ export type GameSettings = {
     science: string | null;
     religion: string | null;
     colonization: string | null;
+    construction: string | null;
     ducats: string | null;
     gold: string | null;
   };
@@ -533,6 +535,7 @@ function normalizeResourceIcons(icons?: Partial<ResourceIconsMap> | null): Resou
     science: withAssetBase(icons?.science) ?? null,
     religion: withAssetBase(icons?.religion) ?? null,
     colonization: withAssetBase(icons?.colonization) ?? null,
+    construction: withAssetBase(icons?.construction) ?? null,
     ducats: withAssetBase(icons?.ducats) ?? null,
     gold: withAssetBase(icons?.gold) ?? null,
   };
@@ -693,7 +696,7 @@ export async function fetchGameSettings(token: string): Promise<GameSettings> {
 export async function updateGameSettings(
   token: string,
   payload: {
-    economy?: { baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
+    economy?: { baseConstructionPerTurn?: number; baseDucatsPerTurn?: number; baseGoldPerTurn?: number };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
     registration?: { requireAdminApproval?: boolean };

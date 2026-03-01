@@ -21,6 +21,7 @@ export type ResourceTotals = {
   science: number;
   religion: number;
   colonization: number;
+  construction: number;
   ducats: number;
   gold: number;
 };

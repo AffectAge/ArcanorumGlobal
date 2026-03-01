@@ -93,6 +93,7 @@ export default function App() {
     science: null,
     religion: null,
     colonization: null,
+    construction: null,
     ducats: null,
     gold: null,
   });
@@ -102,6 +103,7 @@ export default function App() {
     science: number;
     religion: number;
     colonization: number;
+    construction: number;
     ducats: number;
     gold: number;
   }>({
@@ -109,6 +111,7 @@ export default function App() {
     science: 0,
     religion: 0,
     colonization: 0,
+    construction: 0,
     ducats: 0,
     gold: 0,
   });
@@ -478,6 +481,7 @@ export default function App() {
             science: 0,
             religion: 0,
             colonization: ui.colonization.pointsPerTurn,
+            construction: ui.economy.baseConstructionPerTurn,
             ducats: ui.economy.baseDucatsPerTurn,
             gold: ui.economy.baseGoldPerTurn,
           });
@@ -548,9 +552,9 @@ export default function App() {
 
   const currentResources = useMemo(() => {
     if (!worldBase || !auth) {
-      return { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
+      return { culture: 0, science: 0, religion: 0, colonization: 0, construction: 0, ducats: 0, gold: 0 };
     }
-    return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
+    return worldBase.resourcesByCountry[auth.countryId] ?? { culture: 0, science: 0, religion: 0, colonization: 0, construction: 0, ducats: 0, gold: 0 };
   }, [auth, worldBase]);
   const currentCountryDetails = useMemo(() => {
     if (!auth || !worldBase) {
@@ -636,7 +640,7 @@ export default function App() {
   }, [auth, colonizationCostPer1000Km2.ducats, colonizationCostPer1000Km2.points, currentResources.colonization, currentResources.ducats, ordersByTurn, provinceAreaKm2ById, turnId, worldBase]);
   const activeColonizationCount = myColonizationProjection.activeCount;
   const currentTurnExpenses = useMemo(() => {
-    const empty = { culture: 0, science: 0, religion: 0, colonization: 0, ducats: 0, gold: 0 };
+    const empty = { culture: 0, science: 0, religion: 0, colonization: 0, construction: 0, ducats: 0, gold: 0 };
     if (!auth) {
       return empty;
     }
@@ -1212,6 +1216,7 @@ export default function App() {
             setResourceGrowthByTurn((prev) => ({
               ...prev,
               colonization: updated.colonization.pointsPerTurn,
+              construction: updated.economy.baseConstructionPerTurn,
               ducats: updated.economy.baseDucatsPerTurn,
               gold: updated.economy.baseGoldPerTurn,
             }));
@@ -1376,7 +1381,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 

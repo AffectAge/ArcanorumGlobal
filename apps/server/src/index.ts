@@ -92,7 +92,7 @@ function resolveContentUploadDir(kind?: string): string {
   return contentUploadDirs.cultures;
 }
 
-const resourceIconFields = new Set(["culture", "science", "religion", "colonization", "ducats", "gold"]);
+const resourceIconFields = new Set(["culture", "science", "religion", "colonization", "construction", "ducats", "gold"]);
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -383,6 +383,7 @@ type GameSettings = {
     }>;
   };
   economy: {
+    baseConstructionPerTurn: number;
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
   };
@@ -418,6 +419,7 @@ type GameSettings = {
     science: string | null;
     religion: string | null;
     colonization: string | null;
+    construction: string | null;
     ducats: string | null;
     gold: string | null;
   };
@@ -1140,6 +1142,7 @@ const defaultGameSettings = (): GameSettings => ({
     entries: defaultCivilopediaEntries(),
   },
   economy: {
+    baseConstructionPerTurn: 5,
     baseDucatsPerTurn: 5,
     baseGoldPerTurn: 10,
   },
@@ -1175,10 +1178,40 @@ const defaultGameSettings = (): GameSettings => ({
     science: null,
     religion: null,
     colonization: null,
+    construction: null,
     ducats: null,
     gold: null,
   },
 });
+
+function normalizeResourceTotals(input: unknown): ResourceTotals {
+  const source = input && typeof input === "object" ? (input as Partial<ResourceTotals>) : {};
+  return {
+    culture: typeof source.culture === "number" && Number.isFinite(source.culture) ? Math.max(0, Math.floor(source.culture)) : 0,
+    science: typeof source.science === "number" && Number.isFinite(source.science) ? Math.max(0, Math.floor(source.science)) : 0,
+    religion: typeof source.religion === "number" && Number.isFinite(source.religion) ? Math.max(0, Math.floor(source.religion)) : 0,
+    colonization:
+      typeof source.colonization === "number" && Number.isFinite(source.colonization)
+        ? Math.max(0, Math.floor(source.colonization))
+        : gameSettings.colonization.pointsPerTurn,
+    construction:
+      typeof source.construction === "number" && Number.isFinite(source.construction)
+        ? Math.max(0, Math.floor(source.construction))
+        : gameSettings.economy.baseConstructionPerTurn,
+    ducats: typeof source.ducats === "number" && Number.isFinite(source.ducats) ? Math.max(0, Math.floor(source.ducats)) : 0,
+    gold: typeof source.gold === "number" && Number.isFinite(source.gold) ? Math.max(0, Math.floor(source.gold)) : 0,
+  };
+}
+
+function normalizeResourcesByCountryMap(input: unknown): Record<string, ResourceTotals> {
+  const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const normalized: Record<string, ResourceTotals> = {};
+  for (const [countryId, totals] of Object.entries(source)) {
+    if (!countryId) continue;
+    normalized[countryId] = normalizeResourceTotals(totals);
+  }
+  return normalized;
+}
 
 function defaultWorldBase(currentTurnId: number): WorldBase {
   const domains = getPopulationDomainKeys();
@@ -1195,8 +1228,8 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
   return {
     turnId: currentTurnId,
     resourcesByCountry: {
-      ARC: { culture: 12, science: 9, religion: 6, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 35, gold: 120 },
-      VAL: { culture: 8, science: 12, religion: 7, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, ducats: 28, gold: 110 },
+      ARC: { culture: 12, science: 9, religion: 6, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, construction: 10, ducats: 35, gold: 120 },
+      VAL: { culture: 8, science: 12, religion: 7, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, construction: 10, ducats: 28, gold: 110 },
     },
     provinceOwner: {
       "p-north": "ARC",
@@ -1278,6 +1311,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         entries: civilopediaEntries,
       },
       economy: {
+        baseConstructionPerTurn:
+          typeof next.economy?.baseConstructionPerTurn === "number"
+            ? Math.max(0, Math.floor(next.economy.baseConstructionPerTurn))
+            : defaults.economy.baseConstructionPerTurn,
         baseDucatsPerTurn:
           typeof next.economy?.baseDucatsPerTurn === "number"
             ? Math.max(0, Math.floor(next.economy.baseDucatsPerTurn))
@@ -1365,6 +1402,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.resourceIcons?.colonization === "string" || next.resourceIcons?.colonization === null
             ? (next.resourceIcons?.colonization ?? null)
             : defaults.resourceIcons.colonization,
+        construction:
+          typeof next.resourceIcons?.construction === "string" || next.resourceIcons?.construction === null
+            ? (next.resourceIcons?.construction ?? null)
+            : defaults.resourceIcons.construction,
         ducats: typeof next.resourceIcons?.ducats === "string" || next.resourceIcons?.ducats === null ? (next.resourceIcons?.ducats ?? null) : defaults.resourceIcons.ducats,
         gold: typeof next.resourceIcons?.gold === "string" || next.resourceIcons?.gold === null ? (next.resourceIcons?.gold ?? null) : defaults.resourceIcons.gold,
       },
@@ -1383,7 +1424,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     ) {
       worldBase = {
         turnId,
-        resourcesByCountry: candidate.resourcesByCountry,
+        resourcesByCountry: normalizeResourcesByCountryMap(candidate.resourcesByCountry),
         provinceOwner: candidate.provinceOwner,
         provinceNameById:
           candidate.provinceNameById && typeof candidate.provinceNameById === "object"
@@ -1706,18 +1747,33 @@ const loginSchema = z.object({
 });
 
 function ensureCountryInWorldBase(countryId: string): void {
-  if (!worldBase.resourcesByCountry[countryId]) {
+  const existing = worldBase.resourcesByCountry[countryId];
+  if (!existing) {
     worldBase.resourcesByCountry[countryId] = {
       culture: 5,
       science: 5,
       religion: 5,
       colonization: gameSettings.colonization.pointsPerTurn,
+      construction: gameSettings.economy.baseConstructionPerTurn,
       ducats: 20,
       gold: 80,
     };
     economyTickCountryIds.add(countryId);
     savePersistentState();
     return;
+  }
+  const normalized = normalizeResourceTotals(existing);
+  if (
+    normalized.culture !== existing.culture ||
+    normalized.science !== existing.science ||
+    normalized.religion !== existing.religion ||
+    normalized.colonization !== existing.colonization ||
+    normalized.construction !== existing.construction ||
+    normalized.ducats !== existing.ducats ||
+    normalized.gold !== existing.gold
+  ) {
+    worldBase.resourcesByCountry[countryId] = normalized;
+    savePersistentState();
   }
   economyTickCountryIds.add(countryId);
 }
@@ -2329,6 +2385,7 @@ function buildCompactWorldDelta(prev: WorldBase, next: WorldBase): Omit<WorldDel
       prevValue.science !== nextValue.science ||
       prevValue.religion !== nextValue.religion ||
       prevValue.colonization !== nextValue.colonization ||
+      prevValue.construction !== nextValue.construction ||
       prevValue.ducats !== nextValue.ducats ||
       prevValue.gold !== nextValue.gold
     ) {
@@ -2850,6 +2907,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
       continue;
     }
     resource.colonization += gameSettings.colonization.pointsPerTurn;
+    resource.construction += gameSettings.economy.baseConstructionPerTurn;
     resource.ducats += gameSettings.economy.baseDucatsPerTurn;
     resource.gold += gameSettings.economy.baseGoldPerTurn;
   }
@@ -3103,6 +3161,7 @@ app.patch("/notifications/ui/:id/viewed", async (req, res) => {
 const gameSettingsSchema = z.object({
   economy: z
     .object({
+      baseConstructionPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       baseDucatsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       baseGoldPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
     })
@@ -3273,6 +3332,7 @@ app.patch(
     { name: "science", maxCount: 1 },
     { name: "religion", maxCount: 1 },
     { name: "colonization", maxCount: 1 },
+    { name: "construction", maxCount: 1 },
     { name: "ducats", maxCount: 1 },
     { name: "gold", maxCount: 1 },
   ]),
@@ -3288,6 +3348,7 @@ app.patch(
       science: files?.science?.[0],
       religion: files?.religion?.[0],
       colonization: files?.colonization?.[0],
+      construction: files?.construction?.[0],
       ducats: files?.ducats?.[0],
       gold: files?.gold?.[0],
     };
@@ -3876,6 +3937,9 @@ app.patch("/admin/game-settings", async (req, res) => {
 
   const nextEconomy = parsed.data.economy;
   if (nextEconomy) {
+    if (typeof nextEconomy.baseConstructionPerTurn === "number") {
+      gameSettings.economy.baseConstructionPerTurn = nextEconomy.baseConstructionPerTurn;
+    }
     if (typeof nextEconomy.baseDucatsPerTurn === "number") {
       gameSettings.economy.baseDucatsPerTurn = nextEconomy.baseDucatsPerTurn;
     }
@@ -5109,6 +5173,7 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
       science: 5,
       religion: 5,
       colonization: gameSettings.colonization.pointsPerTurn,
+      construction: gameSettings.economy.baseConstructionPerTurn,
       ducats: 20,
       gold: 80,
     };

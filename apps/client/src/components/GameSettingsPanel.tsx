@@ -45,6 +45,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [activeCategory, setActiveCategory] = useState<(typeof categories)[number]["id"]>("economy");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [baseConstructionPerTurn, setBaseConstructionPerTurn] = useState(5);
   const [baseDucatsPerTurn, setBaseDucatsPerTurn] = useState(5);
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
@@ -66,6 +67,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
     science: null,
     religion: null,
     colonization: null,
+    construction: null,
     ducats: null,
     gold: null,
   });
@@ -84,6 +86,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
     fetchGameSettings(token)
       .then((settings) => {
         if (cancelled) return;
+        setBaseConstructionPerTurn(settings.economy.baseConstructionPerTurn);
         setBaseDucatsPerTurn(settings.economy.baseDucatsPerTurn);
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
         setMaxActiveColonizations(settings.colonization.maxActiveColonizations);
@@ -122,10 +125,12 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
     try {
       const updated = await updateGameSettings(token, {
         economy: {
+          baseConstructionPerTurn: Math.max(0, Math.floor(baseConstructionPerTurn)),
           baseDucatsPerTurn: Math.max(0, Math.floor(baseDucatsPerTurn)),
           baseGoldPerTurn: Math.max(0, Math.floor(baseGoldPerTurn)),
         },
       });
+      setBaseConstructionPerTurn(updated.economy.baseConstructionPerTurn);
       setBaseDucatsPerTurn(updated.economy.baseDucatsPerTurn);
       setBaseGoldPerTurn(updated.economy.baseGoldPerTurn);
       onSettingsUpdated?.(updated);
@@ -346,6 +351,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
     ["science", "Наука"],
     ["religion", "Религия"],
     ["colonization", "Колонизация"],
+    ["construction", "Строительство"],
     ["ducats", "Дукаты"],
     ["gold", "Золото"],
   ];
@@ -403,7 +409,11 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <Coins size={15} className="text-arc-accent" />
                         Базовый доход за каждый резолв хода
                       </div>
-                      <div className="grid gap-3 md:grid-cols-2">
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Очки строительства / ход</label>
+                          <input type="number" min={0} value={baseConstructionPerTurn} onChange={(e) => setBaseConstructionPerTurn(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
+                        </div>
                         <div>
                           <label className="mb-1 block text-xs text-slate-300">Дукаты / ход</label>
                           <input type="number" min={0} value={baseDucatsPerTurn} onChange={(e) => setBaseDucatsPerTurn(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />

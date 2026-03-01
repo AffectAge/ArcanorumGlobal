@@ -1,4 +1,4 @@
-import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, Palette, type LucideIcon } from "lucide-react";
+import { BookOpen, FlaskConical, Landmark, Coins, CircleDollarSign, ListChecks, LogOut, ShieldAlert, SkipForward, SlidersHorizontal, Cog, Flag, Sliders, Clock3, Palette, Hammer, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
@@ -7,6 +7,7 @@ type Resources = {
   science: number;
   religion: number;
   colonization: number;
+  construction: number;
   ducats: number;
   gold: number;
 };
@@ -41,6 +42,7 @@ const cards = [
   { key: "science", label: "Наука", icon: FlaskConical, tip: "Очки науки ускоряют исследования" },
   { key: "religion", label: "Религия", icon: Landmark, tip: "Религия влияет на стабильность и миссии" },
   { key: "colonization", label: "Колонизация", icon: Flag, tip: "Очки колонизации за ход" },
+  { key: "construction", label: "Строительство", icon: Hammer, tip: "Очки строительства для производственных приказов" },
   { key: "ducats", label: "Дукаты", icon: Coins, tip: "Планировочный бюджет текущего хода" },
   { key: "gold", label: "Золото", icon: CircleDollarSign, tip: "Госказна для больших проектов" },
 ] as const;
