@@ -58,9 +58,11 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
   const [blockUntilAt, setBlockUntilAt] = useState("");
   const [punishmentReasonText, setPunishmentReasonText] = useState("");
   const [ignoreUntilTurn, setIgnoreUntilTurn] = useState(0);
+  const [marketId, setMarketId] = useState<string>("");
   const [selectedProvinceId, setSelectedProvinceId] = useState<string>("");
   const [provinceOwnerCountryId, setProvinceOwnerCountryId] = useState<string>("");
   const [provinceColonizationCost, setProvinceColonizationCost] = useState(100);
+  const [provinceInfrastructureCapacity, setProvinceInfrastructureCapacity] = useState(100);
   const [provinceColonizationDisabled, setProvinceColonizationDisabled] = useState(false);
   const [provinceSearch, setProvinceSearch] = useState("");
   const [populationScope, setPopulationScope] = useState<AdminPopulationScope>("province");
@@ -164,6 +166,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     setFlagPreviewUrl(selectedCountry.flagUrl ?? null);
     setCrestPreviewUrl(selectedCountry.crestUrl ?? null);
     setIgnoreUntilTurn(selectedCountry.ignoreUntilTurn ?? 0);
+    setMarketId(selectedCountry.marketId ?? selectedCountry.id);
     setPunishmentReasonText(selectedCountry.lockReason ?? "");
   }, [selectedCountryId, selectedCountry]);
 
@@ -173,6 +176,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     }
     setProvinceOwnerCountryId(selectedProvince.ownerCountryId ?? "");
     setProvinceColonizationCost(selectedProvince.colonizationCost);
+    setProvinceInfrastructureCapacity(Math.max(0, Math.floor(selectedProvince.infrastructureCapacity ?? 100)));
     setProvinceColonizationDisabled(selectedProvince.colonizationDisabled);
     const population = selectedProvince.population ?? null;
     setProvincePopulationTotalInput(String(Math.max(0, Math.floor(population?.populationTotal ?? 0))));
@@ -220,6 +224,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
         countryName,
         countryColor,
         isAdmin,
+        marketId: marketId === selectedCountry.id ? null : marketId,
         flagFile,
         crestFile,
       });
@@ -323,6 +328,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     try {
       const updated = await adminUpdateProvince(token, selectedProvince.id, {
         colonizationCost: Math.max(1, Math.floor(provinceColonizationCost)),
+        infrastructureCapacity: Math.max(0, Math.floor(provinceInfrastructureCapacity)),
         colonizationDisabled: provinceColonizationDisabled,
         ownerCountryId: provinceOwnerCountryId.trim() === "" ? null : provinceOwnerCountryId,
       });
@@ -664,6 +670,18 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                                   {selectedProvince.manualCost ? "Ручная цена" : "Авто (по площади)"}
                                 </span>
                               </div>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-300">Инфраструктура провинции</label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={provinceInfrastructureCapacity}
+                                onChange={(e) =>
+                                  setProvinceInfrastructureCapacity(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                                }
+                                className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                              />
                             </div>
                             <div>
                               <label className="mb-1 block text-xs text-slate-300">Владелец</label>
@@ -1169,6 +1187,21 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
                             <input type="color" value={countryColor} onChange={(e) => setCountryColor(e.target.value)} className="panel-border h-10 w-12 rounded-lg bg-black/35 p-1" />
                             <input value={countryColor} onChange={(e) => setCountryColor(e.target.value)} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
                           </div>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Рынок страны (marketId)</label>
+                          <select
+                            value={marketId}
+                            onChange={(e) => setMarketId(e.target.value)}
+                            className="arc-scrollbar w-full rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-slate-100"
+                          >
+                            {countries.map((country) => (
+                              <option key={country.id} value={country.id}>
+                                {country.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="mt-1 text-[11px] text-slate-500">Чтобы вернуть собственный рынок, выберите эту же страну.</div>
                         </div>
                       </div>
 

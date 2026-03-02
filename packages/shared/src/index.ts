@@ -4,6 +4,7 @@ export type Country = {
   id: string;
   name: string;
   color: string;
+  marketId?: string | null;
   flagUrl?: string | null;
   crestUrl?: string | null;
   isAdmin?: boolean;
@@ -79,6 +80,25 @@ export type BuildingInstance = {
   buildingId: string;
   owner: BuildingOwner;
   createdTurnId: number;
+  ducats?: number;
+  warehouseByGoodId?: Record<string, number>;
+  lastLaborCoverage?: number;
+  lastInfraCoverage?: number;
+  lastInputCoverage?: number;
+  lastFinanceCoverage?: number;
+  lastProductivity?: number;
+  lastPurchaseByGoodId?: Record<string, number>;
+  lastPurchaseCostByGoodId?: Record<string, number>;
+  lastSalesByGoodId?: Record<string, number>;
+  lastSalesRevenueByGoodId?: Record<string, number>;
+  lastConsumptionByGoodId?: Record<string, number>;
+  lastProductionByGoodId?: Record<string, number>;
+  lastRevenueDucats?: number;
+  lastInputCostDucats?: number;
+  lastWagesDucats?: number;
+  lastNetDucats?: number;
+  isInactive?: boolean;
+  inactiveReason?: string | null;
 };
 
 export type ProvinceConstructionProject = {
@@ -99,6 +119,7 @@ export type WorldBase = {
   provinceNameById: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
+  provinceInfrastructureByProvince: Record<string, number>;
   provincePopulationByProvince: Record<string, ProvincePopulation>;
   provinceBuildingsByProvince: Record<string, BuildingInstance[]>;
   provinceBuildingDucatsByProvince: Record<string, Record<string, number>>;
@@ -117,6 +138,7 @@ export const WORLD_DELTA_MASK = {
   provincePopulationTreasuryByProvince: 1 << 7,
   provinceBuildingDucatsByProvince: 1 << 8,
   provinceConstructionQueueByProvince: 1 << 9,
+  provinceInfrastructureByProvince: 1 << 10,
 } as const;
 
 export type WorldDelta = {
@@ -129,6 +151,7 @@ export type WorldDelta = {
   n?: Record<string, string | null>;
   p?: Record<string, Record<string, number> | null>;
   z?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
+  s?: Record<string, number | null>;
   u?: Record<string, ProvincePopulation | null>;
   b?: Record<string, BuildingInstance[] | null>;
   y?: Record<string, number | null>;

@@ -20,6 +20,7 @@ import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
 import { PopulationStatsModal } from "./components/PopulationStatsModal";
 import { ProvinceBuildingsModal } from "./components/ProvinceBuildingsModal";
+import { MarketModal } from "./components/MarketModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -77,6 +78,7 @@ export default function App() {
   const [contentPanelOpen, setContentPanelOpen] = useState(false);
   const [populationStatsOpen, setPopulationStatsOpen] = useState(false);
   const [provinceBuildingsOpen, setProvinceBuildingsOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
@@ -1251,6 +1253,9 @@ export default function App() {
               if (key === "population") {
                 setPopulationStatsOpen(true);
               }
+              if (key === "market") {
+                setMarketOpen(true);
+              }
             }}
           />
           <EventLogPanel
@@ -1290,6 +1295,14 @@ export default function App() {
           countryId={auth.countryId}
           countryName={country?.name ?? auth.countryId}
           onQueueBuildOrder={queueBuildOrder}
+        />
+      )}
+      {auth?.token && (
+        <MarketModal
+          open={marketOpen}
+          onClose={() => setMarketOpen(false)}
+          token={auth.token}
+          countryName={country?.name ?? auth.countryId}
         />
       )}
 
@@ -1502,4 +1515,3 @@ export default function App() {
     </div>
   );
 }
-

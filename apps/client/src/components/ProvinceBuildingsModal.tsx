@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  AlertTriangle,
   Building2,
   ChevronDown,
   ChevronUp,
@@ -21,7 +22,17 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { cancelCountryBuild, demolishCountryBuild, fetchContentEntries, fetchCountries, fetchPublicGameUiSettings, type ContentEntry, type ResourceIconsMap } from "../lib/api";
+import {
+  cancelCountryBuild,
+  demolishCountryBuild,
+  fetchContentEntries,
+  fetchCountries,
+  fetchMarketOverview,
+  fetchPublicGameUiSettings,
+  type ContentEntry,
+  type MarketOverviewResponse,
+  type ResourceIconsMap,
+} from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 import { CustomSelect } from "./CustomSelect";
 import { Tooltip } from "./Tooltip";
@@ -58,6 +69,12 @@ type Card = {
   costConstruction: number;
   workersEmployed: number;
   workersDemand: number;
+  lastLaborCoverage?: number;
+  lastInputCoverage?: number;
+  lastInfraCoverage?: number;
+  lastFinanceCoverage?: number;
+  lastProductivity?: number;
+  inactiveReason?: string | null;
 };
 
 type BuildAvailability = {
@@ -149,6 +166,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [filterEconomy, setFilterEconomy] = useState<"all" | "profit" | "loss">("all");
   const [sortBy, setSortBy] = useState<"building" | "province" | "company" | "industry">("building");
   const [openEconomyByCardKey, setOpenEconomyByCardKey] = useState<Record<string, boolean>>({});
+  const [marketOverview, setMarketOverview] = useState<MarketOverviewResponse | null>(null);
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
@@ -197,6 +215,24 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       cancelled = true;
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !auth?.token) {
+      setMarketOverview(null);
+      return;
+    }
+    let cancelled = false;
+    fetchMarketOverview(auth.token)
+      .then((data) => {
+        if (!cancelled) setMarketOverview(data);
+      })
+      .catch(() => {
+        if (!cancelled) setMarketOverview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, auth?.token, worldBase?.turnId, countryId]);
 
   const buildingById = useMemo(() => new Map(buildings.map((x) => [x.id, x] as const)), [buildings]);
   const sortedBuildings = useMemo(() => [...buildings].sort((a, b) => a.name.localeCompare(b.name, "ru")), [buildings]);
@@ -287,8 +323,18 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           (s, r) => s + Math.max(0, r.workers),
           0,
         );
-        const workersEmployed = Math.round(workersDemandPerLevel * employmentRatio);
-        const inactiveReasons = workersDemandPerLevel > 0 && workersEmployed <= 0 ? ["Нет доступной рабочей силы"] : [];
+        const laborCoverage = Math.max(
+          0,
+          Math.min(1, typeof instance.lastLaborCoverage === "number" ? instance.lastLaborCoverage : employmentRatio),
+        );
+        const workersEmployed = Math.round(workersDemandPerLevel * laborCoverage);
+        const inactiveReasons: string[] = [];
+        if (instance.inactiveReason) {
+          inactiveReasons.push(instance.inactiveReason);
+        }
+        if (workersDemandPerLevel > 0 && workersEmployed <= 0) {
+          inactiveReasons.push("Нет доступной рабочей силы");
+        }
         const ind = industryById.get(((b as { industryId?: string }).industryId ?? "").trim());
         const ownerLabel =
           instance.owner.type === "company"
@@ -316,13 +362,19 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           ownerLogo,
           ownerType: instance.owner.type,
           ownerCompanyId: instance.owner.type === "company" ? instance.owner.companyId : undefined,
-          isActive: inactiveReasons.length === 0,
+          isActive: !(instance.isInactive ?? false) && inactiveReasons.length === 0,
           inactiveReasons,
           level,
           progressPercent: 100,
           costConstruction: Math.max(1, Math.floor(Number(b.costConstruction ?? 100))),
           workersEmployed,
           workersDemand: workersDemandPerLevel,
+          lastLaborCoverage: typeof instance.lastLaborCoverage === "number" ? instance.lastLaborCoverage : undefined,
+          lastInputCoverage: typeof instance.lastInputCoverage === "number" ? instance.lastInputCoverage : undefined,
+          lastInfraCoverage: typeof instance.lastInfraCoverage === "number" ? instance.lastInfraCoverage : undefined,
+          lastFinanceCoverage: typeof instance.lastFinanceCoverage === "number" ? instance.lastFinanceCoverage : undefined,
+          lastProductivity: typeof instance.lastProductivity === "number" ? instance.lastProductivity : undefined,
+          inactiveReason: instance.inactiveReason ?? null,
         });
       }
       for (const q of worldBase.provinceConstructionQueueByProvince[pid] ?? []) {
@@ -353,6 +405,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           costConstruction: Math.max(1, Math.floor(Number(q.costConstruction || b.costConstruction || 100))),
           workersEmployed: 0,
           workersDemand: 0,
+          inactiveReason: null,
         });
       }
     }
@@ -455,12 +508,24 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
   const getCardEconomy = (card: Card) => {
     const building = buildingById.get(card.buildingId);
-    const productivity = card.kind === "construction" ? card.progressPercent : card.workersDemand > 0 ? Math.round((card.workersEmployed / card.workersDemand) * 100) : 100;
+    const instance =
+      card.kind === "built"
+        ? (worldBase?.provinceBuildingsByProvince?.[card.provinceId] ?? []).find((x) => x.instanceId === card.instanceId)
+        : null;
+    const productivity =
+      card.kind === "construction"
+        ? card.progressPercent
+        : typeof instance?.lastProductivity === "number"
+          ? Math.round(Math.max(0, Math.min(1, instance.lastProductivity)) * 100)
+          : card.workersDemand > 0
+            ? Math.round((card.workersEmployed / card.workersDemand) * 100)
+            : 100;
     if (!building) {
       return {
         productivity,
         inputCost: 0,
         outputRevenue: 0,
+        wagesCost: 0,
         netPerTurn: 0,
         storageAmount: 0,
         inputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; cost: number }>,
@@ -470,84 +535,150 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       };
     }
     const ratio = Math.max(0, Math.min(1, productivity / 100));
+    const lastConsumption = instance?.lastConsumptionByGoodId ?? {};
+    const lastProduction = instance?.lastProductionByGoodId ?? {};
+    const lastPurchase = instance?.lastPurchaseByGoodId ?? {};
+    const lastPurchaseCost = instance?.lastPurchaseCostByGoodId ?? {};
+    const lastSales = instance?.lastSalesByGoodId ?? {};
+    const lastSalesRevenue = instance?.lastSalesRevenueByGoodId ?? {};
     const inputs = (building.inputs ?? []).map((entry) => {
       const good = goodById.get(entry.goodId);
       const price = Math.max(0, Number(good?.basePrice ?? 1));
       const max = Math.max(0, Number(entry.amount ?? 0));
-      const factual = max * ratio;
-      const cost = factual * price;
+      const factual = Math.max(0, Number(lastConsumption[entry.goodId] ?? max * ratio));
+      const cost =
+        typeof instance?.lastInputCostDucats === "number"
+          ? Math.max(0, Number(lastPurchaseCost[entry.goodId] ?? 0))
+          : factual * price;
       return { goodName: good?.name ?? entry.goodId, goodLogoUrl: good?.logoUrl ?? null, factual, max, cost };
     });
     const outputs = (building.outputs ?? []).map((entry) => {
       const good = goodById.get(entry.goodId);
       const price = Math.max(0, Number(good?.basePrice ?? 1));
       const max = Math.max(0, Number(entry.amount ?? 0));
-      const factual = max * ratio;
-      const revenue = factual * price;
+      const factual = Math.max(0, Number(lastProduction[entry.goodId] ?? max * ratio));
+      const soldForGood = Math.max(0, Number(lastSales[entry.goodId] ?? 0));
+      const revenue =
+        typeof instance?.lastRevenueDucats === "number"
+          ? Math.max(0, Number(lastSalesRevenue[entry.goodId] ?? 0))
+          : factual * price;
       return { goodName: good?.name ?? entry.goodId, goodLogoUrl: good?.logoUrl ?? null, factual, max, income: revenue };
     });
-    const inputCost = inputs.reduce((sum, entry) => sum + entry.cost, 0);
-    const outputRevenue = outputs.reduce((sum, entry) => sum + entry.income, 0);
-    const netPerTurn = outputRevenue - inputCost;
+    const inputCost =
+      typeof instance?.lastInputCostDucats === "number"
+        ? Math.max(0, Number(instance.lastInputCostDucats))
+        : inputs.reduce((sum, entry) => sum + entry.cost, 0);
+    const outputRevenue =
+      typeof instance?.lastRevenueDucats === "number"
+        ? Math.max(0, Number(instance.lastRevenueDucats))
+        : outputs.reduce((sum, entry) => sum + entry.income, 0);
+    const wagesCost =
+      typeof instance?.lastWagesDucats === "number"
+        ? Math.max(0, Number(instance.lastWagesDucats))
+        : 0;
+    const netPerTurn =
+      typeof instance?.lastNetDucats === "number"
+        ? Number(instance.lastNetDucats)
+        : outputRevenue - inputCost - wagesCost;
 
-    const totalTreasuryByType = worldBase?.provinceBuildingDucatsByProvince?.[card.provinceId]?.[card.buildingId] ?? 0;
-    const totalInstancesByType = (worldBase?.provinceBuildingsByProvince?.[card.provinceId] ?? []).filter(
-      (instance) => instance.buildingId === card.buildingId,
-    ).length;
-    const storageAmount = totalInstancesByType > 0 ? totalTreasuryByType / totalInstancesByType : 0;
+    const storageAmount =
+      typeof instance?.ducats === "number"
+        ? Math.max(0, Number(instance.ducats))
+        : (() => {
+            const totalTreasuryByType = worldBase?.provinceBuildingDucatsByProvince?.[card.provinceId]?.[card.buildingId] ?? 0;
+            const totalInstancesByType = (worldBase?.provinceBuildingsByProvince?.[card.provinceId] ?? []).filter(
+              (entry) => entry.buildingId === card.buildingId,
+            ).length;
+            return totalInstancesByType > 0 ? totalTreasuryByType / totalInstancesByType : 0;
+          })();
     const trade = [
-      ...inputs.filter((entry) => entry.factual > 0).map((entry) => ({
-        kind: "buy" as const,
-        goodName: entry.goodName,
-        goodLogoUrl: entry.goodLogoUrl,
-        amount: entry.factual,
-        total: entry.cost,
-      })),
-      ...outputs.filter((entry) => entry.factual > 0).map((entry) => ({
-        kind: "sell" as const,
-        goodName: entry.goodName,
-        goodLogoUrl: entry.goodLogoUrl,
-        amount: entry.factual,
-        total: entry.income,
-      })),
+      ...Object.entries(lastPurchase)
+        .filter(([, amount]) => Number(amount) > 0)
+        .map(([goodId, amount]) => {
+          const good = goodById.get(goodId);
+          const value = Number(amount);
+          return {
+            kind: "buy" as const,
+            goodName: good?.name ?? goodId,
+            goodLogoUrl: good?.logoUrl ?? null,
+            amount: value,
+            total: Math.max(0, Number(lastPurchaseCost[goodId] ?? 0)),
+          };
+        }),
+      ...Object.entries(lastSales)
+        .filter(([, amount]) => Number(amount) > 0)
+        .map(([goodId, amount]) => {
+          const good = goodById.get(goodId);
+          const value = Number(amount);
+          return {
+            kind: "sell" as const,
+            goodName: good?.name ?? goodId,
+            goodLogoUrl: good?.logoUrl ?? null,
+            amount: value,
+            total: Math.max(0, Number(lastSalesRevenue[goodId] ?? 0)),
+          };
+        }),
     ];
 
     const stockMap = new Map<
       string,
       { goodName: string; goodLogoUrl: string | null; available: number; incoming: number; outgoing: number }
     >();
-    for (const input of inputs) {
-      const key = input.goodName;
-      const row = stockMap.get(key) ?? {
-        goodName: input.goodName,
-        goodLogoUrl: input.goodLogoUrl,
+    const warehouse = instance?.warehouseByGoodId ?? {};
+    for (const [goodId, amount] of Object.entries(warehouse)) {
+      const good = goodById.get(goodId);
+      const row = stockMap.get(goodId) ?? {
+        goodName: good?.name ?? goodId,
+        goodLogoUrl: good?.logoUrl ?? null,
         available: 0,
         incoming: 0,
         outgoing: 0,
       };
-      row.incoming += input.factual;
-      row.outgoing += input.factual;
-      stockMap.set(key, row);
+      row.available += Math.max(0, Number(amount));
+      stockMap.set(goodId, row);
     }
-    for (const output of outputs) {
-      const key = output.goodName;
-      const row = stockMap.get(key) ?? {
-        goodName: output.goodName,
-        goodLogoUrl: output.goodLogoUrl,
+    for (const [goodId, amount] of Object.entries(lastPurchase)) {
+      const good = goodById.get(goodId);
+      const row = stockMap.get(goodId) ?? {
+        goodName: good?.name ?? goodId,
+        goodLogoUrl: good?.logoUrl ?? null,
         available: 0,
         incoming: 0,
         outgoing: 0,
       };
-      row.incoming += output.factual;
-      row.outgoing += output.factual;
-      stockMap.set(key, row);
+      row.incoming += Math.max(0, Number(amount));
+      stockMap.set(goodId, row);
+    }
+    for (const [goodId, amount] of Object.entries(lastConsumption)) {
+      const good = goodById.get(goodId);
+      const row = stockMap.get(goodId) ?? {
+        goodName: good?.name ?? goodId,
+        goodLogoUrl: good?.logoUrl ?? null,
+        available: 0,
+        incoming: 0,
+        outgoing: 0,
+      };
+      row.outgoing += Math.max(0, Number(amount));
+      stockMap.set(goodId, row);
+    }
+    for (const [goodId, amount] of Object.entries(lastSales)) {
+      const good = goodById.get(goodId);
+      const row = stockMap.get(goodId) ?? {
+        goodName: good?.name ?? goodId,
+        goodLogoUrl: good?.logoUrl ?? null,
+        available: 0,
+        incoming: 0,
+        outgoing: 0,
+      };
+      row.outgoing += Math.max(0, Number(amount));
+      stockMap.set(goodId, row);
     }
     const stockRows = [...stockMap.values()].map((row) => ({
       ...row,
       remainder: row.available + row.incoming - row.outgoing,
     }));
 
-    return { productivity, inputCost, outputRevenue, netPerTurn, storageAmount, inputs, outputs, stockRows, trade };
+    return { productivity, inputCost, outputRevenue, wagesCost, netPerTurn, storageAmount, inputs, outputs, stockRows, trade };
   };
 
   const filteredCards = useMemo(() => {
@@ -599,6 +730,20 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
   const availableConstruction = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.construction ?? 0)));
   const availableDucats = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.ducats ?? 0)));
+  const marketTopDeficitGoods = useMemo(
+    () =>
+      [...(marketOverview?.goods ?? [])]
+        .sort((a, b) => a.countryCoveragePct - b.countryCoveragePct)
+        .slice(0, 6),
+    [marketOverview],
+  );
+  const infraRows = useMemo(
+    () =>
+      Object.entries(marketOverview?.infraByProvince ?? {})
+        .map(([provinceId, info]) => ({ provinceId, ...info }))
+        .sort((a, b) => a.coverage - b.coverage),
+    [marketOverview],
+  );
   const constructionCardClass =
     "relative z-0 h-[124px] rounded-lg border border-amber-400/55 bg-[#14100a] p-2 shadow-[0_0_0_1px_rgba(245,158,11,0.08)] transition-all duration-150 hover:z-10 hover:-translate-y-0.5 hover:border-amber-300/80 hover:shadow-[0_8px_24px_rgba(245,158,11,0.16)]";
   const selectedProvinceBuildings = useMemo(() => {
@@ -916,11 +1061,84 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
             </div>
           </div>
 
+          {marketOverview && (
+            <section className="rounded-xl border border-white/10 bg-black/25 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-xs uppercase tracking-wide text-white/45">
+                  Рынок: {marketOverview.marketId}
+                </div>
+                <div className="text-[11px] text-white/60">Товаров: {marketOverview.goods.length}</div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {marketTopDeficitGoods.map((row) => (
+                  <div key={`market-good-${row.goodId}`} className="rounded-lg border border-white/10 bg-black/35 px-2 py-1.5 text-[11px] text-white/70">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-white/85">{row.goodName}</span>
+                      <span className={row.countryCoveragePct < 50 ? "font-bold text-red-300" : "font-semibold text-emerald-300"}>
+                        {Math.round(row.countryCoveragePct)}%
+                      </span>
+                    </div>
+                    <div className="mt-1 text-white/50">
+                      Цена: {formatCompact(row.countryPrice)} | Глоб: {formatCompact(row.globalPrice)}
+                    </div>
+                    <div className="text-white/45">
+                      Спрос/предл: {formatCompact(row.countryDemand)} / {formatCompact(row.countryOffer)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <div className="rounded-lg border border-white/10 bg-black/35 p-2">
+                  <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Инфраструктура провинций</div>
+                  <div className="arc-scrollbar max-h-28 space-y-1 overflow-auto pr-1">
+                    {infraRows.length === 0 && <div className="text-[11px] text-white/45">Нет данных</div>}
+                    {infraRows.map((row) => (
+                      <div key={`infra-${row.provinceId}`} className="flex items-center justify-between rounded-md border border-white/10 bg-black/30 px-2 py-1 text-[11px]">
+                        <span className="text-white/70">{row.provinceId}</span>
+                        <span className={row.coverage < 1 ? "font-bold text-amber-300" : "font-semibold text-emerald-300"}>
+                          {Math.round(row.coverage * 100)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-black/35 p-2">
+                  <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Алерты</div>
+                  <div className="arc-scrollbar max-h-28 space-y-1 overflow-auto pr-1">
+                    {(marketOverview.alerts ?? []).length === 0 && <div className="text-[11px] text-white/45">Нет алертов</div>}
+                    {(marketOverview.alerts ?? []).map((alert) => (
+                      <div key={alert.id} className={`rounded-md border px-2 py-1 text-[11px] ${alert.severity === "critical" ? "border-red-400/40 bg-red-500/10 text-red-200" : "border-amber-400/40 bg-amber-500/10 text-amber-200"}`}>
+                        <div className="inline-flex items-center gap-1">
+                          <AlertTriangle size={11} />
+                          <span className="font-semibold">{alert.message}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
           <div className="arc-scrollbar grid min-h-0 grid-cols-1 gap-3 overflow-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
             {filteredCards.map((c) => (
               (() => {
                 const econ = c.kind === "built" ? getCardEconomy(c) : null;
                 const displayInactiveReasons = [...c.inactiveReasons];
+                if (c.kind === "built") {
+                  const factors = [
+                    { label: "labor", value: c.lastLaborCoverage },
+                    { label: "input", value: c.lastInputCoverage },
+                    { label: "infra", value: c.lastInfraCoverage },
+                    { label: "finance", value: c.lastFinanceCoverage },
+                  ]
+                    .filter((f): f is { label: string; value: number } => typeof f.value === "number")
+                    .sort((a, b) => a.value - b.value);
+                  if (factors.length > 0 && factors[0].value < 0.999) {
+                    const limiting = factors[0];
+                    displayInactiveReasons.push(`Лимит-фактор: ${limiting.label} (${Math.round(limiting.value * 100)}%)`);
+                  }
+                }
                 if (c.kind === "built" && econ && econ.netPerTurn < 0 && econ.storageAmount <= 0) {
                   displayInactiveReasons.push("Недостаточно дукатов: убыток не покрывается кассой здания");
                 }
@@ -1262,6 +1480,51 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                 </div>
                               </div>
                             ))}
+                          </div>
+                          <div className="space-y-1 rounded-md border border-white/15 bg-black/25 p-2">
+                            <div className="inline-flex items-center gap-1.5 font-semibold text-white/50">
+                              <Coins size={12} className="shrink-0" />
+                              <span>Финансы</span>
+                            </div>
+                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-emerald-300">Доход от продаж</span>
+                                <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
+                                  +{formatCompact(econData.outputRevenue)} дукат
+                                </span>
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-red-300">Закупка товаров</span>
+                                <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
+                                  -{formatCompact(econData.inputCost)} дукат
+                                </span>
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-red-300">Зарплаты</span>
+                                <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
+                                  -{formatCompact(econData.wagesCost)} дукат
+                                </span>
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-white/80">Итог за ход</span>
+                                <span
+                                  className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${
+                                    econData.netPerTurn >= 0
+                                      ? "border-emerald-400/45 bg-emerald-500/20 text-emerald-200"
+                                      : "border-red-400/45 bg-red-500/20 text-red-200"
+                                  }`}
+                                >
+                                  {econData.netPerTurn >= 0 ? "+" : ""}
+                                  {formatCompact(econData.netPerTurn)} дукат
+                                </span>
+                              </div>
+                            </div>
                           </div>
                           </div>
                           </motion.div>

@@ -65,6 +65,7 @@ const CONTENT_UI_SCHEMA = {
       enabled: true,
       sections: [
         { id: "general", label: "Основная информация", icon: FileText },
+        { id: "economy", label: "Экономика профессии", icon: Factory },
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
@@ -303,8 +304,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftMalePortraitUrl, setDraftMalePortraitUrl] = useState<string | null>(null);
   const [draftFemalePortraitUrl, setDraftFemalePortraitUrl] = useState<string | null>(null);
   const [draftBasePrice, setDraftBasePrice] = useState("1");
+  const [draftMinPrice, setDraftMinPrice] = useState("0.1");
+  const [draftMaxPrice, setDraftMaxPrice] = useState("10");
+  const [draftBaseWage, setDraftBaseWage] = useState("1");
   const [draftCostConstruction, setDraftCostConstruction] = useState("100");
   const [draftCostDucats, setDraftCostDucats] = useState("10");
+  const [draftStartingDucats, setDraftStartingDucats] = useState("0");
+  const [draftInfrastructureUse, setDraftInfrastructureUse] = useState("0");
   const [draftInputs, setDraftInputs] = useState<GoodFlowDraft[]>([]);
   const [draftOutputs, setDraftOutputs] = useState<GoodFlowDraft[]>([]);
   const [draftWorkforceRequirements, setDraftWorkforceRequirements] = useState<WorkforceRequirementDraft[]>([]);
@@ -339,8 +345,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
       malePortraitUrl: entry.malePortraitUrl ?? null,
       femalePortraitUrl: entry.femalePortraitUrl ?? null,
       basePrice: entry.basePrice ?? null,
+      minPrice: entry.minPrice ?? null,
+      maxPrice: entry.maxPrice ?? null,
+      baseWage: entry.baseWage ?? null,
       costConstruction: entry.costConstruction ?? null,
       costDucats: entry.costDucats ?? null,
+      startingDucats: entry.startingDucats ?? null,
+      infrastructureUse: entry.infrastructureUse ?? null,
       inputs: (entry.inputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
       outputs: (entry.outputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
       workforceRequirements: (entry.workforceRequirements ?? []).map((row) => ({
@@ -519,8 +530,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftMalePortraitUrl(null);
       setDraftFemalePortraitUrl(null);
       setDraftBasePrice("1");
+      setDraftMinPrice("0.1");
+      setDraftMaxPrice("10");
+      setDraftBaseWage("1");
       setDraftCostConstruction("100");
       setDraftCostDucats("10");
+      setDraftStartingDucats("0");
+      setDraftInfrastructureUse("0");
       setDraftInputs([]);
       setDraftOutputs([]);
       setDraftWorkforceRequirements([]);
@@ -542,6 +558,21 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(selectedEntry.basePrice)
         : "1",
     );
+    setDraftMinPrice(
+      typeof selectedEntry.minPrice === "number" && Number.isFinite(selectedEntry.minPrice)
+        ? String(selectedEntry.minPrice)
+        : "0.1",
+    );
+    setDraftMaxPrice(
+      typeof selectedEntry.maxPrice === "number" && Number.isFinite(selectedEntry.maxPrice)
+        ? String(selectedEntry.maxPrice)
+        : "10",
+    );
+    setDraftBaseWage(
+      typeof selectedEntry.baseWage === "number" && Number.isFinite(selectedEntry.baseWage)
+        ? String(selectedEntry.baseWage)
+        : "1",
+    );
     setDraftCostConstruction(
       typeof selectedEntry.costConstruction === "number" && Number.isFinite(selectedEntry.costConstruction)
         ? String(Math.max(1, Math.floor(selectedEntry.costConstruction)))
@@ -551,6 +582,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
       typeof selectedEntry.costDucats === "number" && Number.isFinite(selectedEntry.costDucats)
         ? String(Math.max(0, selectedEntry.costDucats))
         : "10",
+    );
+    setDraftStartingDucats(
+      typeof selectedEntry.startingDucats === "number" && Number.isFinite(selectedEntry.startingDucats)
+        ? String(Math.max(0, selectedEntry.startingDucats))
+        : "0",
+    );
+    setDraftInfrastructureUse(
+      typeof selectedEntry.infrastructureUse === "number" && Number.isFinite(selectedEntry.infrastructureUse)
+        ? String(Math.max(0, selectedEntry.infrastructureUse))
+        : "0",
     );
     setDraftInputs((selectedEntry.inputs ?? []).map((row) => ({ goodId: row.goodId, amount: String(row.amount) })));
     setDraftOutputs((selectedEntry.outputs ?? []).map((row) => ({ goodId: row.goodId, amount: String(row.amount) })));
@@ -602,6 +643,24 @@ export function ContentPanel({ open, token, onClose }: Props) {
               ? Number(Number(draftBasePrice).toFixed(3))
               : null
             : null,
+        minPrice:
+          activeCategory === "goods"
+            ? Number.isFinite(Number(draftMinPrice))
+              ? Number(Number(draftMinPrice).toFixed(3))
+              : null
+            : null,
+        maxPrice:
+          activeCategory === "goods"
+            ? Number.isFinite(Number(draftMaxPrice))
+              ? Number(Number(draftMaxPrice).toFixed(3))
+              : null
+            : null,
+        baseWage:
+          activeCategory === "professions"
+            ? Number.isFinite(Number(draftBaseWage))
+              ? Number(Number(draftBaseWage).toFixed(3))
+              : null
+            : null,
         costConstruction:
           activeCategory === "buildings"
             ? Number.isFinite(Number(draftCostConstruction))
@@ -612,6 +671,18 @@ export function ContentPanel({ open, token, onClose }: Props) {
           activeCategory === "buildings"
             ? Number.isFinite(Number(draftCostDucats))
               ? Number(Math.max(0, Number(draftCostDucats)).toFixed(3))
+              : null
+            : null,
+        startingDucats:
+          activeCategory === "buildings"
+            ? Number.isFinite(Number(draftStartingDucats))
+              ? Number(Math.max(0, Number(draftStartingDucats)).toFixed(3))
+              : null
+            : null,
+        infrastructureUse:
+          activeCategory === "buildings"
+            ? Number.isFinite(Number(draftInfrastructureUse))
+              ? Number(Math.max(0, Number(draftInfrastructureUse)).toFixed(3))
               : null
             : null,
         inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
@@ -632,8 +703,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
   }, [
     activeCategory,
     draftBasePrice,
+    draftMinPrice,
+    draftMaxPrice,
+    draftBaseWage,
     draftCostConstruction,
     draftCostDucats,
+    draftStartingDucats,
+    draftInfrastructureUse,
     draftColor,
     draftDescription,
     draftFemalePortraitUrl,
@@ -675,8 +751,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
         description: "",
         color: "#a78bfa",
         basePrice: activeCategory === "goods" ? 1 : undefined,
+        minPrice: activeCategory === "goods" ? 0.1 : undefined,
+        maxPrice: activeCategory === "goods" ? 10 : undefined,
+        baseWage: activeCategory === "professions" ? 1 : undefined,
         costConstruction: activeCategory === "buildings" ? 100 : undefined,
         costDucats: activeCategory === "buildings" ? 10 : undefined,
+        startingDucats: activeCategory === "buildings" ? 0 : undefined,
+        infrastructureUse: activeCategory === "buildings" ? 0 : undefined,
         inputs: activeCategory === "buildings" ? [] : undefined,
         outputs: activeCategory === "buildings" ? [] : undefined,
         workforceRequirements: activeCategory === "buildings" ? [] : undefined,
@@ -720,8 +801,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
       description: draftDescription.trim(),
       color,
       basePrice: activeCategory === "goods" ? Math.max(0, Number(draftBasePrice || "0")) : undefined,
+      minPrice: activeCategory === "goods" ? Math.max(0, Number(draftMinPrice || "0")) : undefined,
+      maxPrice: activeCategory === "goods" ? Math.max(0, Number(draftMaxPrice || "0")) : undefined,
+      baseWage: activeCategory === "professions" ? Math.max(0, Number(draftBaseWage || "0")) : undefined,
       costConstruction: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftCostConstruction || "100"))) : undefined,
       costDucats: activeCategory === "buildings" ? Math.max(0, Number(draftCostDucats || "10")) : undefined,
+      startingDucats: activeCategory === "buildings" ? Math.max(0, Number(draftStartingDucats || "0")) : undefined,
+      infrastructureUse: activeCategory === "buildings" ? Math.max(0, Number(draftInfrastructureUse || "0")) : undefined,
       inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : undefined,
       outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : undefined,
       workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : undefined,
@@ -736,15 +822,31 @@ export function ContentPanel({ open, token, onClose }: Props) {
             : null
           : undefined,
     };
-    if (activeCategory === "goods" && !Number.isFinite(payload.basePrice ?? Number.NaN)) {
-      toast.error("Базовая цена товара должна быть числом");
+    if (
+      activeCategory === "goods" &&
+      (!Number.isFinite(payload.basePrice ?? Number.NaN) ||
+        !Number.isFinite(payload.minPrice ?? Number.NaN) ||
+        !Number.isFinite(payload.maxPrice ?? Number.NaN))
+    ) {
+      toast.error("Параметры цены товара должны быть числами");
+      return;
+    }
+    if (activeCategory === "goods" && (payload.maxPrice ?? 0) < (payload.minPrice ?? 0)) {
+      toast.error("Максимальная цена не может быть меньше минимальной");
+      return;
+    }
+    if (activeCategory === "professions" && !Number.isFinite(payload.baseWage ?? Number.NaN)) {
+      toast.error("Базовая зарплата должна быть числом");
       return;
     }
     if (
       activeCategory === "buildings" &&
-      (!Number.isFinite(payload.costConstruction ?? Number.NaN) || !Number.isFinite(payload.costDucats ?? Number.NaN))
+      (!Number.isFinite(payload.costConstruction ?? Number.NaN) ||
+        !Number.isFinite(payload.costDucats ?? Number.NaN) ||
+        !Number.isFinite(payload.startingDucats ?? Number.NaN) ||
+        !Number.isFinite(payload.infrastructureUse ?? Number.NaN))
     ) {
-      toast.error("Стоимость строительства должна быть числом");
+      toast.error("Параметры строительства должны быть числами");
       return;
     }
     setSaving(true);
@@ -1110,7 +1212,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               transition={{ duration: 0.2, ease: "easeOut" }}
                               className="overflow-hidden"
                             >
-                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 pt-1">
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-4">
                               <label className="block">
                                 <Tooltip content="Сколько очков строительства требуется на завершение проекта.">
                                   <span className="mb-1 block text-xs text-white/60">Очки строительства</span>
@@ -1132,6 +1234,30 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                   onChange={(e) => setDraftCostDucats(e.target.value)}
                                   inputMode="decimal"
                                   placeholder="10"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Стартовый капитал здания, начисляемый сразу после завершения строительства.">
+                                  <span className="mb-1 block text-xs text-white/60">Стартовые дукаты</span>
+                                </Tooltip>
+                                <input
+                                  value={draftStartingDucats}
+                                  onChange={(e) => setDraftStartingDucats(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="0"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Нагрузка здания на инфраструктуру провинции. Влияет на доступный объем торговли и продуктивность.">
+                                  <span className="mb-1 block text-xs text-white/60">Инфраструктура</span>
+                                </Tooltip>
+                                <input
+                                  value={draftInfrastructureUse}
+                                  onChange={(e) => setDraftInfrastructureUse(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="0"
                                   className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
                                 />
                               </label>
@@ -1657,24 +1783,74 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               transition={{ duration: 0.2, ease: "easeOut" }}
                               className="overflow-hidden"
                             >
-                              <label className="block">
-                                <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
-                                  <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
-                                </Tooltip>
-                                <input
-                                  value={draftBasePrice}
-                                  onChange={(e) => setDraftBasePrice(e.target.value)}
-                                  inputMode="decimal"
-                                  placeholder="1"
-                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
-                                />
-                              </label>
+                              <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                                <label className="block">
+                                  <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
+                                    <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftBasePrice}
+                                    onChange={(e) => setDraftBasePrice(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Минимальная граница цены товара на рынке.">
+                                    <span className="mb-1 block text-xs text-white/60">Мин. цена</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftMinPrice}
+                                    onChange={(e) => setDraftMinPrice(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="0.1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Максимальная граница цены товара на рынке.">
+                                    <span className="mb-1 block text-xs text-white/60">Макс. цена</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftMaxPrice}
+                                    onChange={(e) => setDraftMaxPrice(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="10"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                              </div>
                               <Tooltip content="После внедрения рынка это значение будет стартовой/референсной ценой.">
                                 <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
                               </Tooltip>
                             </motion.div>
                           ) : null}
                           </AnimatePresence>
+                        </div>
+                      </section>
+                    )}
+
+                    {contentSection === "economy" && activeCategory === "professions" && (
+                      <section className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <Tooltip content="Базовая зарплата за одного работника профессии за ход. Используется при расчете затрат зданий.">
+                            <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                              Экономика профессии
+                            </span>
+                          </Tooltip>
+                          <label className="block">
+                            <Tooltip content="Базовая ставка оплаты труда для этой профессии.">
+                              <span className="mb-1 block text-xs text-white/60">Базовая зарплата</span>
+                            </Tooltip>
+                            <input
+                              value={draftBaseWage}
+                              onChange={(e) => setDraftBaseWage(e.target.value)}
+                              inputMode="decimal"
+                              placeholder="1"
+                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                            />
+                          </label>
                         </div>
                       </section>
                     )}

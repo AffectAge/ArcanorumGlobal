@@ -13,8 +13,13 @@ export type ContentCulture = {
   malePortraitUrl?: string | null;
   femalePortraitUrl?: string | null;
   basePrice?: number | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
+  startingDucats?: number | null;
+  infrastructureUse?: number | null;
   inputs?: Array<{ goodId: string; amount: number }> | null;
   outputs?: Array<{ goodId: string; amount: number }> | null;
   workforceRequirements?: Array<{ professionId: string; workers: number }> | null;
@@ -40,8 +45,13 @@ type ContentEntryUpsertPayload = {
   description?: string;
   color: string;
   basePrice?: number | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
+  startingDucats?: number | null;
+  infrastructureUse?: number | null;
   inputs?: Array<{ goodId: string; amount: number }>;
   outputs?: Array<{ goodId: string; amount: number }>;
   workforceRequirements?: Array<{ professionId: string; workers: number }>;
@@ -114,6 +124,50 @@ export async function fetchWorldSnapshot(token: string): Promise<{ worldBase: Wo
     throw new Error(err?.error ?? "WORLD_SNAPSHOT_FAILED");
   }
   return response.json();
+}
+
+export type MarketOverviewItem = {
+  goodId: string;
+  goodName: string;
+  countryPrice: number;
+  globalPrice: number;
+  countryDemand: number;
+  countryOffer: number;
+  countryCoveragePct: number;
+  globalDemand: number;
+  globalOffer: number;
+  globalCoveragePct: number;
+};
+
+export type MarketOverviewAlert = {
+  id: string;
+  severity: "warning" | "critical";
+  kind: "critical-deficit" | "infra-overload" | "building-inactive";
+  message: string;
+  provinceId?: string;
+  buildingId?: string;
+  instanceId?: string;
+  goodId?: string;
+};
+
+export type MarketOverviewResponse = {
+  turnId: number;
+  countryId: string;
+  marketId: string;
+  goods: MarketOverviewItem[];
+  infraByProvince: Record<string, { capacity: number; required: number; coverage: number }>;
+  alerts: MarketOverviewAlert[];
+};
+
+export async function fetchMarketOverview(token: string): Promise<MarketOverviewResponse> {
+  const response = await fetch(`${API}/economy/market-overview`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_OVERVIEW_FAILED");
+  }
+  return (await response.json()) as MarketOverviewResponse;
 }
 
 export async function fetchCurrentTurnOrders(token: string): Promise<{ turnId: number; orders: Order[] }> {
@@ -362,6 +416,7 @@ export async function adminUpdateCountry(
     countryColor?: string;
     isAdmin?: boolean;
     ignoreUntilTurn?: number | null;
+    marketId?: string | null;
     flagFile?: File | null;
     crestFile?: File | null;
   },
@@ -379,6 +434,9 @@ export async function adminUpdateCountry(
   }
   if (payload.ignoreUntilTurn !== undefined) {
     formData.set("ignoreUntilTurn", payload.ignoreUntilTurn == null ? "0" : String(payload.ignoreUntilTurn));
+  }
+  if (payload.marketId !== undefined) {
+    formData.set("marketId", payload.marketId ?? "");
   }
   if (payload.flagFile) {
     formData.set("flag", payload.flagFile);
@@ -497,6 +555,10 @@ export type GameSettings = {
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
+    marketPriceSmoothing: number;
+  };
+  markets?: {
+    countryMarketByCountryId: Record<string, string>;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -722,6 +784,7 @@ export async function updateGameSettings(
       baseDucatsPerTurn?: number;
       baseGoldPerTurn?: number;
       demolitionCostConstructionPercent?: number;
+      marketPriceSmoothing?: number;
     };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
@@ -930,6 +993,7 @@ export type AdminProvinceItem = {
   areaKm2: number;
   ownerCountryId: string | null;
   colonizationCost: number;
+  infrastructureCapacity: number;
   colonizationDisabled: boolean;
   manualCost?: boolean;
   colonyProgressByCountry: Record<string, number>;
@@ -1025,6 +1089,7 @@ export async function adminUpdateProvince(
   provinceId: string,
   payload: {
     colonizationCost?: number;
+    infrastructureCapacity?: number;
     colonizationDisabled?: boolean;
     ownerCountryId?: string | null;
     resetColonizationCostToAuto?: boolean;

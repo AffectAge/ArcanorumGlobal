@@ -295,6 +295,45 @@ const POPULATION_BIRTH_RATE = 0.012;
 const POPULATION_DEATH_RATE = 0.008;
 const BUILDING_BASE_THROUGHPUT = 1;
 const BUILDING_BASE_WAGE_PER_WORKER_GOLD = 0.2;
+const DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY = 100;
+const DEFAULT_MARKET_PRICE_SMOOTHING = 0.2;
+type PriceScopeState = Record<string, Record<string, number>>;
+let countryGoodPrices: PriceScopeState = {};
+let globalGoodPrices: Record<string, number> = {};
+let latestMarketOverview: MarketOverviewState = {
+  turnId: 1,
+  demandByCountry: {},
+  offerByCountry: {},
+  demandGlobal: {},
+  offerGlobal: {},
+  infraByProvince: {},
+  alertsByCountry: {},
+};
+
+function round3(value: number): number {
+  return Number(value.toFixed(3));
+}
+
+function normalizeMarketId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const next = value.trim();
+  if (!next) return null;
+  return next;
+}
+
+function getCountryMarketId(countryId: string): string {
+  const raw = gameSettings.markets.countryMarketByCountryId[countryId];
+  return normalizeMarketId(raw) ?? countryId;
+}
+
+function setCountryMarketId(countryId: string, marketId: string | null): void {
+  const next = normalizeMarketId(marketId);
+  if (!next || next === countryId) {
+    delete gameSettings.markets.countryMarketByCountryId[countryId];
+    return;
+  }
+  gameSettings.markets.countryMarketByCountryId[countryId] = next;
+}
 
 type PopulationDimensionKey = "culturePct" | "ideologyPct" | "religionPct" | "racePct" | "professionPct";
 
@@ -353,18 +392,23 @@ type GameContentEntry = {
   logoUrl: string | null;
   malePortraitUrl: string | null;
   femalePortraitUrl: string | null;
+  baseWage?: number | null;
 };
 
 type GoodContentEntry = GameContentEntry & {
   basePrice?: number | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
 };
 
 type BuildingContentEntry = GameContentEntry & {
   costConstruction?: number | null;
   costDucats?: number | null;
+  startingDucats?: number | null;
   inputs?: GoodFlow[];
   outputs?: GoodFlow[];
   workforceRequirements?: WorkforceRequirement[];
+  infrastructureUse?: number | null;
   allowedCountryIds?: string[];
   deniedCountryIds?: string[];
   countryBuildLimits?: BuildingCountryLimit[];
@@ -402,6 +446,10 @@ type GameSettings = {
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
+    marketPriceSmoothing: number;
+  };
+  markets: {
+    countryMarketByCountryId: Record<string, string>;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -441,6 +489,27 @@ type GameSettings = {
   };
 };
 
+type MarketOverviewAlert = {
+  id: string;
+  severity: "warning" | "critical";
+  kind: "critical-deficit" | "infra-overload" | "building-inactive";
+  message: string;
+  provinceId?: string;
+  buildingId?: string;
+  instanceId?: string;
+  goodId?: string;
+};
+
+type MarketOverviewState = {
+  turnId: number;
+  demandByCountry: Record<string, Record<string, number>>;
+  offerByCountry: Record<string, Record<string, number>>;
+  demandGlobal: Record<string, number>;
+  offerGlobal: Record<string, number>;
+  infraByProvince: Record<string, { capacity: number; required: number; coverage: number }>;
+  alertsByCountry: Record<string, MarketOverviewAlert[]>;
+};
+
 function normalizeContentCultures(input: unknown): GameSettings["content"]["cultures"] {
   if (!Array.isArray(input)) return [];
   const seen = new Set<string>();
@@ -455,6 +524,7 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
       logoUrl: unknown;
       malePortraitUrl: unknown;
       femalePortraitUrl: unknown;
+      baseWage: unknown;
     }>;
     const id = typeof row.id === "string" ? row.id.trim() : "";
     const name = typeof row.name === "string" ? row.name.trim() : "";
@@ -465,6 +535,8 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
       typeof row.malePortraitUrl === "string" || row.malePortraitUrl === null ? (row.malePortraitUrl ?? null) : null;
     const femalePortraitUrl =
       typeof row.femalePortraitUrl === "string" || row.femalePortraitUrl === null ? (row.femalePortraitUrl ?? null) : null;
+    const baseWage =
+      typeof row.baseWage === "number" && Number.isFinite(row.baseWage) ? Math.max(0, Number(row.baseWage)) : undefined;
     if (!id || !name || seen.has(id)) continue;
     seen.add(id);
     items.push({
@@ -475,6 +547,7 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
       logoUrl,
       malePortraitUrl,
       femalePortraitUrl,
+      baseWage: baseWage == null ? undefined : Number(baseWage.toFixed(3)),
     });
   }
   return items;
@@ -544,12 +617,20 @@ function normalizeContentGoods(input: unknown): GameSettings["content"]["goods"]
   const base = normalizeContentCultures(input);
   const sourceRows = Array.isArray(input) ? input : [];
   return base.map((entry, index) => {
-    const raw = sourceRows[index] as Partial<{ basePrice?: unknown }> | undefined;
+    const raw = sourceRows[index] as Partial<{ basePrice?: unknown; minPrice?: unknown; maxPrice?: unknown }> | undefined;
     const basePrice =
       typeof raw?.basePrice === "number" && Number.isFinite(raw.basePrice) ? Math.max(0, raw.basePrice) : 1;
+    const defaultMin = basePrice * 0.1;
+    const defaultMax = basePrice * 10;
+    const minPriceRaw =
+      typeof raw?.minPrice === "number" && Number.isFinite(raw.minPrice) ? Math.max(0, Number(raw.minPrice)) : defaultMin;
+    const maxPriceRaw =
+      typeof raw?.maxPrice === "number" && Number.isFinite(raw.maxPrice) ? Math.max(minPriceRaw, Number(raw.maxPrice)) : defaultMax;
     return {
       ...entry,
       basePrice: Number(basePrice.toFixed(3)),
+      minPrice: Number(minPriceRaw.toFixed(3)),
+      maxPrice: Number(maxPriceRaw.toFixed(3)),
     };
   });
 }
@@ -561,9 +642,11 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
     const raw = sourceRows[index] as Partial<{
       costConstruction?: unknown;
       costDucats?: unknown;
+      startingDucats?: unknown;
       inputs?: unknown;
       outputs?: unknown;
       workforceRequirements?: unknown;
+      infrastructureUse?: unknown;
       allowedCountryIds?: unknown;
       deniedCountryIds?: unknown;
       countryBuildLimits?: unknown;
@@ -577,6 +660,10 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       typeof raw?.costDucats === "number" && Number.isFinite(raw.costDucats)
         ? Math.max(0, Number(raw.costDucats))
         : 10;
+    const startingDucats =
+      typeof raw?.startingDucats === "number" && Number.isFinite(raw.startingDucats)
+        ? Math.max(0, Number(raw.startingDucats))
+        : 0;
     const globalBuildLimit =
       typeof raw?.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit)
         ? Math.max(1, Math.floor(raw.globalBuildLimit))
@@ -585,9 +672,14 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       ...entry,
       costConstruction,
       costDucats: Number(costDucats.toFixed(3)),
+      startingDucats: Number(startingDucats.toFixed(3)),
       inputs: normalizeGoodFlows(raw?.inputs),
       outputs: normalizeGoodFlows(raw?.outputs),
       workforceRequirements: normalizeWorkforceRequirements(raw?.workforceRequirements),
+      infrastructureUse:
+        typeof raw?.infrastructureUse === "number" && Number.isFinite(raw.infrastructureUse)
+          ? Number(Math.max(0, raw.infrastructureUse).toFixed(3))
+          : 0,
       allowedCountryIds: normalizeCountryIdList(raw?.allowedCountryIds),
       deniedCountryIds: normalizeCountryIdList(raw?.deniedCountryIds),
       countryBuildLimits: normalizeBuildingCountryLimits(raw?.countryBuildLimits),
@@ -828,6 +920,22 @@ function normalizeProvincePopulationMap(input: unknown): Record<string, Province
   return normalized;
 }
 
+function normalizeProvinceInfrastructureMap(input: unknown): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  if (input && typeof input === "object") {
+    for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
+      const value = typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, Number(raw)) : DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY;
+      normalized[provinceId] = round3(value);
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (normalized[province.id] == null) {
+      normalized[province.id] = DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY;
+    }
+  }
+  return normalized;
+}
+
 function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingInstance[]> {
   const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
   const normalized: Record<string, BuildingInstance[]> = {};
@@ -852,6 +960,132 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             buildingId,
             owner: normalizeBuildingOwner(source.owner ?? { type: "state", countryId: fallbackCountryId }),
             createdTurnId,
+            ducats:
+              typeof source.ducats === "number" && Number.isFinite(source.ducats)
+                ? Number(Math.max(0, source.ducats).toFixed(3))
+                : 0,
+            warehouseByGoodId:
+              source.warehouseByGoodId && typeof source.warehouseByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.warehouseByGoodId as Record<string, unknown>)
+                      .filter(([goodId]) => typeof goodId === "string" && goodId.trim().length > 0)
+                      .map(([goodId, valueRaw]) => [
+                        goodId,
+                        Number(
+                          (
+                            typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                          ).toFixed(3),
+                        ),
+                      ]),
+                  )
+                : {},
+            lastLaborCoverage:
+              typeof source.lastLaborCoverage === "number" && Number.isFinite(source.lastLaborCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastLaborCoverage)).toFixed(3))
+                : 0,
+            lastInfraCoverage:
+              typeof source.lastInfraCoverage === "number" && Number.isFinite(source.lastInfraCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastInfraCoverage)).toFixed(3))
+                : 0,
+            lastInputCoverage:
+              typeof source.lastInputCoverage === "number" && Number.isFinite(source.lastInputCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastInputCoverage)).toFixed(3))
+                : 0,
+            lastFinanceCoverage:
+              typeof source.lastFinanceCoverage === "number" && Number.isFinite(source.lastFinanceCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastFinanceCoverage)).toFixed(3))
+                : 0,
+            lastProductivity:
+              typeof source.lastProductivity === "number" && Number.isFinite(source.lastProductivity)
+                ? Number(Math.max(0, Math.min(1, source.lastProductivity)).toFixed(3))
+                : 0,
+            lastPurchaseByGoodId:
+              source.lastPurchaseByGoodId && typeof source.lastPurchaseByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastPurchaseByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
+            lastPurchaseCostByGoodId:
+              source.lastPurchaseCostByGoodId && typeof source.lastPurchaseCostByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastPurchaseCostByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number.isFinite(Number(valueRaw)) ? round3(Math.max(0, Number(valueRaw))) : 0,
+                    ]),
+                  )
+                : {},
+            lastSalesByGoodId:
+              source.lastSalesByGoodId && typeof source.lastSalesByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastSalesByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number.isFinite(Number(valueRaw)) ? round3(Math.max(0, Number(valueRaw))) : 0,
+                    ]),
+                  )
+                : {},
+            lastSalesRevenueByGoodId:
+              source.lastSalesRevenueByGoodId && typeof source.lastSalesRevenueByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastSalesRevenueByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number.isFinite(Number(valueRaw)) ? round3(Math.max(0, Number(valueRaw))) : 0,
+                    ]),
+                  )
+                : {},
+            lastConsumptionByGoodId:
+              source.lastConsumptionByGoodId && typeof source.lastConsumptionByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastConsumptionByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
+            lastProductionByGoodId:
+              source.lastProductionByGoodId && typeof source.lastProductionByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastProductionByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
+            lastRevenueDucats:
+              typeof source.lastRevenueDucats === "number" && Number.isFinite(source.lastRevenueDucats)
+                ? Number(source.lastRevenueDucats.toFixed(3))
+                : 0,
+            lastInputCostDucats:
+              typeof source.lastInputCostDucats === "number" && Number.isFinite(source.lastInputCostDucats)
+                ? Number(source.lastInputCostDucats.toFixed(3))
+                : 0,
+            lastWagesDucats:
+              typeof source.lastWagesDucats === "number" && Number.isFinite(source.lastWagesDucats)
+                ? Number(source.lastWagesDucats.toFixed(3))
+                : 0,
+            lastNetDucats:
+              typeof source.lastNetDucats === "number" && Number.isFinite(source.lastNetDucats)
+                ? Number(source.lastNetDucats.toFixed(3))
+                : 0,
+            isInactive: Boolean(source.isInactive),
+            inactiveReason:
+              typeof source.inactiveReason === "string" || source.inactiveReason === null
+                ? (source.inactiveReason ?? null)
+                : null,
           });
         }
       } else if (raw && typeof raw === "object") {
@@ -866,6 +1100,25 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
               buildingId,
               owner: { type: "state", countryId: fallbackCountryId },
               createdTurnId: turnId,
+              ducats: 0,
+              warehouseByGoodId: {},
+              lastLaborCoverage: 0,
+              lastInfraCoverage: 0,
+              lastInputCoverage: 0,
+              lastFinanceCoverage: 0,
+              lastProductivity: 0,
+              lastPurchaseByGoodId: {},
+              lastPurchaseCostByGoodId: {},
+              lastSalesByGoodId: {},
+              lastSalesRevenueByGoodId: {},
+              lastConsumptionByGoodId: {},
+              lastProductionByGoodId: {},
+              lastRevenueDucats: 0,
+              lastInputCostDucats: 0,
+              lastWagesDucats: 0,
+              lastNetDucats: 0,
+              isInactive: false,
+              inactiveReason: null,
             });
           }
         }
@@ -1011,47 +1264,428 @@ function resolvePopulationTurnForProvince(
 function resolveBuildingsTurn(): Record<string, Record<string, number>> {
   const domains = getPopulationDomainKeys();
   const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
-  const goodBasePriceById = new Map(gameSettings.content.goods.map((entry) => [entry.id, Number(entry.basePrice ?? 1)] as const));
+  const goodById = new Map(gameSettings.content.goods.map((entry) => [entry.id, entry] as const));
+  const professionById = new Map(gameSettings.content.professions.map((entry) => [entry.id, entry] as const));
+  const goodBasePriceById = new Map(
+    gameSettings.content.goods.map((entry) => [entry.id, Number(entry.basePrice ?? 1)] as const),
+  );
   const nextProfessionPctByProvince: Record<string, Record<string, number>> = {};
+  const smoothing = Number(
+    Math.max(0, Math.min(1, gameSettings.economy.marketPriceSmoothing ?? DEFAULT_MARKET_PRICE_SMOOTHING)).toFixed(3),
+  );
+
+  type CountryGoodMap = Record<string, Record<string, number>>;
+  const demandRequestedByCountry: CountryGoodMap = {};
+  const productionByCountry: CountryGoodMap = {};
+  const marketVolumeByCountry: CountryGoodMap = {};
+  const demandRequestedGlobal: Record<string, number> = {};
+  const productionGlobal: Record<string, number> = {};
+  const marketVolumeGlobal: Record<string, number> = {};
+  const infraByProvince: Record<string, { capacity: number; required: number; coverage: number }> = {};
+  const alertsByCountry: Record<string, MarketOverviewAlert[]> = {};
+  let alertSeq = 0;
+  const pushCountryAlert = (countryId: string, alert: Omit<MarketOverviewAlert, "id">): void => {
+    if (!alertsByCountry[countryId]) alertsByCountry[countryId] = [];
+    alertsByCountry[countryId].push({ id: `a-${turnId}-${++alertSeq}`, ...alert });
+  };
+
+  type SellerSlot = {
+    provinceId: string;
+    countryId: string;
+    marketId: string;
+    instanceId: string;
+    instance: BuildingInstance;
+    infraCoverage: number;
+  };
+  const sellersByProvinceGood = new Map<string, SellerSlot[]>();
+  const sellersByCountryGood = new Map<string, SellerSlot[]>();
+  const sellersByMarketGood = new Map<string, SellerSlot[]>();
+  const sellersByGlobalGood = new Map<string, SellerSlot[]>();
+  const soldBySellerAndGood = new Map<string, number>();
+  const getSellerUsageKey = (instanceId: string, goodId: string) => `${instanceId}:${goodId}`;
+
+  const ensureCountryGood = (map: CountryGoodMap, countryId: string, goodId: string): void => {
+    if (!map[countryId]) map[countryId] = {};
+    if (map[countryId][goodId] == null) map[countryId][goodId] = 0;
+  };
+  const addCountryGood = (map: CountryGoodMap, countryId: string, goodId: string, value: number): void => {
+    if (value <= 0) return;
+    ensureCountryGood(map, countryId, goodId);
+    map[countryId][goodId] = round3((map[countryId][goodId] ?? 0) + value);
+  };
+  const addGlobalGood = (map: Record<string, number>, goodId: string, value: number): void => {
+    if (value <= 0) return;
+    map[goodId] = round3((map[goodId] ?? 0) + value);
+  };
+  const getMarketIdByCountry = (countryId: string): string => getCountryMarketId(countryId);
+  const getPriceMeta = (goodId: string): { base: number; min: number; max: number } => {
+    const entry = goodById.get(goodId);
+    const base = Math.max(0, Number(entry?.basePrice ?? 1));
+    const min = Math.max(0, Number(entry?.minPrice ?? base * 0.1));
+    const max = Math.max(min, Number(entry?.maxPrice ?? base * 10));
+    return { base, min, max };
+  };
+  const getCountryGoodPrice = (countryId: string, goodId: string): number => {
+    const meta = getPriceMeta(goodId);
+    const marketId = getCountryMarketId(countryId);
+    if (!countryGoodPrices[marketId]) countryGoodPrices[marketId] = {};
+    if (countryGoodPrices[marketId][goodId] == null) {
+      countryGoodPrices[marketId][goodId] = round3(meta.base);
+    }
+    return Math.max(meta.min, Math.min(meta.max, Number(countryGoodPrices[marketId][goodId])));
+  };
+  const getGlobalGoodPrice = (goodId: string): number => {
+    const meta = getPriceMeta(goodId);
+    if (globalGoodPrices[goodId] == null) {
+      globalGoodPrices[goodId] = round3(meta.base);
+    }
+    return Math.max(meta.min, Math.min(meta.max, Number(globalGoodPrices[goodId])));
+  };
+  const updatePrice = (current: number, demand: number, offer: number, meta: { base: number; min: number; max: number }): number => {
+    const ratio = (demand + 1) / (offer + 1);
+    const epsilon = 1e-6;
+    const target = Math.abs(demand - offer) <= epsilon ? meta.base : current * ratio;
+    const clampedTarget = Math.max(meta.min, Math.min(meta.max, target));
+    const next = current * (1 - smoothing) + clampedTarget * smoothing;
+    return round3(Math.max(meta.min, Math.min(meta.max, next)));
+  };
 
   for (const province of adm1ProvinceIndex) {
     const provinceId = province.id;
-    if (!worldBase.provinceOwner[provinceId]) continue;
+    const ownerCountryId = worldBase.provinceOwner[provinceId];
+    if (!ownerCountryId) continue;
+    if (!alertsByCountry[ownerCountryId]) alertsByCountry[ownerCountryId] = [];
 
     const population = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
-    const buildingInstances = worldBase.provinceBuildingsByProvince[provinceId] ?? [];
-    const buildingCounts: Record<string, number> = {};
-    for (const instance of buildingInstances) {
-      if (!instance?.buildingId) continue;
-      buildingCounts[instance.buildingId] = (buildingCounts[instance.buildingId] ?? 0) + 1;
-    }
-    const buildingDucats = { ...(worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {}) };
-    const professionDemandById: Record<string, number> = {};
-    let totalWorkforceDemand = 0;
+    const marketId = getMarketIdByCountry(ownerCountryId);
+    const buildingInstances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])]
+      .sort((a, b) => a.instanceId.localeCompare(b.instanceId));
+    if (buildingInstances.length === 0) continue;
 
-    for (const [buildingId, levelRaw] of Object.entries(buildingCounts)) {
-      const count = Math.max(0, Math.floor(levelRaw));
-      if (count <= 0) continue;
-      const building = buildingById.get(buildingId);
+    for (const instance of buildingInstances) {
+      instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0)));
+      instance.warehouseByGoodId = { ...(instance.warehouseByGoodId ?? {}) };
+      instance.lastPurchaseByGoodId = {};
+      instance.lastPurchaseCostByGoodId = {};
+      instance.lastSalesByGoodId = {};
+      instance.lastSalesRevenueByGoodId = {};
+      instance.lastConsumptionByGoodId = {};
+      instance.lastProductionByGoodId = {};
+      instance.lastLaborCoverage = 0;
+      instance.lastInfraCoverage = 0;
+      instance.lastInputCoverage = 0;
+      instance.lastFinanceCoverage = 0;
+      instance.lastProductivity = 0;
+      instance.lastRevenueDucats = 0;
+      instance.lastInputCostDucats = 0;
+      instance.lastWagesDucats = 0;
+      instance.lastNetDucats = 0;
+      instance.isInactive = false;
+      instance.inactiveReason = null;
+    }
+
+    const demandByProfession: Record<string, number> = {};
+    let totalWorkforceDemand = 0;
+    let totalInfraRequired = 0;
+    for (const instance of buildingInstances) {
+      const building = buildingById.get(instance.buildingId);
       if (!building) continue;
       for (const requirement of building.workforceRequirements ?? []) {
-        const workersDemand = Math.max(0, requirement.workers) * count;
+        const workersDemand = Math.max(0, requirement.workers);
         if (workersDemand <= 0) continue;
-        professionDemandById[requirement.professionId] = (professionDemandById[requirement.professionId] ?? 0) + workersDemand;
+        demandByProfession[requirement.professionId] = (demandByProfession[requirement.professionId] ?? 0) + workersDemand;
         totalWorkforceDemand += workersDemand;
+      }
+      totalInfraRequired += Math.max(0, Number(building.infrastructureUse ?? 0));
+      for (const [goodId, amountRaw] of Object.entries(instance.warehouseByGoodId ?? {})) {
+        const amount = round3(Math.max(0, Number(amountRaw)));
+        if (amount <= 0) continue;
+        const slot: SellerSlot = {
+          provinceId,
+          countryId: ownerCountryId,
+          marketId,
+          instanceId: instance.instanceId,
+          instance,
+          infraCoverage: 1,
+        };
+        const provinceKey = `${provinceId}:${goodId}`;
+        const countryKey = `${ownerCountryId}:${goodId}`;
+        const marketKey = `${marketId}:${goodId}`;
+        const globalKey = goodId;
+        const provinceList = sellersByProvinceGood.get(provinceKey) ?? [];
+        provinceList.push(slot);
+        sellersByProvinceGood.set(provinceKey, provinceList);
+        const countryList = sellersByCountryGood.get(countryKey) ?? [];
+        countryList.push(slot);
+        sellersByCountryGood.set(countryKey, countryList);
+        const marketList = sellersByMarketGood.get(marketKey) ?? [];
+        marketList.push(slot);
+        sellersByMarketGood.set(marketKey, marketList);
+        const globalList = sellersByGlobalGood.get(globalKey) ?? [];
+        globalList.push(slot);
+        sellersByGlobalGood.set(globalKey, globalList);
+        addCountryGood(marketVolumeByCountry, marketId, goodId, amount);
+        addGlobalGood(marketVolumeGlobal, goodId, amount);
       }
     }
 
-    const employmentRatio =
-      totalWorkforceDemand > 0 ? Math.max(0, Math.min(1, population.populationTotal / totalWorkforceDemand)) : 0;
+    const infrastructureCapacity = round3(
+      Math.max(0, Number(worldBase.provinceInfrastructureByProvince[provinceId] ?? DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY)),
+    );
+    const infraCoverageProvince =
+      totalInfraRequired > 0 ? round3(Math.max(0, Math.min(1, infrastructureCapacity / totalInfraRequired))) : 1;
+    infraByProvince[provinceId] = {
+      capacity: infrastructureCapacity,
+      required: round3(Math.max(0, totalInfraRequired)),
+      coverage: infraCoverageProvince,
+    };
+    if (infraCoverageProvince < 1) {
+      pushCountryAlert(ownerCountryId, {
+        severity: "warning",
+        kind: "infra-overload",
+        message: `Перегруз инфраструктуры в провинции ${provinceId}: ${(infraCoverageProvince * 100).toFixed(1)}%`,
+        provinceId,
+      });
+    }
+    const laborCoverageProvince =
+      totalWorkforceDemand > 0 ? round3(Math.max(0, Math.min(1, population.populationTotal / totalWorkforceDemand))) : 1;
 
-    const employedByProfession: Record<string, number> = {};
+    const availableByProfession: Record<string, number> = {};
+    for (const [professionId, pct] of Object.entries(population.professionPct ?? {})) {
+      availableByProfession[professionId] = (population.populationTotal * Math.max(0, Number(pct))) / 100;
+    }
+    const wageMultiplierByProfession: Record<string, number> = {};
+    for (const [professionId, demand] of Object.entries(demandByProfession)) {
+      const available = Math.max(1, availableByProfession[professionId] ?? 0);
+      const shortageRatio = demand / available;
+      const multiplier = shortageRatio > 1 ? 1 + (shortageRatio - 1) * 0.5 : 1;
+      wageMultiplierByProfession[professionId] = round3(Math.max(0.5, Math.min(3, multiplier)));
+    }
     let totalEmployed = 0;
-    for (const [professionId, demand] of Object.entries(professionDemandById)) {
-      const employed = demand * employmentRatio;
-      if (employed <= 0) continue;
-      employedByProfession[professionId] = employed;
-      totalEmployed += employed;
+    const employedByProfession: Record<string, number> = {};
+    let provinceWages = 0;
+
+    const getScopedSellerList = (scope: "province" | "country" | "market" | "global", goodId: string): SellerSlot[] => {
+      if (scope === "province") return sellersByProvinceGood.get(`${provinceId}:${goodId}`) ?? [];
+      if (scope === "country") return sellersByCountryGood.get(`${ownerCountryId}:${goodId}`) ?? [];
+      if (scope === "market") return sellersByMarketGood.get(`${marketId}:${goodId}`) ?? [];
+      return sellersByGlobalGood.get(goodId) ?? [];
+    };
+
+    for (const instance of buildingInstances) {
+      const building = buildingById.get(instance.buildingId);
+      if (!building) continue;
+      const warehouse = instance.warehouseByGoodId ?? {};
+      let wagesEstimate = 0;
+      let workersDemand = 0;
+      for (const requirement of building.workforceRequirements ?? []) {
+        const baseWage = Math.max(0, Number(professionById.get(requirement.professionId)?.baseWage ?? BUILDING_BASE_WAGE_PER_WORKER_GOLD));
+        const multiplier = wageMultiplierByProfession[requirement.professionId] ?? 1;
+        const workers = Math.max(0, requirement.workers);
+        wagesEstimate += workers * baseWage * multiplier;
+        workersDemand += workers;
+      }
+      const laborCoverage = workersDemand > 0 ? laborCoverageProvince : 1;
+      const employedWorkers = workersDemand * laborCoverage;
+      totalEmployed += employedWorkers;
+      for (const requirement of building.workforceRequirements ?? []) {
+        const workers = Math.max(0, requirement.workers) * laborCoverage;
+        employedByProfession[requirement.professionId] = round3((employedByProfession[requirement.professionId] ?? 0) + workers);
+      }
+      const infraCoverage = infraCoverageProvince;
+
+      let requiredInputValueEstimate = 0;
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        const deficit = Math.max(0, required - available);
+        const price = getCountryGoodPrice(ownerCountryId, input.goodId);
+        requiredInputValueEstimate += deficit * price;
+        addCountryGood(demandRequestedByCountry, marketId, input.goodId, deficit);
+        addGlobalGood(demandRequestedGlobal, input.goodId, deficit);
+      }
+      const financeCoverage =
+        wagesEstimate + requiredInputValueEstimate > 0
+          ? round3(Math.max(0, Math.min(1, Number(instance.ducats ?? 0) / (wagesEstimate + requiredInputValueEstimate))))
+          : 1;
+
+      let purchaseCost = 0;
+      const purchasedByGood: Record<string, number> = {};
+      const purchasedCostByGood: Record<string, number> = {};
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        let deficit = Math.max(0, required - available);
+        if (deficit <= 0) continue;
+        let remainingNeed = round3(deficit * infraCoverage);
+        if (remainingNeed <= 0) continue;
+        type ScopeOption = { scope: "province" | "country" | "market" | "global"; unitPrice: number; list: SellerSlot[] };
+        const options: ScopeOption[] = [
+          { scope: "province", unitPrice: getCountryGoodPrice(ownerCountryId, input.goodId), list: getScopedSellerList("province", input.goodId) },
+          { scope: "country", unitPrice: getCountryGoodPrice(ownerCountryId, input.goodId), list: getScopedSellerList("country", input.goodId) },
+          { scope: "market", unitPrice: getCountryGoodPrice(ownerCountryId, input.goodId), list: getScopedSellerList("market", input.goodId) },
+          { scope: "global", unitPrice: getGlobalGoodPrice(input.goodId), list: getScopedSellerList("global", input.goodId) },
+        ];
+        options.sort((a, b) => a.unitPrice - b.unitPrice);
+        for (const option of options) {
+          if (remainingNeed <= 0) break;
+          if (option.unitPrice <= 0) continue;
+          const affordable = Math.floor((Number(instance.ducats ?? 0) - purchaseCost) / option.unitPrice);
+          if (affordable <= 0) continue;
+          for (const seller of option.list) {
+            if (remainingNeed <= 0) break;
+            if (seller.instanceId === instance.instanceId) continue;
+            const sellerWarehouse = seller.instance.warehouseByGoodId ?? {};
+            const sellerAvailable = Math.max(0, Number(sellerWarehouse[input.goodId] ?? 0));
+            if (sellerAvailable <= 0) continue;
+            const soldKey = getSellerUsageKey(seller.instanceId, input.goodId);
+            const soldAlready = soldBySellerAndGood.get(soldKey) ?? 0;
+            const transferCap = Math.max(
+              0,
+              sellerAvailable * Math.min(infraCoverage, seller.infraCoverage) - soldAlready,
+            );
+            if (transferCap <= 0) continue;
+            const maxAffordableNow = Math.floor((Number(instance.ducats ?? 0) - purchaseCost) / option.unitPrice);
+            if (maxAffordableNow <= 0) break;
+            const transfer = round3(Math.min(remainingNeed, transferCap, maxAffordableNow));
+            if (transfer <= 0) continue;
+            remainingNeed = round3(Math.max(0, remainingNeed - transfer));
+            const transferCost = round3(transfer * option.unitPrice);
+            purchaseCost = round3(purchaseCost + transferCost);
+            purchasedByGood[input.goodId] = round3((purchasedByGood[input.goodId] ?? 0) + transfer);
+            purchasedCostByGood[input.goodId] = round3((purchasedCostByGood[input.goodId] ?? 0) + transferCost);
+            sellerWarehouse[input.goodId] = round3(Math.max(0, sellerAvailable - transfer));
+            seller.instance.warehouseByGoodId = sellerWarehouse;
+            const revenueDelta = transferCost;
+            seller.instance.ducats = round3(Math.max(0, Number(seller.instance.ducats ?? 0)) + revenueDelta);
+            seller.instance.lastRevenueDucats = round3(Math.max(0, Number(seller.instance.lastRevenueDucats ?? 0)) + revenueDelta);
+            const sellerSales = seller.instance.lastSalesByGoodId ?? {};
+            sellerSales[input.goodId] = round3(Math.max(0, Number(sellerSales[input.goodId] ?? 0)) + transfer);
+            seller.instance.lastSalesByGoodId = sellerSales;
+            const sellerSalesRevenue = seller.instance.lastSalesRevenueByGoodId ?? {};
+            sellerSalesRevenue[input.goodId] = round3(
+              Math.max(0, Number(sellerSalesRevenue[input.goodId] ?? 0)) + revenueDelta,
+            );
+            seller.instance.lastSalesRevenueByGoodId = sellerSalesRevenue;
+            soldBySellerAndGood.set(soldKey, round3(soldAlready + transfer));
+          }
+        }
+      }
+
+      for (const [goodId, amount] of Object.entries(purchasedByGood)) {
+        warehouse[goodId] = round3(Math.max(0, Number(warehouse[goodId] ?? 0)) + amount);
+      }
+      instance.lastPurchaseByGoodId = purchasedByGood;
+      instance.lastPurchaseCostByGoodId = purchasedCostByGood;
+      instance.lastInputCostDucats = round3(purchaseCost);
+
+      let inputCoverage = 1;
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        if (required <= 0) continue;
+        const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        inputCoverage = Math.min(inputCoverage, available / required);
+      }
+      if (!Number.isFinite(inputCoverage)) inputCoverage = 1;
+      inputCoverage = round3(Math.max(0, Math.min(1, inputCoverage)));
+      const productivity = round3(Math.max(0, Math.min(1, Math.min(laborCoverage, infraCoverage, inputCoverage, financeCoverage))));
+      instance.lastLaborCoverage = laborCoverage;
+      instance.lastInfraCoverage = infraCoverage;
+      instance.lastInputCoverage = inputCoverage;
+      instance.lastFinanceCoverage = financeCoverage;
+      instance.lastProductivity = productivity;
+
+      const consumedByGood: Record<string, number> = {};
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const consumed = round3(required * productivity);
+        if (consumed <= 0) continue;
+        const before = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        const next = round3(Math.max(0, before - consumed));
+        warehouse[input.goodId] = next;
+        consumedByGood[input.goodId] = consumed;
+      }
+      instance.lastConsumptionByGoodId = consumedByGood;
+
+      const producedByGood: Record<string, number> = {};
+      for (const output of building.outputs ?? []) {
+        const produced = round3(Math.max(0, output.amount) * productivity * BUILDING_BASE_THROUGHPUT);
+        if (produced <= 0) continue;
+        warehouse[output.goodId] = round3(Math.max(0, Number(warehouse[output.goodId] ?? 0)) + produced);
+        producedByGood[output.goodId] = produced;
+        addCountryGood(productionByCountry, marketId, output.goodId, produced);
+        addGlobalGood(productionGlobal, output.goodId, produced);
+      }
+      instance.lastProductionByGoodId = producedByGood;
+      const realizedRevenue = round3(Math.max(0, Number(instance.lastRevenueDucats ?? 0)));
+      instance.lastRevenueDucats = realizedRevenue;
+      instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - purchaseCost));
+
+      const wagesActual = round3(wagesEstimate * productivity);
+      provinceWages = round3(provinceWages + wagesActual);
+      instance.lastWagesDucats = wagesActual;
+      const paidWages = Math.min(Number(instance.ducats ?? 0), wagesActual);
+      instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - paidWages));
+      const unpaidWages = round3(Math.max(0, wagesActual - paidWages));
+      const net = round3(realizedRevenue - purchaseCost - wagesActual);
+      instance.lastNetDucats = net;
+      if (productivity <= 0) {
+        instance.isInactive = true;
+        const buildingLabel = building.name?.trim() || instance.buildingId;
+        const coverages: Array<{ key: "labor" | "input" | "infra" | "finance"; value: number }> = [
+          { key: "labor", value: laborCoverage },
+          { key: "input", value: inputCoverage },
+          { key: "infra", value: infraCoverage },
+          { key: "finance", value: financeCoverage },
+        ];
+        coverages.sort((a, b) => a.value - b.value);
+        const limiting = coverages[0];
+        const label =
+          limiting.key === "labor"
+            ? "труда"
+            : limiting.key === "input"
+              ? "входных товаров"
+              : limiting.key === "infra"
+                ? "инфраструктуры"
+                : "финансов";
+        instance.inactiveReason = `Нулевая продуктивность (лимит: ${label}, ${(limiting.value * 100).toFixed(1)}%)`;
+        pushCountryAlert(ownerCountryId, {
+          severity: "critical",
+          kind: "building-inactive",
+          message: `Здание ${buildingLabel} неактивно: ${instance.inactiveReason}`,
+          provinceId,
+          buildingId: instance.buildingId,
+          instanceId: instance.instanceId,
+        });
+      } else if (unpaidWages > 0) {
+        instance.isInactive = true;
+        const buildingLabel = building.name?.trim() || instance.buildingId;
+        instance.inactiveReason = "Недостаточно дукатов для покрытия расходов";
+        pushCountryAlert(ownerCountryId, {
+          severity: "critical",
+          kind: "building-inactive",
+          message: `Здание ${buildingLabel} неактивно: ${instance.inactiveReason}`,
+          provinceId,
+          buildingId: instance.buildingId,
+          instanceId: instance.instanceId,
+        });
+      } else {
+        instance.isInactive = false;
+        instance.inactiveReason = null;
+      }
+      instance.warehouseByGoodId = Object.fromEntries(
+        Object.entries(warehouse)
+          .map(([goodId, amount]) => [goodId, round3(Math.max(0, Number(amount)))])
+          .filter(([, amount]) => Number(amount) > 0),
+      );
+    }
+
+    for (const instance of buildingInstances) {
+      instance.lastNetDucats = round3(
+        Number(instance.lastRevenueDucats ?? 0) -
+          Number(instance.lastInputCostDucats ?? 0) -
+          Number(instance.lastWagesDucats ?? 0),
+      );
     }
 
     if (totalEmployed > 0) {
@@ -1062,48 +1696,97 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       );
     }
 
-    for (const [buildingId, levelRaw] of Object.entries(buildingCounts)) {
-      const count = Math.max(0, Math.floor(levelRaw));
-      if (count <= 0) continue;
-      const building = buildingById.get(buildingId);
-      if (!building) continue;
-      let buildingRevenue = 0;
-      let buildingInputCost = 0;
-      let buildingWorkersDemand = 0;
-      for (const requirement of building.workforceRequirements ?? []) {
-        buildingWorkersDemand += Math.max(0, requirement.workers) * count;
-      }
-      const buildingEmployed = buildingWorkersDemand * employmentRatio;
-      const buildingWages = buildingEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;
-      for (const input of building.inputs ?? []) {
-        const basePrice = goodBasePriceById.get(input.goodId) ?? 1;
-        const amount = Math.max(0, input.amount) * count * employmentRatio * BUILDING_BASE_THROUGHPUT;
-        const totalCost = amount * basePrice;
-        buildingInputCost += totalCost;
-      }
-      for (const output of building.outputs ?? []) {
-        const basePrice = goodBasePriceById.get(output.goodId) ?? 1;
-        const amount = Math.max(0, output.amount) * count * employmentRatio * BUILDING_BASE_THROUGHPUT;
-        const totalRevenue = amount * basePrice;
-        buildingRevenue += totalRevenue;
-      }
-      const resultDucats = buildingRevenue - buildingInputCost - buildingWages;
-      const prevDucats = buildingDucats[buildingId] ?? 0;
-      if (resultDucats >= 0) {
-        buildingDucats[buildingId] = Number((prevDucats + resultDucats).toFixed(3));
-      } else {
-        const loss = Math.abs(resultDucats);
-        const coveredByBuilding = Math.min(prevDucats, loss);
-        const nextBuildingDucats = Math.max(0, prevDucats - coveredByBuilding);
-        buildingDucats[buildingId] = Number(nextBuildingDucats.toFixed(3));
+    const prevTreasury = worldBase.provincePopulationTreasuryByProvince[provinceId] ?? 0;
+    worldBase.provincePopulationTreasuryByProvince[provinceId] = round3(prevTreasury + provinceWages);
+    const byBuildingDucats: Record<string, number> = {};
+    for (const instance of buildingInstances) {
+      byBuildingDucats[instance.buildingId] = round3((byBuildingDucats[instance.buildingId] ?? 0) + Number(instance.ducats ?? 0));
+    }
+    worldBase.provinceBuildingDucatsByProvince[provinceId] = byBuildingDucats;
+    worldBase.provinceBuildingsByProvince[provinceId] = buildingInstances;
+  }
+
+  const marketIds = new Set<string>(Object.keys(worldBase.resourcesByCountry).map((countryId) => getCountryMarketId(countryId)));
+  for (const countryId of marketIds) {
+    if (!countryGoodPrices[countryId]) countryGoodPrices[countryId] = {};
+    const keys = new Set<string>([
+      ...Object.keys(demandRequestedByCountry[countryId] ?? {}),
+      ...Object.keys(productionByCountry[countryId] ?? {}),
+      ...Object.keys(marketVolumeByCountry[countryId] ?? {}),
+      ...Object.keys(countryGoodPrices[countryId] ?? {}),
+      ...gameSettings.content.goods.map((g) => g.id),
+    ]);
+    for (const goodId of keys) {
+      const current = getCountryGoodPrice(countryId, goodId);
+      const demand = Number(demandRequestedByCountry[countryId]?.[goodId] ?? 0);
+      const offer = Number(productionByCountry[countryId]?.[goodId] ?? 0) + Number(marketVolumeByCountry[countryId]?.[goodId] ?? 0);
+      countryGoodPrices[countryId][goodId] = updatePrice(current, demand, offer, getPriceMeta(goodId));
+    }
+  }
+  {
+    const keys = new Set<string>([
+      ...Object.keys(demandRequestedGlobal),
+      ...Object.keys(productionGlobal),
+      ...Object.keys(marketVolumeGlobal),
+      ...Object.keys(globalGoodPrices),
+      ...gameSettings.content.goods.map((g) => g.id),
+    ]);
+    for (const goodId of keys) {
+      const current = getGlobalGoodPrice(goodId);
+      const demand = Number(demandRequestedGlobal[goodId] ?? 0);
+      const offer = Number(productionGlobal[goodId] ?? 0) + Number(marketVolumeGlobal[goodId] ?? 0);
+      globalGoodPrices[goodId] = updatePrice(current, demand, offer, getPriceMeta(goodId));
+    }
+  }
+
+  for (const countryId of Object.keys(worldBase.resourcesByCountry)) {
+    const marketId = getCountryMarketId(countryId);
+    const demand = demandRequestedByCountry[marketId] ?? {};
+    const offerProduced = productionByCountry[marketId] ?? {};
+    const offerStock = marketVolumeByCountry[marketId] ?? {};
+    for (const goodId of Object.keys(demand)) {
+      const d = Number(demand[goodId] ?? 0);
+      if (d <= 0) continue;
+      const o = Number(offerProduced[goodId] ?? 0) + Number(offerStock[goodId] ?? 0);
+      const coverage = d > 0 ? o / d : 1;
+      if (coverage < 0.5) {
+        pushCountryAlert(countryId, {
+          severity: "critical",
+          kind: "critical-deficit",
+          message: `Критический дефицит ${goodId}: покрытие ${(coverage * 100).toFixed(1)}%`,
+          goodId,
+        });
       }
     }
-
-    const provinceWages = totalEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;
-    const prevTreasury = worldBase.provincePopulationTreasuryByProvince[provinceId] ?? 0;
-    worldBase.provincePopulationTreasuryByProvince[provinceId] = Number((prevTreasury + provinceWages).toFixed(3));
-    worldBase.provinceBuildingDucatsByProvince[provinceId] = buildingDucats;
   }
+  const offerByCountry: Record<string, Record<string, number>> = {};
+  for (const countryId of marketIds) {
+    const keys = new Set<string>([
+      ...Object.keys(productionByCountry[countryId] ?? {}),
+      ...Object.keys(marketVolumeByCountry[countryId] ?? {}),
+    ]);
+    offerByCountry[countryId] = {};
+    for (const goodId of keys) {
+      const produced = Number(productionByCountry[countryId]?.[goodId] ?? 0);
+      const stock = Number(marketVolumeByCountry[countryId]?.[goodId] ?? 0);
+      offerByCountry[countryId][goodId] = round3(produced + stock);
+    }
+  }
+  const offerGlobal: Record<string, number> = {};
+  for (const goodId of new Set<string>([...Object.keys(productionGlobal), ...Object.keys(marketVolumeGlobal)])) {
+    const produced = Number(productionGlobal[goodId] ?? 0);
+    const stock = Number(marketVolumeGlobal[goodId] ?? 0);
+    offerGlobal[goodId] = round3(produced + stock);
+  }
+  latestMarketOverview = {
+    turnId,
+    demandByCountry: structuredClone(demandRequestedByCountry),
+    offerByCountry,
+    demandGlobal: structuredClone(demandRequestedGlobal),
+    offerGlobal,
+    infraByProvince,
+    alertsByCountry,
+  };
 
   return nextProfessionPctByProvince;
 }
@@ -1328,6 +2011,10 @@ const defaultGameSettings = (): GameSettings => ({
     baseDucatsPerTurn: 5,
     baseGoldPerTurn: 10,
     demolitionCostConstructionPercent: 20,
+    marketPriceSmoothing: 0.2,
+  },
+  markets: {
+    countryMarketByCountryId: {},
   },
   colonization: {
     maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
@@ -1399,12 +2086,14 @@ function normalizeResourcesByCountryMap(input: unknown): Record<string, Resource
 function defaultWorldBase(currentTurnId: number): WorldBase {
   const domains = getPopulationDomainKeys();
   const provincePopulationByProvince: Record<string, ProvincePopulation> = {};
+  const provinceInfrastructureByProvince: Record<string, number> = {};
   const provinceBuildingsByProvince: Record<string, BuildingInstance[]> = {};
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number>> = {};
   const provincePopulationTreasuryByProvince: Record<string, number> = {};
   const provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[]> = {};
   for (const province of adm1ProvinceIndex) {
     provincePopulationByProvince[province.id] = buildDefaultProvincePopulation(province.id, domains);
+    provinceInfrastructureByProvince[province.id] = DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY;
     provinceBuildingsByProvince[province.id] = [];
     provinceBuildingDucatsByProvince[province.id] = {};
     provincePopulationTreasuryByProvince[province.id] = 0;
@@ -1424,6 +2113,7 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
+    provinceInfrastructureByProvince,
     provincePopulationByProvince,
     provinceBuildingsByProvince,
     provinceBuildingDucatsByProvince,
@@ -1513,6 +2203,20 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.economy?.demolitionCostConstructionPercent === "number"
             ? Math.max(0, Math.min(100, Math.floor(next.economy.demolitionCostConstructionPercent)))
             : defaults.economy.demolitionCostConstructionPercent,
+        marketPriceSmoothing:
+          typeof next.economy?.marketPriceSmoothing === "number" && Number.isFinite(next.economy.marketPriceSmoothing)
+            ? Math.max(0, Math.min(1, Number(next.economy.marketPriceSmoothing)))
+            : defaults.economy.marketPriceSmoothing,
+      },
+      markets: {
+        countryMarketByCountryId:
+          next.markets && typeof next.markets === "object" && next.markets.countryMarketByCountryId && typeof next.markets.countryMarketByCountryId === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.countryMarketByCountryId as Record<string, unknown>)
+                  .map(([countryId, marketId]) => [countryId, normalizeMarketId(marketId)])
+                  .filter((row): row is [string, string] => Boolean(row[0] && row[1])),
+              )
+            : { ...defaults.markets.countryMarketByCountryId },
       },
       colonization: {
         maxActiveColonizations:
@@ -1623,6 +2327,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         colonyProgressByProvince: candidate.colonyProgressByProvince,
         provinceColonizationByProvince: normalizeProvinceColonizationMap(
           (candidate as Partial<WorldBase> & { provinceColonizationByProvince?: unknown }).provinceColonizationByProvince,
+        ),
+        provinceInfrastructureByProvince: normalizeProvinceInfrastructureMap(
+          (candidate as Partial<WorldBase> & { provinceInfrastructureByProvince?: unknown }).provinceInfrastructureByProvince,
         ),
         provincePopulationByProvince: normalizeProvincePopulationMap(
           (candidate as Partial<WorldBase> & { provincePopulationByProvince?: unknown }).provincePopulationByProvince,
@@ -2309,6 +3016,7 @@ function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
 function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null; lockReason?: string | null; ignoreUntilTurn: number | null; eventLogRetentionTurns?: number | null }): Country {
   return {
     ...row,
+    marketId: getCountryMarketId(row.id),
     blockedUntilAt: row.blockedUntilAt ? row.blockedUntilAt.toISOString() : null,
     lockReason: row.lockReason ?? null,
   };
@@ -2432,6 +3140,7 @@ type WorldBaseSectionSnapshot = {
   provinceNameById?: WorldBase["provinceNameById"];
   colonyProgressByProvince?: WorldBase["colonyProgressByProvince"];
   provinceColonizationByProvince?: WorldBase["provinceColonizationByProvince"];
+  provinceInfrastructureByProvince?: WorldBase["provinceInfrastructureByProvince"];
   provincePopulationByProvince?: WorldBase["provincePopulationByProvince"];
   provinceBuildingsByProvince?: WorldBase["provinceBuildingsByProvince"];
   provinceBuildingDucatsByProvince?: WorldBase["provinceBuildingDucatsByProvince"];
@@ -2459,6 +3168,9 @@ function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
   }
   if ((mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0) {
     snapshot.provinceColonizationByProvince = structuredClone(worldBase.provinceColonizationByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceInfrastructureByProvince) !== 0) {
+    snapshot.provinceInfrastructureByProvince = structuredClone(worldBase.provinceInfrastructureByProvince);
   }
   if ((mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0) {
     snapshot.provincePopulationByProvince = structuredClone(worldBase.provincePopulationByProvince);
@@ -2608,6 +3320,29 @@ function isEqualBuildingInstances(
     ) {
       return false;
     }
+    if (
+      Number(prev.ducats ?? 0) !== Number(next.ducats ?? 0) ||
+      Number(prev.lastLaborCoverage ?? 0) !== Number(next.lastLaborCoverage ?? 0) ||
+      Number(prev.lastInfraCoverage ?? 0) !== Number(next.lastInfraCoverage ?? 0) ||
+      Number(prev.lastInputCoverage ?? 0) !== Number(next.lastInputCoverage ?? 0) ||
+      Number(prev.lastFinanceCoverage ?? 0) !== Number(next.lastFinanceCoverage ?? 0) ||
+      Number(prev.lastProductivity ?? 0) !== Number(next.lastProductivity ?? 0) ||
+      Number(prev.lastRevenueDucats ?? 0) !== Number(next.lastRevenueDucats ?? 0) ||
+      Number(prev.lastInputCostDucats ?? 0) !== Number(next.lastInputCostDucats ?? 0) ||
+      Number(prev.lastWagesDucats ?? 0) !== Number(next.lastWagesDucats ?? 0) ||
+      Number(prev.lastNetDucats ?? 0) !== Number(next.lastNetDucats ?? 0) ||
+      Boolean(prev.isInactive) !== Boolean(next.isInactive) ||
+      (prev.inactiveReason ?? null) !== (next.inactiveReason ?? null)
+    ) {
+      return false;
+    }
+    if (!isEqualCountryProgressMap(prev.warehouseByGoodId, next.warehouseByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastPurchaseByGoodId, next.lastPurchaseByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastPurchaseCostByGoodId, next.lastPurchaseCostByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastSalesByGoodId, next.lastSalesByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastSalesRevenueByGoodId, next.lastSalesRevenueByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastConsumptionByGoodId, next.lastConsumptionByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastProductionByGoodId, next.lastProductionByGoodId ?? {})) return false;
   }
   return true;
 }
@@ -2621,6 +3356,7 @@ function buildCompactWorldDelta(
   const provinceNameById: Record<string, string | null> = {};
   const colonyProgressByProvince: Record<string, Record<string, number> | null> = {};
   const provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null> = {};
+  const provinceInfrastructureByProvince: Record<string, number | null> = {};
   const provincePopulationByProvince: Record<string, ProvincePopulation | null> = {};
   const provinceBuildingsByProvince: Record<string, BuildingInstance[] | null> = {};
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number> | null> = {};
@@ -2698,6 +3434,18 @@ function buildCompactWorldDelta(
       Boolean(prevValue.manualCost) !== Boolean(nextValue.manualCost)
     ) {
       provinceColonizationByProvince[key] = nextValue;
+    }
+  }
+
+  for (const key of new Set([...Object.keys(prev.provinceInfrastructureByProvince), ...Object.keys(next.provinceInfrastructureByProvince)])) {
+    const prevValue = prev.provinceInfrastructureByProvince[key];
+    const nextValue = next.provinceInfrastructureByProvince[key];
+    if (nextValue == null) {
+      provinceInfrastructureByProvince[key] = null;
+      continue;
+    }
+    if (prevValue !== nextValue) {
+      provinceInfrastructureByProvince[key] = nextValue;
     }
   }
 
@@ -2783,6 +3531,10 @@ function buildCompactWorldDelta(
     mask |= WORLD_DELTA_MASK.provinceColonizationByProvince;
     compact.z = provinceColonizationByProvince;
   }
+  if (Object.keys(provinceInfrastructureByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceInfrastructureByProvince;
+    compact.s = provinceInfrastructureByProvince;
+  }
   if (Object.keys(provincePopulationByProvince).length > 0) {
     mask |= WORLD_DELTA_MASK.provincePopulationByProvince;
     compact.u = provincePopulationByProvince;
@@ -2830,6 +3582,10 @@ function toWorldBaseForDeltaDiff(previous: WorldBaseSectionSnapshot, next: World
       (previous.mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0 && previous.provinceColonizationByProvince
         ? previous.provinceColonizationByProvince
         : next.provinceColonizationByProvince,
+    provinceInfrastructureByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceInfrastructureByProvince) !== 0 && previous.provinceInfrastructureByProvince
+        ? previous.provinceInfrastructureByProvince
+        : next.provinceInfrastructureByProvince,
     provincePopulationByProvince:
       (previous.mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0 && previous.provincePopulationByProvince
         ? previous.provincePopulationByProvince
@@ -2878,6 +3634,7 @@ function broadcastWorldDeltaFromSectionSnapshot(
     n: compact.n,
     p: compact.p,
     z: compact.z,
+    s: compact.s,
     u: compact.u,
     b: compact.b,
     q: compact.q,
@@ -2895,6 +3652,7 @@ function broadcastWorldDeltaFromSectionSnapshot(
       provinceNameById: compact.n,
       colonyProgressByProvince: compact.p,
       provinceColonizationByProvince: compact.z,
+      provinceInfrastructureByProvince: compact.s,
       provincePopulationByProvince: compact.u,
       provinceBuildingsByProvince: compact.b,
       provinceBuildingDucatsByProvince: compact.q,
@@ -3142,6 +3900,7 @@ function resolveBuildingConstructionQueuesTurn(): void {
   type ProjectRef = { provinceId: string; index: number };
   const projectsByCountry = new Map<string, ProjectRef[]>();
   const EPS = 1e-6;
+  const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
 
   for (const [provinceId, queue] of Object.entries(worldBase.provinceConstructionQueueByProvince ?? {})) {
     if (!Array.isArray(queue) || queue.length === 0) continue;
@@ -3233,11 +3992,14 @@ function resolveBuildingConstructionQueuesTurn(): void {
     const buildingInstances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
     for (const project of queue) {
       if (project.progressConstruction + 1e-9 >= project.costConstruction) {
+        const building = buildingById.get(project.buildingId);
+        const startingDucats = Math.max(0, Number(building?.startingDucats ?? 0));
         buildingInstances.push({
           instanceId: randomUUID(),
           buildingId: project.buildingId,
           owner: project.owner,
           createdTurnId: turnId,
+          ducats: Number(startingDucats.toFixed(3)),
         });
         continue;
       }
@@ -3528,6 +4290,49 @@ app.get("/world/snapshot", async (req, res) => {
   });
 });
 
+app.get("/economy/market-overview", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  ensureCountryInWorldBase(auth.countryId);
+  const countryId = auth.countryId;
+  const marketId = getCountryMarketId(countryId);
+  const goods = gameSettings.content.goods.map((good) => {
+    const countryDemand = Number(latestMarketOverview.demandByCountry[countryId]?.[good.id] ?? 0);
+    const countryOffer = Number(latestMarketOverview.offerByCountry[countryId]?.[good.id] ?? 0);
+    const globalDemand = Number(latestMarketOverview.demandGlobal[good.id] ?? 0);
+    const globalOffer = Number(latestMarketOverview.offerGlobal[good.id] ?? 0);
+    const countryCoveragePct = countryDemand > 0 ? round3((countryOffer / countryDemand) * 100) : 100;
+    const globalCoveragePct = globalDemand > 0 ? round3((globalOffer / globalDemand) * 100) : 100;
+    return {
+      goodId: good.id,
+      goodName: good.name,
+      countryPrice: round3(Math.max(0, Number(countryGoodPrices[getCountryMarketId(countryId)]?.[good.id] ?? good.basePrice ?? 1))),
+      globalPrice: round3(Math.max(0, Number(globalGoodPrices[good.id] ?? good.basePrice ?? 1))),
+      countryDemand: round3(countryDemand),
+      countryOffer: round3(countryOffer),
+      countryCoveragePct,
+      globalDemand: round3(globalDemand),
+      globalOffer: round3(globalOffer),
+      globalCoveragePct,
+    };
+  });
+  const infraByProvince = Object.fromEntries(
+    Object.entries(latestMarketOverview.infraByProvince).filter(
+      ([provinceId]) => (worldBase.provinceOwner[provinceId] ?? null) === countryId,
+    ),
+  );
+  return res.json({
+    turnId,
+    countryId,
+    marketId,
+    goods,
+    infraByProvince,
+    alerts: latestMarketOverview.alertsByCountry[countryId] ?? [],
+  });
+});
+
 app.get("/admin/ws-delta-metrics", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth || !(await isAdminCountry(auth.countryId))) {
@@ -3703,6 +4508,12 @@ const gameSettingsSchema = z.object({
       baseDucatsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       baseGoldPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       demolitionCostConstructionPercent: z.coerce.number().int().min(0).max(100).optional(),
+      marketPriceSmoothing: z.coerce.number().min(0).max(1).optional(),
+    })
+    .optional(),
+  markets: z
+    .object({
+      countryMarketByCountryId: z.record(z.string().trim().min(1).max(120)).optional(),
     })
     .optional(),
   colonization: z
@@ -3979,8 +4790,12 @@ const culturePayloadSchema = z.object({
   description: z.string().trim().max(5000).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
   basePrice: z.number().finite().min(0).optional(),
+  minPrice: z.number().finite().min(0).optional(),
+  maxPrice: z.number().finite().min(0).optional(),
+  baseWage: z.number().finite().min(0).optional(),
   costConstruction: z.number().int().min(1).optional(),
   costDucats: z.number().finite().min(0).optional(),
+  startingDucats: z.number().finite().min(0).optional(),
   inputs: z
     .array(
       z.object({
@@ -4005,6 +4820,7 @@ const culturePayloadSchema = z.object({
       }),
     )
     .optional(),
+  infrastructureUse: z.number().finite().min(0).optional(),
   allowedCountryIds: z.array(z.string().trim().min(1).max(120)).optional(),
   deniedCountryIds: z.array(z.string().trim().min(1).max(120)).optional(),
   countryBuildLimits: z
@@ -4045,17 +4861,29 @@ function sanitizeContentEntryByKind(
   payload: z.infer<typeof culturePayloadSchema>,
 ): Partial<GameContentEntry & GoodContentEntry & BuildingContentEntry> {
   if (kind === "goods") {
+    const basePrice = Number((payload.basePrice ?? 1).toFixed(3));
+    const minPrice = Number(Math.max(0, payload.minPrice ?? basePrice * 0.1).toFixed(3));
+    const maxPrice = Number(Math.max(minPrice, payload.maxPrice ?? basePrice * 10).toFixed(3));
     return {
-      basePrice: Number((payload.basePrice ?? 1).toFixed(3)),
+      basePrice,
+      minPrice,
+      maxPrice,
+    };
+  }
+  if (kind === "professions") {
+    return {
+      baseWage: Number(Math.max(0, payload.baseWage ?? 1).toFixed(3)),
     };
   }
   if (kind === "buildings") {
     return {
       costConstruction: Math.max(1, Math.floor(payload.costConstruction ?? 100)),
       costDucats: Number(Math.max(0, payload.costDucats ?? 10).toFixed(3)),
+      startingDucats: Number(Math.max(0, payload.startingDucats ?? 0).toFixed(3)),
       inputs: normalizeGoodFlows(payload.inputs),
       outputs: normalizeGoodFlows(payload.outputs),
       workforceRequirements: normalizeWorkforceRequirements(payload.workforceRequirements),
+      infrastructureUse: Number(Math.max(0, payload.infrastructureUse ?? 0).toFixed(3)),
       allowedCountryIds: normalizeCountryIdList(payload.allowedCountryIds),
       deniedCountryIds: normalizeCountryIdList(payload.deniedCountryIds),
       countryBuildLimits: normalizeBuildingCountryLimits(payload.countryBuildLimits),
@@ -4510,6 +5338,17 @@ app.patch("/admin/game-settings", async (req, res) => {
     if (typeof nextEconomy.demolitionCostConstructionPercent === "number") {
       gameSettings.economy.demolitionCostConstructionPercent = nextEconomy.demolitionCostConstructionPercent;
     }
+    if (typeof nextEconomy.marketPriceSmoothing === "number") {
+      gameSettings.economy.marketPriceSmoothing = nextEconomy.marketPriceSmoothing;
+    }
+  }
+  const nextMarkets = parsed.data.markets;
+  if (nextMarkets?.countryMarketByCountryId && typeof nextMarkets.countryMarketByCountryId === "object") {
+    gameSettings.markets.countryMarketByCountryId = Object.fromEntries(
+      Object.entries(nextMarkets.countryMarketByCountryId)
+        .map(([countryId, marketId]) => [countryId, normalizeMarketId(marketId)])
+        .filter((row): row is [string, string] => Boolean(row[0] && row[1])),
+    );
   }
 
   const nextColonization = parsed.data.colonization;
@@ -4615,6 +5454,7 @@ app.patch("/admin/game-settings", async (req, res) => {
 
   const changedSections = [
     parsed.data.economy ? "экономика" : null,
+    parsed.data.markets ? "рынки" : null,
     parsed.data.colonization ? "колонизация" : null,
     parsed.data.customization ? "кастомизация" : null,
     parsed.data.eventLog ? "журнал событий" : null,
@@ -5063,6 +5903,7 @@ app.patch("/country/province-rename", async (req, res) => {
 
 const adminProvinceColonizationSchema = z.object({
   colonizationCost: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
+  infrastructureCapacity: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).optional(),
   colonizationDisabled: z.boolean().optional(),
   ownerCountryId: z.string().min(1).nullable().optional(),
   resetColonizationCostToAuto: z.boolean().optional(),
@@ -5158,12 +5999,16 @@ app.get("/admin/provinces", async (req, res) => {
     const provinceName = province.name;
     const cfg = getProvinceColonizationConfig(provinceId);
     const population = worldBase.provincePopulationByProvince[provinceId] ?? null;
+    const infrastructureCapacity = round3(
+      Math.max(0, Number(worldBase.provinceInfrastructureByProvince[provinceId] ?? DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY)),
+    );
     return {
       id: provinceId,
       name: provinceName,
       areaKm2: province.areaKm2,
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
+      infrastructureCapacity,
       colonizationDisabled: cfg.disabled,
       manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
@@ -5384,7 +6229,8 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
     WORLD_DELTA_MASK.resourcesByCountry |
       WORLD_DELTA_MASK.provinceOwner |
       WORLD_DELTA_MASK.colonyProgressByProvince |
-      WORLD_DELTA_MASK.provinceColonizationByProvince,
+      WORLD_DELTA_MASK.provinceColonizationByProvince |
+      WORLD_DELTA_MASK.provinceInfrastructureByProvince,
   );
   let clearedProgress = false;
 
@@ -5404,6 +6250,9 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
     }
   }
   worldBase.provinceColonizationByProvince[provinceId] = cfg;
+  if (typeof parsed.data.infrastructureCapacity === "number") {
+    worldBase.provinceInfrastructureByProvince[provinceId] = round3(Math.max(0, parsed.data.infrastructureCapacity));
+  }
 
   if (parsed.data.ownerCountryId !== undefined) {
     const nextOwner = parsed.data.ownerCountryId;
@@ -5445,6 +6294,9 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
       areaKm2: provinceIndexEntry.areaKm2,
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
+      infrastructureCapacity: round3(
+        Math.max(0, Number(worldBase.provinceInfrastructureByProvince[provinceId] ?? DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY)),
+      ),
       colonizationDisabled: cfg.disabled,
       manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
@@ -5517,6 +6369,15 @@ const adminCountryUpdateSchema = z.object({
       const n = Number(v);
       return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : undefined;
     }),
+  marketId: z
+    .string()
+    .optional()
+    .transform((v) => {
+      if (v == null) return undefined;
+      const next = v.trim();
+      if (!next) return null;
+      return next;
+    }),
 });
 
 app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
@@ -5578,6 +6439,9 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
       data,
       select: countrySelect,
     });
+    if (parsed.data.marketId !== undefined) {
+      setCountryMarketId(target.id, parsed.data.marketId);
+    }
 
     if (flagFile) {
       removeUploadedByUrl(target.flagUrl);
@@ -5586,6 +6450,7 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
       removeUploadedByUrl(target.crestUrl);
     }
     invalidateCountryQueryCache();
+    savePersistentState();
     return res.json(countryFromDb(updated));
   } catch {
     removeUploadedFile(flagFile);
@@ -5647,6 +6512,12 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
       if (project.owner.type === "state" && project.owner.countryId === countryIdParam) return false;
       return true;
     });
+  }
+  delete gameSettings.markets.countryMarketByCountryId[countryIdParam];
+  for (const [countryId, marketId] of Object.entries(gameSettings.markets.countryMarketByCountryId)) {
+    if (marketId === countryIdParam) {
+      delete gameSettings.markets.countryMarketByCountryId[countryId];
+    }
   }
 
   savePersistentState();

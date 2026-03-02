@@ -122,6 +122,17 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
+      if ((delta.mask & WORLD_DELTA_MASK.provinceInfrastructureByProvince) !== 0 && delta.s) {
+        nextWorldBase.provinceInfrastructureByProvince = { ...nextWorldBase.provinceInfrastructureByProvince };
+        for (const [provinceId, value] of Object.entries(delta.s)) {
+          if (value == null) {
+            delete nextWorldBase.provinceInfrastructureByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceInfrastructureByProvince[provinceId] = value;
+        }
+      }
+
       if ((delta.mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0 && delta.u) {
         nextWorldBase.provincePopulationByProvince = { ...nextWorldBase.provincePopulationByProvince };
         for (const [provinceId, value] of Object.entries(delta.u)) {

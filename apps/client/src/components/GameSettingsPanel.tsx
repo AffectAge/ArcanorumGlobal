@@ -49,6 +49,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [baseDucatsPerTurn, setBaseDucatsPerTurn] = useState(5);
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [demolitionCostConstructionPercent, setDemolitionCostConstructionPercent] = useState(20);
+  const [marketPriceSmoothing, setMarketPriceSmoothing] = useState(0.2);
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationPointsPerTurn, setColonizationPointsPerTurn] = useState(30);
   const [colonizationPointsCostPer1000Km2, setColonizationPointsCostPer1000Km2] = useState(5);
@@ -91,6 +92,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setBaseDucatsPerTurn(settings.economy.baseDucatsPerTurn);
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
         setDemolitionCostConstructionPercent(settings.economy.demolitionCostConstructionPercent ?? 20);
+        setMarketPriceSmoothing(settings.economy.marketPriceSmoothing ?? 0.2);
         setMaxActiveColonizations(settings.colonization.maxActiveColonizations);
         setColonizationPointsPerTurn(settings.colonization.pointsPerTurn);
         setColonizationPointsCostPer1000Km2(settings.colonization.pointsCostPer1000Km2);
@@ -131,12 +133,14 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
           baseDucatsPerTurn: Math.max(0, Math.floor(baseDucatsPerTurn)),
           baseGoldPerTurn: Math.max(0, Math.floor(baseGoldPerTurn)),
           demolitionCostConstructionPercent: Math.min(100, Math.max(0, Math.floor(demolitionCostConstructionPercent))),
+          marketPriceSmoothing: Math.min(1, Math.max(0, Number(marketPriceSmoothing || 0))),
         },
       });
       setBaseConstructionPerTurn(updated.economy.baseConstructionPerTurn);
       setBaseDucatsPerTurn(updated.economy.baseDucatsPerTurn);
       setBaseGoldPerTurn(updated.economy.baseGoldPerTurn);
       setDemolitionCostConstructionPercent(updated.economy.demolitionCostConstructionPercent ?? 20);
+      setMarketPriceSmoothing(updated.economy.marketPriceSmoothing ?? 0.2);
       onSettingsUpdated?.(updated);
       toast.success("Настройки экономики сохранены");
     } catch {
@@ -413,7 +417,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <Coins size={15} className="text-arc-accent" />
                         Базовый доход за каждый резолв хода
                       </div>
-                      <div className="grid gap-3 md:grid-cols-4">
+                      <div className="grid gap-3 md:grid-cols-5">
                         <div>
                           <label className="mb-1 block text-xs text-slate-300">Очки строительства / ход</label>
                           <input type="number" min={0} value={baseConstructionPerTurn} onChange={(e) => setBaseConstructionPerTurn(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
@@ -434,6 +438,18 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                             max={100}
                             value={demolitionCostConstructionPercent}
                             onChange={(e) => setDemolitionCostConstructionPercent(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Сглаживание цены рынка (0..1)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={marketPriceSmoothing}
+                            onChange={(e) => setMarketPriceSmoothing(Math.min(1, Math.max(0, Number(e.target.value) || 0)))}
                             className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
                           />
                         </div>
