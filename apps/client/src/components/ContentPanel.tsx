@@ -59,6 +59,16 @@ const CONTENT_UI_SCHEMA = {
       ] as const,
     },
     {
+      id: "resourceCategories",
+      label: "Категории инфраструктуры",
+      icon: Package,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
+      ] as const,
+    },
+    {
       id: "professions",
       label: "Профессии",
       icon: Briefcase,
@@ -129,6 +139,7 @@ type PanelSection = "general" | "economy" | "criteria" | "branding";
 type GoodFlowDraft = { goodId: string; amount: string };
 type WorkforceRequirementDraft = { professionId: string; workers: string };
 type CountryBuildLimitDraft = { countryId: string; limit: string };
+type CategoryAmountDraft = { categoryId: string; amount: string };
 
 const CATEGORY_META: Record<
   PanelCategory,
@@ -149,6 +160,14 @@ const CATEGORY_META: Record<
     namePlaceholder: "Название расы",
     descriptionPlaceholder: "Краткое описание расы",
     sectionTitle: "Раздел создания и редактирования рас",
+  },
+  resourceCategories: {
+    singular: "категория инфраструктуры",
+    createBaseName: "Новая категория инфраструктуры",
+    createLabel: "Создать категорию",
+    namePlaceholder: "Название категории инфраструктуры",
+    descriptionPlaceholder: "Краткое описание категории инфраструктуры",
+    sectionTitle: "Раздел создания и редактирования категорий инфраструктуры",
   },
   religions: {
     singular: "религия",
@@ -287,6 +306,17 @@ function normalizeCountryBuildLimitsDraft(
   return [...dedup.entries()].map(([countryId, limit]) => ({ countryId, limit }));
 }
 
+function normalizeCategoryAmountDraft(rows: CategoryAmountDraft[]): Record<string, number> {
+  const dedup = new Map<string, number>();
+  for (const row of rows) {
+    const categoryId = row.categoryId.trim();
+    const amount = Number(row.amount);
+    if (!categoryId || !Number.isFinite(amount) || amount <= 0) continue;
+    dedup.set(categoryId, Number(amount.toFixed(3)));
+  }
+  return Object.fromEntries(dedup.entries());
+}
+
 export function ContentPanel({ open, token, onClose }: Props) {
   const [activeCategory, setActiveCategory] = useState<PanelCategory>("cultures");
   const [contentSection, setContentSection] = useState<PanelSection>("general");
@@ -306,6 +336,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftBasePrice, setDraftBasePrice] = useState("1");
   const [draftMinPrice, setDraftMinPrice] = useState("0.1");
   const [draftMaxPrice, setDraftMaxPrice] = useState("10");
+  const [draftInfraPerUnit, setDraftInfraPerUnit] = useState("1");
+  const [draftResourceCategoryId, setDraftResourceCategoryId] = useState("");
   const [draftBaseWage, setDraftBaseWage] = useState("1");
   const [draftCostConstruction, setDraftCostConstruction] = useState("100");
   const [draftCostDucats, setDraftCostDucats] = useState("10");
@@ -314,6 +346,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftInputs, setDraftInputs] = useState<GoodFlowDraft[]>([]);
   const [draftOutputs, setDraftOutputs] = useState<GoodFlowDraft[]>([]);
   const [draftWorkforceRequirements, setDraftWorkforceRequirements] = useState<WorkforceRequirementDraft[]>([]);
+  const [draftMarketInfrastructureByCategory, setDraftMarketInfrastructureByCategory] = useState<CategoryAmountDraft[]>([]);
   const [draftAllowedCountryIds, setDraftAllowedCountryIds] = useState<string[]>([]);
   const [draftDeniedCountryIds, setDraftDeniedCountryIds] = useState<string[]>([]);
   const [draftCountryBuildLimits, setDraftCountryBuildLimits] = useState<CountryBuildLimitDraft[]>([]);
@@ -327,7 +360,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [buildingInputsOpen, setBuildingInputsOpen] = useState(false);
   const [buildingOutputsOpen, setBuildingOutputsOpen] = useState(false);
   const [buildingWorkforceOpen, setBuildingWorkforceOpen] = useState(false);
+  const [buildingMarketInfraOpen, setBuildingMarketInfraOpen] = useState(false);
   const [goodsOptions, setGoodsOptions] = useState<ContentEntry[]>([]);
+  const [resourceCategoryOptions, setResourceCategoryOptions] = useState<ContentEntry[]>([]);
   const [professionOptions, setProfessionOptions] = useState<ContentEntry[]>([]);
   const [countryOptions, setCountryOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [worldBuildingUsage, setWorldBuildingUsage] = useState<{
@@ -347,6 +382,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       basePrice: entry.basePrice ?? null,
       minPrice: entry.minPrice ?? null,
       maxPrice: entry.maxPrice ?? null,
+      infraPerUnit: entry.infraPerUnit ?? null,
+      infrastructureCostPerUnit: entry.infrastructureCostPerUnit ?? null,
+      resourceCategoryId: entry.resourceCategoryId ?? null,
       baseWage: entry.baseWage ?? null,
       costConstruction: entry.costConstruction ?? null,
       costDucats: entry.costDucats ?? null,
@@ -358,6 +396,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
         professionId: row.professionId,
         workers: Math.floor(row.workers),
       })),
+      marketInfrastructureByCategory: Object.fromEntries(
+        Object.entries(entry.marketInfrastructureByCategory ?? {}).map(([categoryId, amount]) => [
+          categoryId,
+          Number(Number(amount).toFixed(3)),
+        ]),
+      ),
       allowedCountryIds: normalizeCountryIdsDraft(entry.allowedCountryIds ?? []),
       deniedCountryIds: normalizeCountryIdsDraft(entry.deniedCountryIds ?? []),
       countryBuildLimits: normalizeCountryBuildLimitsDraft(
@@ -450,16 +494,23 @@ export function ContentPanel({ open, token, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    Promise.all([adminFetchContentEntries(token, "goods"), adminFetchContentEntries(token, "professions"), fetchCountries()])
-      .then(([goods, professions, countries]) => {
+    Promise.all([
+      adminFetchContentEntries(token, "goods"),
+      adminFetchContentEntries(token, "resourceCategories"),
+      adminFetchContentEntries(token, "professions"),
+      fetchCountries(),
+    ])
+      .then(([goods, resourceCategories, professions, countries]) => {
         if (cancelled) return;
         setGoodsOptions(goods);
+        setResourceCategoryOptions(resourceCategories);
         setProfessionOptions(professions);
         setCountryOptions(countries.map((country) => ({ id: country.id, name: country.name })));
       })
       .catch(() => {
         if (cancelled) return;
         setGoodsOptions([]);
+        setResourceCategoryOptions([]);
         setProfessionOptions([]);
         setCountryOptions([]);
       });
@@ -532,6 +583,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftBasePrice("1");
       setDraftMinPrice("0.1");
       setDraftMaxPrice("10");
+      setDraftInfraPerUnit("1");
+      setDraftResourceCategoryId("");
       setDraftBaseWage("1");
       setDraftCostConstruction("100");
       setDraftCostDucats("10");
@@ -540,6 +593,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftInputs([]);
       setDraftOutputs([]);
       setDraftWorkforceRequirements([]);
+      setDraftMarketInfrastructureByCategory([]);
       setDraftAllowedCountryIds([]);
       setDraftDeniedCountryIds([]);
       setDraftCountryBuildLimits([]);
@@ -567,6 +621,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
       typeof selectedEntry.maxPrice === "number" && Number.isFinite(selectedEntry.maxPrice)
         ? String(selectedEntry.maxPrice)
         : "10",
+    );
+    setDraftInfraPerUnit(
+      typeof selectedEntry.infrastructureCostPerUnit === "number" && Number.isFinite(selectedEntry.infrastructureCostPerUnit)
+        ? String(selectedEntry.infrastructureCostPerUnit)
+        : typeof selectedEntry.infraPerUnit === "number" && Number.isFinite(selectedEntry.infraPerUnit)
+          ? String(selectedEntry.infraPerUnit)
+        : "1",
+    );
+    setDraftResourceCategoryId(
+      typeof selectedEntry.resourceCategoryId === "string" ? selectedEntry.resourceCategoryId : "",
     );
     setDraftBaseWage(
       typeof selectedEntry.baseWage === "number" && Number.isFinite(selectedEntry.baseWage)
@@ -601,6 +665,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
         workers: String(row.workers),
       })),
     );
+    setDraftMarketInfrastructureByCategory(
+      Object.entries(selectedEntry.marketInfrastructureByCategory ?? {}).map(([categoryId, amount]) => ({
+        categoryId,
+        amount: String(amount),
+      })),
+    );
     setDraftAllowedCountryIds(normalizeCountryIdsDraft(selectedEntry.allowedCountryIds ?? []));
     setDraftDeniedCountryIds(normalizeCountryIdsDraft(selectedEntry.deniedCountryIds ?? []));
     setDraftCountryBuildLimits(
@@ -621,6 +691,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     setBuildingInputsOpen(false);
     setBuildingOutputsOpen(false);
     setBuildingWorkforceOpen(false);
+    setBuildingMarketInfraOpen(false);
     setAllowCountrySearch("");
     setDenyCountrySearch("");
     setSavedSnapshot(buildSnapshot(selectedEntry));
@@ -655,6 +726,13 @@ export function ContentPanel({ open, token, onClose }: Props) {
               ? Number(Number(draftMaxPrice).toFixed(3))
               : null
             : null,
+        infraPerUnit:
+          activeCategory === "goods"
+            ? Number.isFinite(Number(draftInfraPerUnit))
+              ? Number(Math.max(0, Number(draftInfraPerUnit)).toFixed(3))
+              : null
+            : null,
+        resourceCategoryId: activeCategory === "goods" ? draftResourceCategoryId.trim() || null : null,
         baseWage:
           activeCategory === "professions"
             ? Number.isFinite(Number(draftBaseWage))
@@ -685,6 +763,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
               ? Number(Math.max(0, Number(draftInfrastructureUse)).toFixed(3))
               : null
             : null,
+        marketInfrastructureByCategory:
+          activeCategory === "buildings" ? normalizeCategoryAmountDraft(draftMarketInfrastructureByCategory) : {},
         inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
         outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : [],
         workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : [],
@@ -705,11 +785,14 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftBasePrice,
     draftMinPrice,
     draftMaxPrice,
+    draftInfraPerUnit,
+    draftResourceCategoryId,
     draftBaseWage,
     draftCostConstruction,
     draftCostDucats,
     draftStartingDucats,
     draftInfrastructureUse,
+    draftMarketInfrastructureByCategory,
     draftColor,
     draftDescription,
     draftFemalePortraitUrl,
@@ -753,6 +836,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
         basePrice: activeCategory === "goods" ? 1 : undefined,
         minPrice: activeCategory === "goods" ? 0.1 : undefined,
         maxPrice: activeCategory === "goods" ? 10 : undefined,
+        infraPerUnit: activeCategory === "goods" ? 1 : undefined,
+        infrastructureCostPerUnit: activeCategory === "goods" ? 1 : undefined,
+        resourceCategoryId: activeCategory === "goods" ? null : undefined,
         baseWage: activeCategory === "professions" ? 1 : undefined,
         costConstruction: activeCategory === "buildings" ? 100 : undefined,
         costDucats: activeCategory === "buildings" ? 10 : undefined,
@@ -761,6 +847,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
         inputs: activeCategory === "buildings" ? [] : undefined,
         outputs: activeCategory === "buildings" ? [] : undefined,
         workforceRequirements: activeCategory === "buildings" ? [] : undefined,
+        marketInfrastructureByCategory: activeCategory === "buildings" ? {} : undefined,
         allowedCountryIds: activeCategory === "buildings" ? [] : undefined,
         deniedCountryIds: activeCategory === "buildings" ? [] : undefined,
         countryBuildLimits: activeCategory === "buildings" ? [] : undefined,
@@ -770,6 +857,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setSelectedEntryId(result.item.id);
       if (activeCategory === "goods") {
         setGoodsOptions(result.items);
+      }
+      if (activeCategory === "resourceCategories") {
+        setResourceCategoryOptions(result.items);
       }
       if (activeCategory === "professions") {
         setProfessionOptions(result.items);
@@ -803,6 +893,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       basePrice: activeCategory === "goods" ? Math.max(0, Number(draftBasePrice || "0")) : undefined,
       minPrice: activeCategory === "goods" ? Math.max(0, Number(draftMinPrice || "0")) : undefined,
       maxPrice: activeCategory === "goods" ? Math.max(0, Number(draftMaxPrice || "0")) : undefined,
+      infraPerUnit: activeCategory === "goods" ? Math.max(0, Number(draftInfraPerUnit || "0")) : undefined,
+      infrastructureCostPerUnit: activeCategory === "goods" ? Math.max(0.01, Number(draftInfraPerUnit || "0.01")) : undefined,
+      resourceCategoryId: activeCategory === "goods" ? (draftResourceCategoryId.trim() || null) : undefined,
       baseWage: activeCategory === "professions" ? Math.max(0, Number(draftBaseWage || "0")) : undefined,
       costConstruction: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftCostConstruction || "100"))) : undefined,
       costDucats: activeCategory === "buildings" ? Math.max(0, Number(draftCostDucats || "10")) : undefined,
@@ -811,6 +904,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
       inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : undefined,
       outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : undefined,
       workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : undefined,
+      marketInfrastructureByCategory:
+        activeCategory === "buildings" ? normalizeCategoryAmountDraft(draftMarketInfrastructureByCategory) : undefined,
       allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : undefined,
       deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : undefined,
       countryBuildLimits:
@@ -826,9 +921,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
       activeCategory === "goods" &&
       (!Number.isFinite(payload.basePrice ?? Number.NaN) ||
         !Number.isFinite(payload.minPrice ?? Number.NaN) ||
-        !Number.isFinite(payload.maxPrice ?? Number.NaN))
+        !Number.isFinite(payload.maxPrice ?? Number.NaN) ||
+        !Number.isFinite(payload.infraPerUnit ?? Number.NaN) ||
+        !Number.isFinite(payload.infrastructureCostPerUnit ?? Number.NaN))
     ) {
-      toast.error("Параметры цены товара должны быть числами");
+      toast.error("Параметры экономики товара должны быть числами");
       return;
     }
     if (activeCategory === "goods" && (payload.maxPrice ?? 0) < (payload.minPrice ?? 0)) {
@@ -857,6 +954,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       if (activeCategory === "goods") {
         setGoodsOptions(result.items);
       }
+      if (activeCategory === "resourceCategories") {
+        setResourceCategoryOptions(result.items);
+      }
       if (activeCategory === "professions") {
         setProfessionOptions(result.items);
       }
@@ -879,6 +979,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setSelectedEntryId(result.items[0]?.id ?? "");
       if (activeCategory === "goods") {
         setGoodsOptions(result.items);
+      }
+      if (activeCategory === "resourceCategories") {
+        setResourceCategoryOptions(result.items);
       }
       if (activeCategory === "professions") {
         setProfessionOptions(result.items);
@@ -1504,6 +1607,95 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             </AnimatePresence>
                           </div>
 
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBuildingMarketInfraOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Вклад здания в общую инфраструктуру рынка по категориям. Используется для внешней торговли между рынками.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Инфраструктура рынка</div>
+                                </Tooltip>
+                                {buildingMarketInfraOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                              {buildingMarketInfraOpen && (
+                                <Tooltip content="Добавить категорию инфраструктуры, которую генерирует это здание.">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDraftMarketInfrastructureByCategory((prev) => [
+                                        ...prev,
+                                        { categoryId: "", amount: "1" },
+                                      ])
+                                    }
+                                    className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+                                  >
+                                    Добавить
+                                  </button>
+                                </Tooltip>
+                              )}
+                            </div>
+                            <AnimatePresence initial={false}>
+                            {buildingMarketInfraOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                            <div className="space-y-2 pt-1">
+                              {draftMarketInfrastructureByCategory.map((row, index) => (
+                                <div key={`market-infra-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                  <CustomSelect
+                                    value={row.categoryId}
+                                    onChange={(value) =>
+                                      setDraftMarketInfrastructureByCategory((prev) =>
+                                        prev.map((r, i) => (i === index ? { ...r, categoryId: value } : r)),
+                                      )
+                                    }
+                                    options={[
+                                      { value: "", label: "Выберите категорию" },
+                                      ...resourceCategoryOptions.map((option) => ({ value: option.id, label: option.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
+                                  />
+                                  <input
+                                    value={row.amount}
+                                    onChange={(e) =>
+                                      setDraftMarketInfrastructureByCategory((prev) =>
+                                        prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)),
+                                      )
+                                    }
+                                    inputMode="decimal"
+                                    placeholder="0"
+                                    className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDraftMarketInfrastructureByCategory((prev) => prev.filter((_, i) => i !== index))
+                                    }
+                                    className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                              {draftMarketInfrastructureByCategory.length === 0 && (
+                                <div className="text-xs text-white/45">Нет категорий инфраструктуры рынка</div>
+                              )}
+                            </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
+                          </div>
+
                         </div>
                       </section>
                     )}
@@ -1783,7 +1975,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               transition={{ duration: 0.2, ease: "easeOut" }}
                               className="overflow-hidden"
                             >
-                              <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                              <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
                                 <label className="block">
                                   <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
                                     <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
@@ -1818,6 +2010,32 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                     inputMode="decimal"
                                     placeholder="10"
                                     className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Сколько инфраструктуры расходуется на перевозку 1 единицы товара (покупка или продажа).">
+                                    <span className="mb-1 block text-xs text-white/60">Инфра за 1 ед.</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftInfraPerUnit}
+                                    onChange={(e) => setDraftInfraPerUnit(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Категория инфраструктуры для логистических лимитов. Если пусто, инфраструктура не ограничивает торговлю этим товаром.">
+                                    <span className="mb-1 block text-xs text-white/60">Категория инфраструктуры</span>
+                                  </Tooltip>
+                                  <CustomSelect
+                                    value={draftResourceCategoryId}
+                                    onChange={setDraftResourceCategoryId}
+                                    options={[
+                                      { value: "", label: "Без категории" },
+                                      ...resourceCategoryOptions.map((option) => ({ value: option.id, label: option.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
                                   />
                                 </label>
                               </div>

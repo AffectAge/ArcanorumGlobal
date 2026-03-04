@@ -8,7 +8,7 @@ import type { Country, WorldBase } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 import { ColonizationModal } from "./ColonizationModal";
 import { ProvinceHoverTooltip } from "./ProvinceHoverTooltip";
-import { cancelCountryColonization, fetchProvinceIndex, renameOwnedProvince, startCountryColonization } from "../lib/api";
+import { cancelCountryColonization, fetchContentEntries, fetchProvinceIndex, renameOwnedProvince, startCountryColonization } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 
 type Props = {
@@ -52,6 +52,9 @@ const EMPTY_PROVINCE_OWNER: WorldBase["provinceOwner"] = {};
 const EMPTY_PROVINCE_NAMES: WorldBase["provinceNameById"] = {};
 const EMPTY_COLONY_PROGRESS: WorldBase["colonyProgressByProvince"] = {};
 const EMPTY_PROVINCE_COLONIZATION: WorldBase["provinceColonizationByProvince"] = {};
+const EMPTY_PROVINCE_INFRASTRUCTURE: Record<string, number> = {};
+const EMPTY_PROVINCE_LOGISTICS_CONSUMED: Record<string, Record<string, number>> = {};
+const EMPTY_PROVINCE_LOGISTICS_CAPACITY: Record<string, Record<string, number>> = {};
 const EMPTY_COUNTRY_PROGRESS: Record<string, number> = {};
 
 function setInteractions(map: MapLibreMap, enabled: boolean) {
@@ -240,6 +243,7 @@ export function MapView({
     colonizers: Array<{ countryId: string; countryName: string; countryColor: string; percent: number; hasQueuedOrder: boolean }>;
   } | null>(null);
   const [countries, setCountries] = useState<Country[]>([]);
+  const [infrastructureCategoryNamesById, setInfrastructureCategoryNamesById] = useState<Record<string, string>>({});
   const [colonizationModalOpen, setColonizationModalOpen] = useState(false);
   const [provinceRenameModalOpen, setProvinceRenameModalOpen] = useState(false);
   const [provinceRenameInput, setProvinceRenameInput] = useState("");
@@ -265,6 +269,19 @@ export function MapView({
   const setSelectedProvince = useGameStore((s) => s.setSelectedProvince);
   const provinceOwnerById = useGameStore((s) => s.worldBase?.provinceOwner ?? EMPTY_PROVINCE_OWNER);
   const provinceNameById = useGameStore((s) => s.worldBase?.provinceNameById ?? EMPTY_PROVINCE_NAMES);
+  const provinceInfrastructureByProvince = useGameStore(
+    (s) => s.worldBase?.provinceInfrastructureByProvince ?? EMPTY_PROVINCE_INFRASTRUCTURE,
+  );
+  const provinceLogisticsConsumedByCategoryByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as { provinceLastLogisticsConsumedByCategoryByProvince?: Record<string, Record<string, number>> })
+        ?.provinceLastLogisticsConsumedByCategoryByProvince ?? EMPTY_PROVINCE_LOGISTICS_CONSUMED),
+  );
+  const provinceLogisticsCapacityByCategoryByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as { provinceLastLogisticsCapacityByCategoryByProvince?: Record<string, Record<string, number>> })
+        ?.provinceLastLogisticsCapacityByCategoryByProvince ?? EMPTY_PROVINCE_LOGISTICS_CAPACITY),
+  );
   const colonyProgressByProvince = useGameStore((s) => s.worldBase?.colonyProgressByProvince ?? EMPTY_COLONY_PROGRESS);
   const provinceColonizationByProvince = useGameStore((s) => s.worldBase?.provinceColonizationByProvince ?? EMPTY_PROVINCE_COLONIZATION);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
@@ -452,6 +469,24 @@ export function MapView({
 
   useEffect(() => {
     let cancelled = false;
+    fetchContentEntries("resourceCategories")
+      .then((items) => {
+        if (cancelled) return;
+        setInfrastructureCategoryNamesById(
+          Object.fromEntries(items.map((item) => [item.id, item.name] as const)),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInfrastructureCategoryNamesById({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     fetchProvinceIndex()
       .then((items) => {
         if (cancelled) return;
@@ -530,6 +565,36 @@ export function MapView({
   const selectedColonizationDucatsCost = selectedProvinceId ? getDerivedProvinceCosts(selectedProvinceId).ducats : 0;
   const selectedMyColonyProgress = auth?.countryId && selectedProvinceId ? (selectedColonyProgress[auth.countryId] ?? null) : null;
   const selectedCanCancelColonization = selectedProvinceId != null && selectedMyColonyProgress != null;
+  const selectedInfrastructureCapacity = selectedProvinceId
+    ? Math.max(0, Number(provinceInfrastructureByProvince[selectedProvinceId] ?? 0))
+    : 0;
+  const selectedInfrastructureConsumed = selectedProvinceId
+    ? Object.values(provinceLogisticsConsumedByCategoryByProvince[selectedProvinceId] ?? {}).reduce(
+        (sum, value) => sum + Math.max(0, Number(value)),
+        0,
+      )
+    : 0;
+  const selectedInfrastructureByCategory = useMemo(() => {
+    if (!selectedProvinceId) return [];
+    const consumed = provinceLogisticsConsumedByCategoryByProvince[selectedProvinceId] ?? {};
+    const capacity = provinceLogisticsCapacityByCategoryByProvince[selectedProvinceId] ?? {};
+    return [...new Set([...Object.keys(consumed), ...Object.keys(capacity)])]
+      .map((categoryId) => {
+        const c = Math.max(0, Number(consumed[categoryId] ?? 0));
+        const cap = Math.max(0, Number(capacity[categoryId] ?? 0));
+        return {
+          categoryId,
+          consumed: c,
+          capacity: cap,
+          available: Math.max(0, cap - c),
+        };
+      })
+      .sort((a, b) => a.available - b.available || a.categoryId.localeCompare(b.categoryId, "ru"));
+  }, [
+    selectedProvinceId,
+    provinceLogisticsConsumedByCategoryByProvince,
+    provinceLogisticsCapacityByCategoryByProvince,
+  ]);
   const selectedCanStartColonization =
     Boolean(auth?.token) &&
     Boolean(selectedProvinceId) &&
@@ -1473,6 +1538,28 @@ export function MapView({
                 <div>
                   Статус колонизации: {selectedIsColonizationDisabled ? "Запрещена" : "Доступна"}
                 </div>
+                <div>
+                  Инфраструктура: {Math.max(0, Math.floor(selectedInfrastructureCapacity - selectedInfrastructureConsumed)).toLocaleString("ru-RU")} /{" "}
+                  {Math.floor(selectedInfrastructureCapacity).toLocaleString("ru-RU")}
+                </div>
+                <div>
+                  Потреблено за ход: {Math.floor(selectedInfrastructureConsumed).toLocaleString("ru-RU")}
+                </div>
+                {selectedInfrastructureByCategory.length > 0 && (
+                  <div className="mt-1 rounded-md border border-white/10 bg-black/20 p-2">
+                    <div className="mb-1 text-[11px] text-white/55">По категориям инфраструктуры</div>
+                    <div className="space-y-1">
+                      {selectedInfrastructureByCategory.map((row) => (
+                        <div key={row.categoryId} className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="text-white/75">{infrastructureCategoryNamesById[row.categoryId] ?? row.categoryId}</span>
+                          <span className="text-white/60">
+                            {Math.floor(row.available).toLocaleString("ru-RU")} / {Math.floor(row.capacity).toLocaleString("ru-RU")}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {selectedCanRenameProvince && (
                   <div className="pt-1">
                     <button

@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowDownUp, Globe2, LineChart, Settings2, SlidersHorizo
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
+  fetchContentEntries,
   fetchCountryMarketInvites,
   fetchMarketsCatalog,
   fetchMarketOverview,
@@ -70,6 +71,8 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
   const [selectedMarketId, setSelectedMarketId] = useState("");
   const [pendingJoin, setPendingJoin] = useState(false);
   const [pendingLeave, setPendingLeave] = useState(false);
+  const [selectedGoodId, setSelectedGoodId] = useState("");
+  const [infrastructureCategoryNamesById, setInfrastructureCategoryNamesById] = useState<Record<string, string>>({});
 
   const effectiveTab: ViewTab = mode === "global" ? "global" : mode === "country" ? "country" : tab;
 
@@ -101,6 +104,23 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
       cancelled = true;
     };
   }, [open, token, mode]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetchContentEntries("resourceCategories")
+      .then((items) => {
+        if (cancelled) return;
+        setInfrastructureCategoryNamesById(Object.fromEntries(items.map((item) => [item.id, item.name] as const)));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInfrastructureCategoryNamesById({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const rows = useMemo(() => {
     const source = overview?.goods ?? [];
@@ -136,9 +156,23 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
         .sort((a, b) => a.coverage - b.coverage || a.provinceId.localeCompare(b.provinceId, "ru")),
     [overview?.infraByProvince],
   );
+  const sharedInfraRows = useMemo(
+    () =>
+      [...(overview?.sharedInfrastructureByMarket ?? [])].sort(
+        (a, b) => a.available - b.available || a.marketName.localeCompare(b.marketName, "ru"),
+      ),
+    [overview?.sharedInfrastructureByMarket],
+  );
 
   const criticalCount = useMemo(() => rows.filter((row) => row.coverage < 50).length, [rows]);
   const infraOverloadCount = useMemo(() => infraRows.filter((row) => row.coverage < 1).length, [infraRows]);
+  const selectedRow = useMemo(() => rows.find((row) => row.goodId === selectedGoodId) ?? rows[0] ?? null, [rows, selectedGoodId]);
+
+  useEffect(() => {
+    if (!rows.some((row) => row.goodId === selectedGoodId)) {
+      setSelectedGoodId(rows[0]?.goodId ?? "");
+    }
+  }, [rows, selectedGoodId]);
 
   const handleInviteAction = async (inviteId: string, action: "accept" | "reject") => {
     try {
@@ -353,10 +387,13 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                   {rows.map((row) => (
                     <div
                       key={row.goodId}
+                      onClick={() => setSelectedGoodId(row.goodId)}
                       className={`grid grid-cols-[2fr_1fr_1fr_1fr_1fr] items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
                         row.coverage < 50
                           ? "border-red-400/35 bg-red-500/10"
-                          : "border-white/10 bg-black/25"
+                          : row.goodId === selectedGoodId
+                            ? "border-arc-accent/40 bg-arc-accent/10"
+                            : "border-white/10 bg-black/25"
                       }`}
                     >
                       <div className="flex items-center gap-2 text-white/85">
@@ -408,6 +445,53 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                   </div>
                 </div>
 
+                {effectiveTab === "global" && (
+                  <div className="panel-border rounded-xl bg-black/25 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-white/80">
+                      <Globe2 size={14} className="text-cyan-300" />
+                      Shared инфраструктура рынков
+                    </div>
+                    <div className="space-y-1">
+                      {sharedInfraRows.map((row) => (
+                        <div key={row.marketId} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-white/80">{row.marketName}</span>
+                            <span className="text-cyan-200">{formatCompact(row.available)}</span>
+                          </div>
+                          <div className="mt-1 text-white/55">
+                            Доступно: {formatCompact(row.available)} / {formatCompact(row.capacity)}
+                          </div>
+                          <div className="text-white/55">Потреблено за ход: {formatCompact(row.consumed)}</div>
+                          {Object.keys(row.availableByCategory ?? {}).length > 0 && (
+                            <div className="mt-1 rounded border border-white/10 bg-black/25 p-1.5">
+                              <div className="mb-1 text-[10px] text-white/50">По категориям</div>
+                              <div className="space-y-0.5">
+                                {Object.entries(row.availableByCategory ?? {})
+                                  .sort((a, b) => a[0].localeCompare(b[0], "ru"))
+                                  .map(([categoryId, available]) => {
+                                    const cap = Number(row.capacityByCategory?.[categoryId] ?? 0);
+                                    const consumed = Number(row.consumedByCategory?.[categoryId] ?? 0);
+                                    return (
+                                      <div key={`${row.marketId}-${categoryId}`} className="flex items-center justify-between gap-2 text-[10px]">
+                                        <span className="text-white/70">{infrastructureCategoryNamesById[categoryId] ?? categoryId}</span>
+                                        <span className="text-white/55">
+                                          {formatCompact(available)} / {formatCompact(cap)} · {formatCompact(consumed)}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {sharedInfraRows.length === 0 && (
+                        <div className="text-xs text-white/50">Нет данных по shared инфраструктуре.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="panel-border rounded-xl bg-black/30 p-3">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
                     <AlertTriangle size={13} className="text-red-300" />
@@ -421,6 +505,35 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                     ))}
                     {(overview?.alerts ?? []).length === 0 && <div className="text-white/45">Нет алертов.</div>}
                   </div>
+                </div>
+
+                <div className="panel-border rounded-xl bg-black/30 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
+                    <LineChart size={13} className="text-cyan-300" />
+                    История товара
+                  </div>
+                  {selectedRow ? (
+                    <div className="space-y-1 text-xs">
+                      <div className="text-white/80">{selectedRow.goodName}</div>
+                      <div className="text-white/55">
+                        Цена: {((effectiveTab === "country" ? selectedRow.countryPriceHistory : selectedRow.globalPriceHistory) ?? []).map(formatCompact).join(" · ") || "—"}
+                      </div>
+                      <div className="text-white/55">
+                        Спрос: {((effectiveTab === "country" ? selectedRow.countryDemandHistory : selectedRow.globalDemandHistory) ?? []).map(formatCompact).join(" · ") || "—"}
+                      </div>
+                      <div className="text-white/55">
+                        Предложение: {((effectiveTab === "country" ? selectedRow.countryOfferHistory : selectedRow.globalOfferHistory) ?? []).map(formatCompact).join(" · ") || "—"}
+                      </div>
+                      <div className="text-white/55">
+                        Производство факт: {((effectiveTab === "country" ? selectedRow.countryProductionFactHistory : selectedRow.globalProductionFactHistory) ?? []).map(formatCompact).join(" · ") || "—"}
+                      </div>
+                      <div className="text-white/55">
+                        Производство макс: {((effectiveTab === "country" ? selectedRow.countryProductionMaxHistory : selectedRow.globalProductionMaxHistory) ?? []).map(formatCompact).join(" · ") || "—"}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-white/45">Выберите товар в таблице.</div>
+                  )}
                 </div>
 
               </div>

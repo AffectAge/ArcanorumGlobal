@@ -15,11 +15,15 @@ export type ContentCulture = {
   basePrice?: number | null;
   minPrice?: number | null;
   maxPrice?: number | null;
+  infraPerUnit?: number | null;
+  infrastructureCostPerUnit?: number | null;
+  resourceCategoryId?: string | null;
   baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
   infrastructureUse?: number | null;
+  marketInfrastructureByCategory?: Record<string, number> | null;
   inputs?: Array<{ goodId: string; amount: number }> | null;
   outputs?: Array<{ goodId: string; amount: number }> | null;
   workforceRequirements?: Array<{ professionId: string; workers: number }> | null;
@@ -31,6 +35,7 @@ export type ContentCulture = {
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind =
   | "cultures"
+  | "resourceCategories"
   | "religions"
   | "professions"
   | "ideologies"
@@ -47,11 +52,15 @@ type ContentEntryUpsertPayload = {
   basePrice?: number | null;
   minPrice?: number | null;
   maxPrice?: number | null;
+  infraPerUnit?: number | null;
+  infrastructureCostPerUnit?: number | null;
+  resourceCategoryId?: string | null;
   baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
   infrastructureUse?: number | null;
+  marketInfrastructureByCategory?: Record<string, number>;
   inputs?: Array<{ goodId: string; amount: number }>;
   outputs?: Array<{ goodId: string; amount: number }>;
   workforceRequirements?: Array<{ professionId: string; workers: number }>;
@@ -137,6 +146,16 @@ export type MarketOverviewItem = {
   globalDemand: number;
   globalOffer: number;
   globalCoveragePct: number;
+  countryPriceHistory?: number[];
+  globalPriceHistory?: number[];
+  countryDemandHistory?: number[];
+  countryOfferHistory?: number[];
+  globalDemandHistory?: number[];
+  globalOfferHistory?: number[];
+  countryProductionFactHistory?: number[];
+  countryProductionMaxHistory?: number[];
+  globalProductionFactHistory?: number[];
+  globalProductionMaxHistory?: number[];
 };
 
 export type MarketOverviewAlert = {
@@ -156,6 +175,16 @@ export type MarketOverviewResponse = {
   marketId: string;
   goods: MarketOverviewItem[];
   infraByProvince: Record<string, { capacity: number; required: number; coverage: number }>;
+  sharedInfrastructureByMarket?: Array<{
+    marketId: string;
+    marketName: string;
+    capacity: number;
+    consumed: number;
+    available: number;
+    capacityByCategory?: Record<string, number>;
+    consumedByCategory?: Record<string, number>;
+    availableByCategory?: Record<string, number>;
+  }>;
   alerts: MarketOverviewAlert[];
 };
 
