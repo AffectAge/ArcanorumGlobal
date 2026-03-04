@@ -647,6 +647,7 @@ type GameSettings = {
   turnTimer: {
     enabled: boolean;
     secondsPerTurn: number;
+    pauseWhenNoPlayersOnline: boolean;
   };
   map: {
     showAntarctica: boolean;
@@ -2214,6 +2215,7 @@ const defaultGameSettings = (): GameSettings => ({
   turnTimer: {
     enabled: true,
     secondsPerTurn: 86_400,
+    pauseWhenNoPlayersOnline: false,
   },
   map: {
     showAntarctica: false,
@@ -2516,6 +2518,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof (next as Partial<{ turnTimer?: { secondsPerTurn?: unknown } }>).turnTimer?.secondsPerTurn === "number"
             ? Math.max(10, Math.floor((next as Partial<{ turnTimer?: { secondsPerTurn?: number } }>).turnTimer?.secondsPerTurn ?? defaults.turnTimer.secondsPerTurn))
             : defaults.turnTimer.secondsPerTurn,
+        pauseWhenNoPlayersOnline:
+          typeof (next as Partial<{ turnTimer?: { pauseWhenNoPlayersOnline?: unknown } }>).turnTimer?.pauseWhenNoPlayersOnline === "boolean"
+            ? Boolean((next as Partial<{ turnTimer?: { pauseWhenNoPlayersOnline?: boolean } }>).turnTimer?.pauseWhenNoPlayersOnline)
+            : defaults.turnTimer.pauseWhenNoPlayersOnline,
       },
       map: {
         showAntarctica:
@@ -5045,6 +5051,7 @@ const gameSettingsSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       secondsPerTurn: z.coerce.number().int().min(10).max(2_592_000).optional(),
+      pauseWhenNoPlayersOnline: z.boolean().optional(),
     })
     .optional(),
   map: z
@@ -5928,6 +5935,9 @@ app.patch("/admin/game-settings", async (req, res) => {
         turnTimerConfigChanged = true;
       }
       gameSettings.turnTimer.secondsPerTurn = nextSeconds;
+    }
+    if (typeof nextTurnTimer.pauseWhenNoPlayersOnline === "boolean") {
+      gameSettings.turnTimer.pauseWhenNoPlayersOnline = nextTurnTimer.pauseWhenNoPlayersOnline;
     }
     if (turnTimerConfigChanged) {
       resetTurnTimerAnchor();
@@ -7890,6 +7900,10 @@ async function startServer(): Promise<void> {
   setInterval(() => {
     try {
       if (!gameSettings.turnTimer.enabled) return;
+      if (gameSettings.turnTimer.pauseWhenNoPlayersOnline && onlinePlayers.size === 0) {
+        resetTurnTimerAnchor();
+        return;
+      }
       const seconds = Math.max(10, Math.floor(gameSettings.turnTimer.secondsPerTurn || 0));
       if (seconds <= 0) return;
       const elapsedMs = Date.now() - currentTurnStartedAtMs;

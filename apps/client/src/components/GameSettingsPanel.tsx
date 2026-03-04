@@ -63,6 +63,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [requireAdminApprovalForRegistration, setRequireAdminApprovalForRegistration] = useState(false);
   const [turnTimerEnabled, setTurnTimerEnabled] = useState(false);
   const [turnTimerSeconds, setTurnTimerSeconds] = useState(300);
+  const [turnTimerPauseWhenNoPlayersOnline, setTurnTimerPauseWhenNoPlayersOnline] = useState(false);
   const [showAntarctica, setShowAntarctica] = useState(true);
   const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
     culture: null,
@@ -106,6 +107,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setRequireAdminApprovalForRegistration(settings.registration?.requireAdminApproval ?? false);
         setTurnTimerEnabled(settings.turnTimer?.enabled ?? false);
         setTurnTimerSeconds(settings.turnTimer?.secondsPerTurn ?? 300);
+        setTurnTimerPauseWhenNoPlayersOnline(settings.turnTimer?.pauseWhenNoPlayersOnline ?? false);
         setShowAntarctica(settings.map?.showAntarctica ?? true);
         setUiBackgroundImageUrl(settings.map?.backgroundImageUrl ?? null);
         setUiBackgroundFile(null);
@@ -255,10 +257,12 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         turnTimer: {
           enabled: turnTimerEnabled,
           secondsPerTurn: Math.min(2_592_000, Math.max(10, Math.floor(turnTimerSeconds || 10))),
+          pauseWhenNoPlayersOnline: turnTimerPauseWhenNoPlayersOnline,
         },
       });
       setTurnTimerEnabled(updated.turnTimer.enabled);
       setTurnTimerSeconds(updated.turnTimer.secondsPerTurn);
+      setTurnTimerPauseWhenNoPlayersOnline(updated.turnTimer.pauseWhenNoPlayersOnline ?? false);
       onSettingsUpdated?.(updated);
       toast.success("Таймер хода сохранён");
     } catch (error) {
@@ -508,6 +512,33 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           Диапазон: 10–2 592 000 секунд (до 30 дней). Таймер сбрасывается после каждого резолва хода.
                         </div>
                       </div>
+                      <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                        <div>
+                          <div className="text-sm text-slate-100">Пауза таймера без игроков онлайн</div>
+                          <div className="text-xs text-slate-500">Если включено, авто-таймер не тикает, пока онлайн 0 игроков.</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setTurnTimerPauseWhenNoPlayersOnline((v) => !v)}
+                          className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
+                            turnTimerPauseWhenNoPlayersOnline ? "border-emerald-400/50 bg-emerald-500/20" : "border-white/10 bg-white/5"
+                          }`}
+                          aria-pressed={turnTimerPauseWhenNoPlayersOnline}
+                          aria-label={
+                            turnTimerPauseWhenNoPlayersOnline
+                              ? "Выключить паузу таймера без игроков"
+                              : "Включить паузу таймера без игроков"
+                          }
+                        >
+                          <span
+                            className={`h-5 w-5 rounded-full transition ${
+                              turnTimerPauseWhenNoPlayersOnline
+                                ? "translate-x-6 bg-emerald-500 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                : "translate-x-1 bg-white/60"
+                            }`}
+                          />
+                        </button>
+                      </label>
                       <button onClick={saveTurnTimer} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить

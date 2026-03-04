@@ -761,6 +761,7 @@ export type GameSettings = {
   turnTimer: {
     enabled: boolean;
     secondsPerTurn: number;
+    pauseWhenNoPlayersOnline?: boolean;
     currentTurnStartedAtMs?: number;
   };
   map: {
@@ -969,7 +970,7 @@ export async function updateGameSettings(
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
     registration?: { requireAdminApproval?: boolean };
     eventLog?: { retentionTurns?: number };
-    turnTimer?: { enabled?: boolean; secondsPerTurn?: number };
+    turnTimer?: { enabled?: boolean; secondsPerTurn?: number; pauseWhenNoPlayersOnline?: boolean };
     map?: { showAntarctica?: boolean; backgroundImageUrl?: string | null };
   },
 ): Promise<GameSettings> {

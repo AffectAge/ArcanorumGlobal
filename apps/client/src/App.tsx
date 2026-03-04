@@ -45,7 +45,6 @@ const RESOLVE_START_TIMEOUT_MS = 12_000;
 export default function App() {
   const worldResyncInFlightRef = useRef(false);
   const replayRequestInFlightRef = useRef(false);
-  const autoResolveRequestedTurnRef = useRef<number | null>(null);
   const resolveStartTimeoutRef = useRef<number | null>(null);
   const [entryLoadingGate, setEntryLoadingGate] = useState<"hidden" | "loading" | "ready">("hidden");
   const [pendingDeltaAckVersion, setPendingDeltaAckVersion] = useState<number | null>(null);
@@ -248,7 +247,6 @@ export default function App() {
         setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
         setPendingDeltaAckVersion(msg.worldStateVersion);
         replayRequestInFlightRef.current = false;
-        autoResolveRequestedTurnRef.current = null;
         const currentAuth = useGameStore.getState().auth;
         if (currentAuth?.token) {
           setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
@@ -908,27 +906,8 @@ export default function App() {
   }, [eventLogRetentionTurns, pruneLogEntries, turnId]);
 
   useEffect(() => {
-    autoResolveRequestedTurnRef.current = null;
     clearResolveStartTimeout();
-  }, [turnId]);
-
-  useEffect(() => {
-    if (!auth) return;
-    if (turnResolveOverlay.phase !== "idle") return;
-    if (!turnTimerUi.enabled || !turnTimerUi.startedAtMs) return;
-
-    const dueAtMs = turnTimerUi.startedAtMs + Math.max(10, turnTimerUi.secondsPerTurn) * 1000;
-    const remainingMs = Math.max(0, dueAtMs - Date.now());
-    const timeoutId = window.setTimeout(() => {
-      if (autoResolveRequestedTurnRef.current === turnId) {
-        return;
-      }
-      autoResolveRequestedTurnRef.current = turnId;
-      send({ type: "REQUEST_RESOLVE" });
-      armResolveStartTimeout("auto");
-    }, remainingMs);
-    return () => window.clearTimeout(timeoutId);
-  }, [armResolveStartTimeout, auth, send, turnId, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
+  }, [turnId, clearResolveStartTimeout]);
 
   useEffect(() => {
     if (!auth) {
