@@ -367,6 +367,47 @@ function createDefaultMarketRecord(marketId: string, ownerCountryId: string): {
   };
 }
 
+function getMarketDisplayName(params: { marketId: string; marketName: string; ownerCountryName?: string | null }): string {
+  const rawName = (params.marketName ?? "").trim();
+  const isDefaultName = rawName.length === 0 || rawName === `Рынок ${params.marketId}`;
+  if (!isDefaultName) {
+    return rawName;
+  }
+  const ownerName = (params.ownerCountryName ?? "").trim();
+  return ownerName ? `Рынок ${ownerName}` : `Рынок ${params.marketId}`;
+}
+
+function isDefaultMarketName(marketId: string, marketName: string): boolean {
+  const raw = (marketName ?? "").trim();
+  return raw.length === 0 || raw === `Рынок ${marketId}`;
+}
+
+async function migratePersistedMarketNamesToReadable(): Promise<boolean> {
+  ensureMarketModelReady();
+  const markets = Object.values(gameSettings.markets.marketById);
+  if (markets.length === 0) return false;
+  const ownerIds = [...new Set(markets.map((market) => market.ownerCountryId).filter(Boolean))];
+  const countries = ownerIds.length
+    ? await prisma.country.findMany({ where: { id: { in: ownerIds } }, select: { id: true, name: true } })
+    : [];
+  const countryNameById = new Map(countries.map((country) => [country.id, country.name] as const));
+  let changed = false;
+  for (const market of markets) {
+    if (!isDefaultMarketName(market.id, market.name)) continue;
+    const ownerName = countryNameById.get(market.ownerCountryId) ?? market.ownerCountryId;
+    const nextName = getMarketDisplayName({
+      marketId: market.id,
+      marketName: market.name,
+      ownerCountryName: ownerName,
+    });
+    if (nextName !== market.name) {
+      market.name = nextName;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function upsertMarketMembership(countryId: string, targetMarketIdRaw: string | null): string {
   ensureMarketsStateShape();
   const targetMarketId = normalizeMarketId(targetMarketIdRaw) ?? countryId;
@@ -618,6 +659,7 @@ type GameSettings = {
         marketId: string;
         fromCountryId: string;
         toCountryId: string;
+        kind: "invite" | "join-request";
         status: "pending" | "accepted" | "rejected" | "canceled";
         expiresAt: string;
         createdAt: string;
@@ -1112,7 +1154,7 @@ function normalizeProvinceInfrastructureMap(input: unknown): Record<string, numb
 }
 
 function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingInstance[]> {
-  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
+  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "SYSTEM";
   const normalized: Record<string, BuildingInstance[]> = {};
   if (input && typeof input === "object") {
     for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
@@ -1348,7 +1390,7 @@ function normalizeProvinceBuildingDucatsMap(input: unknown): Record<string, Reco
 }
 
 function normalizeBuildingOwner(input: unknown): BuildingOwner {
-  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
+  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "SYSTEM";
   const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   if (source.type === "company" && typeof source.companyId === "string" && source.companyId.trim()) {
     return { type: "company", companyId: source.companyId.trim() };
@@ -1360,7 +1402,7 @@ function normalizeBuildingOwner(input: unknown): BuildingOwner {
 }
 
 function normalizeProvinceConstructionQueueMap(input: unknown): Record<string, ProvinceConstructionProject[]> {
-  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
+  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "SYSTEM";
   const normalized: Record<string, ProvinceConstructionProject[]> = {};
   if (input && typeof input === "object") {
     for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
@@ -2279,15 +2321,8 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
   }
   return {
     turnId: currentTurnId,
-    resourcesByCountry: {
-      ARC: { culture: 12, science: 9, religion: 6, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, construction: 10, ducats: 35, gold: 120 },
-      VAL: { culture: 8, science: 12, religion: 7, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, construction: 10, ducats: 28, gold: 110 },
-    },
-    provinceOwner: {
-      "p-north": "ARC",
-      "p-south": "ARC",
-      "p-east": "VAL",
-    },
+    resourcesByCountry: {},
+    provinceOwner: {},
     provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
@@ -2440,6 +2475,8 @@ function parseAndApplyPersistentState(input: unknown): boolean {
                   const statusRaw = typeof value.status === "string" ? value.status : "pending";
                   const status =
                     statusRaw === "accepted" || statusRaw === "rejected" || statusRaw === "canceled" ? statusRaw : "pending";
+                  const kindRaw = typeof value.kind === "string" ? value.kind : "invite";
+                  const kind = kindRaw === "join-request" ? "join-request" : "invite";
                   return [
                     inviteId,
                     {
@@ -2447,6 +2484,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
                       marketId: typeof value.marketId === "string" ? value.marketId : "",
                       fromCountryId: typeof value.fromCountryId === "string" ? value.fromCountryId : "",
                       toCountryId: typeof value.toCountryId === "string" ? value.toCountryId : "",
+                      kind,
                       status,
                       expiresAt: typeof value.expiresAt === "string" && value.expiresAt.trim() ? value.expiresAt : nowIso,
                       createdAt: typeof value.createdAt === "string" && value.createdAt.trim() ? value.createdAt : nowIso,
@@ -4583,7 +4621,11 @@ const marketInviteCreateSchema = z.object({
 });
 
 const marketInviteActionSchema = z.object({
-  action: z.enum(["accept", "reject"]),
+  action: z.enum(["accept", "reject", "cancel"]),
+});
+
+const marketTransferOwnerSchema = z.object({
+  nextOwnerCountryId: z.string().trim().min(1).max(120),
 });
 
 const marketPatchSchema = z.object({
@@ -4625,7 +4667,11 @@ async function buildMarketDetailsResponse(marketId: string): Promise<{
   return {
     market: {
       id: market.id,
-      name: market.name,
+      name: getMarketDisplayName({
+        marketId: market.id,
+        marketName: market.name,
+        ownerCountryName: byId.get(market.ownerCountryId)?.name ?? market.ownerCountryId,
+      }),
       logoUrl: market.logoUrl,
       ownerCountryId: market.ownerCountryId,
       ownerCountryName: byId.get(market.ownerCountryId)?.name ?? market.ownerCountryId,
@@ -4635,6 +4681,40 @@ async function buildMarketDetailsResponse(marketId: string): Promise<{
       members,
     },
   };
+}
+
+async function enrichMarketInvites(
+  invites: Array<(typeof gameSettings.markets.marketInvitesById)[string]>,
+): Promise<
+  Array<
+    (typeof gameSettings.markets.marketInvitesById)[string] & {
+      marketName: string;
+      marketLogoUrl: string | null;
+      fromCountryName: string;
+      fromCountryFlagUrl: string | null;
+      toCountryName: string;
+      toCountryFlagUrl: string | null;
+    }
+  >
+> {
+  const countryIds = [...new Set(invites.flatMap((invite) => [invite.fromCountryId, invite.toCountryId]))];
+  const countries = countryIds.length
+    ? await prisma.country.findMany({ where: { id: { in: countryIds } }, select: { id: true, name: true, flagUrl: true } })
+    : [];
+  const countryById = new Map(countries.map((country) => [country.id, country] as const));
+  return invites.map((invite) => ({
+    ...invite,
+    marketName: getMarketDisplayName({
+      marketId: invite.marketId,
+      marketName: gameSettings.markets.marketById[invite.marketId]?.name ?? "",
+      ownerCountryName: countryById.get(gameSettings.markets.marketById[invite.marketId]?.ownerCountryId ?? "")?.name ?? null,
+    }),
+    marketLogoUrl: gameSettings.markets.marketById[invite.marketId]?.logoUrl ?? null,
+    fromCountryName: countryById.get(invite.fromCountryId)?.name ?? invite.fromCountryId,
+    fromCountryFlagUrl: countryById.get(invite.fromCountryId)?.flagUrl ?? null,
+    toCountryName: countryById.get(invite.toCountryId)?.name ?? invite.toCountryId,
+    toCountryFlagUrl: countryById.get(invite.toCountryId)?.flagUrl ?? null,
+  }));
 }
 
 app.get("/markets/:marketId", async (req, res) => {
@@ -4650,7 +4730,9 @@ app.get("/markets/:marketId", async (req, res) => {
   if (!market) {
     return res.status(404).json({ error: "MARKET_NOT_FOUND" });
   }
-  if (!market.memberCountryIds.includes(auth.countryId)) {
+  const isMember = market.memberCountryIds.includes(auth.countryId);
+  const isPublic = market.visibility === "public";
+  if (!isMember && !isPublic) {
     return res.status(403).json({ error: "FORBIDDEN" });
   }
   try {
@@ -4658,6 +4740,51 @@ app.get("/markets/:marketId", async (req, res) => {
   } catch {
     return res.status(404).json({ error: "MARKET_NOT_FOUND" });
   }
+});
+
+app.get("/markets", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  ensureMarketModelReady();
+  const countries = await prisma.country.findMany({
+    where: { id: { in: Object.values(gameSettings.markets.marketById).map((market) => market.ownerCountryId) } },
+    select: { id: true, name: true, flagUrl: true },
+  });
+  const countryById = new Map(countries.map((country) => [country.id, country] as const));
+  const markets = Object.values(gameSettings.markets.marketById)
+    .map((market) => {
+      const owner = countryById.get(market.ownerCountryId);
+      const isMember = market.memberCountryIds.includes(auth.countryId);
+      const pendingRequest = Object.values(gameSettings.markets.marketInvitesById).some(
+        (invite) =>
+          invite.marketId === market.id &&
+          invite.kind === "join-request" &&
+          invite.fromCountryId === auth.countryId &&
+          invite.status === "pending",
+      );
+      return {
+        id: market.id,
+        name: getMarketDisplayName({
+          marketId: market.id,
+          marketName: market.name,
+          ownerCountryName: owner?.name ?? market.ownerCountryId,
+        }),
+        logoUrl: market.logoUrl,
+        ownerCountryId: market.ownerCountryId,
+        ownerCountryName: owner?.name ?? market.ownerCountryId,
+        ownerCountryFlagUrl: owner?.flagUrl ?? null,
+        visibility: market.visibility,
+        membersCount: market.memberCountryIds.length,
+        isMember,
+        canJoinDirectly: !isMember && market.visibility === "public",
+        canRequestJoin: !isMember && market.visibility === "private" && !pendingRequest,
+        hasPendingJoinRequest: pendingRequest,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  return res.json({ markets });
 });
 
 app.patch("/markets/:marketId", upload.single("marketLogo"), async (req, res) => {
@@ -4744,6 +4871,7 @@ app.post("/markets/:marketId/invites", async (req, res) => {
     marketId,
     fromCountryId: auth.countryId,
     toCountryId,
+    kind: "invite",
     status: "pending",
     expiresAt,
     createdAt: now.toISOString(),
@@ -4751,6 +4879,25 @@ app.post("/markets/:marketId/invites", async (req, res) => {
   };
   savePersistentState();
   return res.status(201).json({ invite: gameSettings.markets.marketInvitesById[inviteId] });
+});
+
+app.get("/markets/:marketId/invites", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const invites = Object.values(gameSettings.markets.marketInvitesById)
+    .filter((invite) => invite.marketId === marketId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return res.json({ invites: await enrichMarketInvites(invites) });
 });
 
 app.get("/country/market-invites", async (req, res) => {
@@ -4763,20 +4910,7 @@ app.get("/country/market-invites", async (req, res) => {
     .filter((invite) => invite.toCountryId === auth.countryId && invite.status === "pending")
     .filter((invite) => new Date(invite.expiresAt).getTime() > nowMs)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const countryIds = [...new Set(invites.flatMap((invite) => [invite.fromCountryId, invite.toCountryId]))];
-  const countries = countryIds.length
-    ? await prisma.country.findMany({ where: { id: { in: countryIds } }, select: { id: true, name: true, flagUrl: true } })
-    : [];
-  const countryById = new Map(countries.map((country) => [country.id, country] as const));
-  const data = invites.map((invite) => ({
-    ...invite,
-    marketName: gameSettings.markets.marketById[invite.marketId]?.name ?? invite.marketId,
-    marketLogoUrl: gameSettings.markets.marketById[invite.marketId]?.logoUrl ?? null,
-    fromCountryName: countryById.get(invite.fromCountryId)?.name ?? invite.fromCountryId,
-    fromCountryFlagUrl: countryById.get(invite.fromCountryId)?.flagUrl ?? null,
-    toCountryName: countryById.get(invite.toCountryId)?.name ?? invite.toCountryId,
-  }));
-  return res.json({ invites: data });
+  return res.json({ invites: await enrichMarketInvites(invites) });
 });
 
 app.patch("/market-invites/:inviteId", async (req, res) => {
@@ -4793,11 +4927,24 @@ app.patch("/market-invites/:inviteId", async (req, res) => {
   if (!invite) {
     return res.status(404).json({ error: "INVITE_NOT_FOUND" });
   }
-  if (invite.toCountryId !== auth.countryId) {
-    return res.status(403).json({ error: "FORBIDDEN" });
-  }
   if (invite.status !== "pending") {
     return res.status(409).json({ error: "INVITE_ALREADY_RESOLVED" });
+  }
+  const market = getMarketById(invite.marketId);
+  const isRecipient = invite.toCountryId === auth.countryId;
+  const isMarketOwner = market?.ownerCountryId === auth.countryId;
+  const isSender = invite.fromCountryId === auth.countryId;
+  if (parsed.data.action === "cancel") {
+    if (!isSender && !isMarketOwner) {
+      return res.status(403).json({ error: "FORBIDDEN" });
+    }
+    invite.status = "canceled";
+    invite.updatedAt = new Date().toISOString();
+    savePersistentState();
+    return res.json({ invite });
+  }
+  if (!isRecipient) {
+    return res.status(403).json({ error: "FORBIDDEN" });
   }
   if (new Date(invite.expiresAt).getTime() <= Date.now()) {
     invite.status = "canceled";
@@ -4808,7 +4955,8 @@ app.patch("/market-invites/:inviteId", async (req, res) => {
   invite.status = parsed.data.action === "accept" ? "accepted" : "rejected";
   invite.updatedAt = new Date().toISOString();
   if (parsed.data.action === "accept") {
-    upsertMarketMembership(auth.countryId, invite.marketId);
+    const targetCountryId = invite.kind === "join-request" ? invite.fromCountryId : invite.toCountryId;
+    upsertMarketMembership(targetCountryId, invite.marketId);
     rebuildCountryMarketIndexFromMembers();
   }
   savePersistentState();
@@ -4835,6 +4983,79 @@ app.post("/markets/:marketId/leave", async (req, res) => {
   rebuildCountryMarketIndexFromMembers();
   savePersistentState();
   return res.json({ ok: true, marketIdLeft: marketId, newMarketId: getCountryMarketId(auth.countryId) });
+});
+
+app.post("/markets/:marketId/join", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.memberCountryIds.includes(auth.countryId)) {
+    return res.status(409).json({ error: "COUNTRY_ALREADY_IN_MARKET" });
+  }
+  if (market.visibility === "public") {
+    upsertMarketMembership(auth.countryId, marketId);
+    rebuildCountryMarketIndexFromMembers();
+    savePersistentState();
+    return res.json({ mode: "joined", ...(await buildMarketDetailsResponse(marketId)) });
+  }
+  const hasPending = Object.values(gameSettings.markets.marketInvitesById).some(
+    (invite) =>
+      invite.marketId === marketId &&
+      invite.kind === "join-request" &&
+      invite.fromCountryId === auth.countryId &&
+      invite.toCountryId === market.ownerCountryId &&
+      invite.status === "pending",
+  );
+  if (hasPending) {
+    return res.status(409).json({ error: "JOIN_REQUEST_ALREADY_PENDING" });
+  }
+  const now = new Date();
+  const inviteId = randomUUID();
+  gameSettings.markets.marketInvitesById[inviteId] = {
+    id: inviteId,
+    marketId,
+    fromCountryId: auth.countryId,
+    toCountryId: market.ownerCountryId,
+    kind: "join-request",
+    status: "pending",
+    expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  savePersistentState();
+  return res.json({ mode: "requested", invite: gameSettings.markets.marketInvitesById[inviteId] });
+});
+
+app.post("/markets/:marketId/transfer-owner", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketTransferOwnerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const nextOwnerCountryId = parsed.data.nextOwnerCountryId;
+  if (!market.memberCountryIds.includes(nextOwnerCountryId)) {
+    return res.status(400).json({ error: "NEXT_OWNER_NOT_MARKET_MEMBER" });
+  }
+  market.ownerCountryId = nextOwnerCountryId;
+  savePersistentState();
+  return res.json(await buildMarketDetailsResponse(marketId));
 });
 
 app.get("/admin/ws-delta-metrics", async (req, res) => {
@@ -7890,6 +8111,9 @@ wss.on("connection", (socket) => {
 async function startServer(): Promise<void> {
   await ensureWorldDeltaLogTable();
   await loadPersistentState();
+  if (await migratePersistedMarketNamesToReadable()) {
+    savePersistentState();
+  }
   rebuildTurnOrderIndexes();
   rebuildActiveColonizationIndexFromWorldBase();
   rebuildEconomyTickCountryIndexFromWorldBase();
