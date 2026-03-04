@@ -1486,33 +1486,41 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               <Coins size={12} className="shrink-0" />
                               <span>Финансы</span>
                             </div>
-                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                            <div className="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-white/70">
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-emerald-300">Доход от продаж</span>
+                                <span className="font-semibold text-emerald-300">Доход от продаж</span>
                                 <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
                                   +{formatCompact(econData.outputRevenue)} дукат
                                 </span>
                               </div>
                             </div>
-                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                            <div className="rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-white/70">
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-red-300">Закупка товаров</span>
+                                <span className="font-semibold text-red-300">Закупка товаров</span>
                                 <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
                                   -{formatCompact(econData.inputCost)} дукат
                                 </span>
                               </div>
                             </div>
-                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                            <div className="rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-white/70">
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-red-300">Зарплаты</span>
+                                <span className="font-semibold text-red-300">Зарплаты</span>
                                 <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
                                   -{formatCompact(econData.wagesCost)} дукат
                                 </span>
                               </div>
                             </div>
-                            <div className="rounded-md border border-white/20 bg-white/[0.03] px-2 py-1 text-white/70">
+                            <div
+                              className={`rounded-md border px-2 py-1 text-white/70 ${
+                                econData.netPerTurn >= 0
+                                  ? "border-emerald-400/40 bg-emerald-500/10"
+                                  : "border-red-400/40 bg-red-500/10"
+                              }`}
+                            >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-white/80">Итог за ход</span>
+                                <span className={econData.netPerTurn >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-red-300"}>
+                                  Итог за ход
+                                </span>
                                 <span
                                   className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${
                                     econData.netPerTurn >= 0

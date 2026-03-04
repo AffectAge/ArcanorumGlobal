@@ -10,6 +10,8 @@ type Props = {
   onClose: () => void;
   token: string;
   countryName: string;
+  mode?: "both" | "country" | "global";
+  title?: string;
 };
 
 type ViewTab = "country" | "global";
@@ -41,11 +43,12 @@ const formatCompact = (value: number): string => {
   return `${sign}${Math.floor(abs)}`;
 };
 
-export function MarketModal({ open, onClose, token, countryName }: Props) {
+export function MarketModal({ open, onClose, token, countryName, mode = "both", title = "Рынок" }: Props) {
   const [overview, setOverview] = useState<MarketOverviewResponse | null>(null);
   const [tab, setTab] = useState<ViewTab>("country");
   const [sortMode, setSortMode] = useState<SortMode>("deficit");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  const effectiveTab: ViewTab = mode === "global" ? "global" : mode === "country" ? "country" : tab;
 
   useEffect(() => {
     if (!open) return;
@@ -65,10 +68,10 @@ export function MarketModal({ open, onClose, token, countryName }: Props) {
   const rows = useMemo(() => {
     const source = overview?.goods ?? [];
     const mapped = source.map((item) => {
-      const price = tab === "country" ? item.countryPrice : item.globalPrice;
-      const demand = tab === "country" ? item.countryDemand : item.globalDemand;
-      const offer = tab === "country" ? item.countryOffer : item.globalOffer;
-      const coverage = tab === "country" ? item.countryCoveragePct : item.globalCoveragePct;
+      const price = effectiveTab === "country" ? item.countryPrice : item.globalPrice;
+      const demand = effectiveTab === "country" ? item.countryDemand : item.globalDemand;
+      const offer = effectiveTab === "country" ? item.countryOffer : item.globalOffer;
+      const coverage = effectiveTab === "country" ? item.countryCoveragePct : item.globalCoveragePct;
       const deficit = Math.max(0, demand - offer);
       const volatility = Math.abs(item.countryPrice - item.globalPrice);
       return {
@@ -87,7 +90,7 @@ export function MarketModal({ open, onClose, token, countryName }: Props) {
       if (sortMode === "volatility") return b.volatility - a.volatility || a.goodName.localeCompare(b.goodName, "ru");
       return b.deficit - a.deficit || a.goodName.localeCompare(b.goodName, "ru");
     });
-  }, [overview?.goods, quickFilter, sortMode, tab]);
+  }, [overview?.goods, quickFilter, sortMode, effectiveTab]);
 
   const infraRows = useMemo(
     () =>
@@ -115,9 +118,9 @@ export function MarketModal({ open, onClose, token, countryName }: Props) {
         >
           <div className="flex items-center justify-between border-b border-white/10 bg-[#0e1523] px-6 py-4">
             <div>
-              <h2 className="text-lg font-semibold text-white">Рынок</h2>
+              <h2 className="text-lg font-semibold text-white">{title}</h2>
               <p className="text-xs text-white/60">
-                {tab === "country" ? `Наш рынок (${countryName})` : "Глобальный рынок"}
+                {effectiveTab === "country" ? `Наш рынок (${countryName})` : "Глобальный рынок"}
               </p>
             </div>
             <button
@@ -131,28 +134,32 @@ export function MarketModal({ open, onClose, token, countryName }: Props) {
 
           <div className="border-b border-white/10 bg-black/20 px-6 py-3">
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setTab("country")}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                  tab === "country"
-                    ? "border-emerald-400/45 bg-emerald-500/15 text-emerald-200"
-                    : "border-white/10 bg-black/35 text-white/65 hover:border-emerald-400/35"
-                }`}
-              >
-                Наш рынок
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab("global")}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                  tab === "global"
-                    ? "border-cyan-400/45 bg-cyan-500/15 text-cyan-200"
-                    : "border-white/10 bg-black/35 text-white/65 hover:border-cyan-400/35"
-                }`}
-              >
-                Глобальный
-              </button>
+              {mode === "both" && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setTab("country")}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                      effectiveTab === "country"
+                        ? "border-emerald-400/45 bg-emerald-500/15 text-emerald-200"
+                        : "border-white/10 bg-black/35 text-white/65 hover:border-emerald-400/35"
+                    }`}
+                  >
+                    Наш рынок
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTab("global")}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                      effectiveTab === "global"
+                        ? "border-cyan-400/45 bg-cyan-500/15 text-cyan-200"
+                        : "border-white/10 bg-black/35 text-white/65 hover:border-cyan-400/35"
+                    }`}
+                  >
+                    Глобальный
+                  </button>
+                </>
+              )}
 
               <div className="ml-auto flex items-center gap-2">
                 <button
@@ -292,4 +299,3 @@ export function MarketModal({ open, onClose, token, countryName }: Props) {
     </Dialog>
   );
 }
-

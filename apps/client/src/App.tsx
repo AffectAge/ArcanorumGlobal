@@ -79,6 +79,7 @@ export default function App() {
   const [populationStatsOpen, setPopulationStatsOpen] = useState(false);
   const [provinceBuildingsOpen, setProvinceBuildingsOpen] = useState(false);
   const [marketOpen, setMarketOpen] = useState(false);
+  const [globalMarketOpen, setGlobalMarketOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
@@ -1256,6 +1257,9 @@ export default function App() {
               if (key === "market") {
                 setMarketOpen(true);
               }
+              if (key === "globalMarket") {
+                setGlobalMarketOpen(true);
+              }
             }}
           />
           <EventLogPanel
@@ -1303,6 +1307,18 @@ export default function App() {
           onClose={() => setMarketOpen(false)}
           token={auth.token}
           countryName={country?.name ?? auth.countryId}
+          mode="country"
+          title="Рынок"
+        />
+      )}
+      {auth?.token && (
+        <MarketModal
+          open={globalMarketOpen}
+          onClose={() => setGlobalMarketOpen(false)}
+          token={auth.token}
+          countryName={country?.name ?? auth.countryId}
+          mode="global"
+          title="Глобальный рынок"
         />
       )}
 

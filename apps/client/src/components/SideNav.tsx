@@ -1,11 +1,12 @@
 import { motion } from "framer-motion";
-import { Landmark, Wallet, HandCoins, Hammer, Users, Handshake, Shield, Eye, LineChart } from "lucide-react";
+import { Landmark, Wallet, HandCoins, Hammer, Users, Handshake, Shield, Eye, LineChart, Globe2 } from "lucide-react";
 
 const navItems = [
   { key: "politics", label: "Политика", icon: Landmark },
   { key: "budget", label: "Бюджет", icon: Wallet },
   { key: "trade", label: "Торговля", icon: HandCoins },
   { key: "market", label: "Рынок", icon: LineChart },
+  { key: "globalMarket", label: "Глобальный рынок", icon: Globe2 },
   { key: "buildings", label: "Постройки", icon: Hammer },
   { key: "population", label: "Население", icon: Users },
   { key: "diplomacy", label: "Дипломатия", icon: Handshake },
