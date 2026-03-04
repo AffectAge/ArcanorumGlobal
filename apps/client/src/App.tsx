@@ -1306,6 +1306,7 @@ export default function App() {
           open={marketOpen}
           onClose={() => setMarketOpen(false)}
           token={auth.token}
+          countryId={auth.countryId}
           countryName={country?.name ?? auth.countryId}
           mode="country"
           title="Рынок"
@@ -1316,6 +1317,7 @@ export default function App() {
           open={globalMarketOpen}
           onClose={() => setGlobalMarketOpen(false)}
           token={auth.token}
+          countryId={auth.countryId}
           countryName={country?.name ?? auth.countryId}
           mode="global"
           title="Глобальный рынок"

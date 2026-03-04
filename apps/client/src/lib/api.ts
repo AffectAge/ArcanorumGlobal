@@ -159,6 +159,41 @@ export type MarketOverviewResponse = {
   alerts: MarketOverviewAlert[];
 };
 
+export type MarketMember = {
+  countryId: string;
+  countryName: string;
+  flagUrl: string | null;
+  isOwner: boolean;
+};
+
+export type MarketDetails = {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+  ownerCountryId: string;
+  ownerCountryName: string;
+  memberCountryIds: string[];
+  visibility: "public" | "private";
+  createdAt: string;
+  members: MarketMember[];
+};
+
+export type MarketInvite = {
+  id: string;
+  marketId: string;
+  fromCountryId: string;
+  toCountryId: string;
+  status: "pending" | "accepted" | "rejected" | "canceled";
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  marketName?: string;
+  marketLogoUrl?: string | null;
+  fromCountryName?: string;
+  fromCountryFlagUrl?: string | null;
+  toCountryName?: string;
+};
+
 export async function fetchMarketOverview(token: string): Promise<MarketOverviewResponse> {
   const response = await fetch(`${API}/economy/market-overview`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -168,6 +203,150 @@ export async function fetchMarketOverview(token: string): Promise<MarketOverview
     throw new Error(err?.error ?? "MARKET_OVERVIEW_FAILED");
   }
   return (await response.json()) as MarketOverviewResponse;
+}
+
+export async function fetchMarketDetails(token: string, marketId: string): Promise<{ market: MarketDetails }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_DETAILS_FAILED");
+  }
+  const data = (await response.json()) as { market: MarketDetails };
+  return {
+    market: {
+      ...data.market,
+      logoUrl: withAssetBase(data.market.logoUrl) ?? null,
+      members: (data.market.members ?? []).map((member) => ({
+        ...member,
+        flagUrl: withAssetBase(member.flagUrl) ?? null,
+      })),
+    },
+  };
+}
+
+export async function updateMarket(
+  token: string,
+  marketId: string,
+  payload: { name?: string; visibility?: "public" | "private"; logoFile?: File | null },
+): Promise<{ market: MarketDetails }> {
+  const formData = new FormData();
+  if (typeof payload.name === "string") {
+    formData.set("name", payload.name);
+  }
+  if (payload.visibility) {
+    formData.set("visibility", payload.visibility);
+  }
+  if (payload.logoFile) {
+    formData.set("marketLogo", payload.logoFile);
+  }
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_UPDATE_FAILED");
+  }
+  const data = (await response.json()) as { market: MarketDetails };
+  return {
+    market: {
+      ...data.market,
+      logoUrl: withAssetBase(data.market.logoUrl) ?? null,
+      members: (data.market.members ?? []).map((member) => ({
+        ...member,
+        flagUrl: withAssetBase(member.flagUrl) ?? null,
+      })),
+    },
+  };
+}
+
+export async function createMarketInvite(
+  token: string,
+  marketId: string,
+  payload: { toCountryId: string; expiresInDays?: number },
+): Promise<{ invite: MarketInvite }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/invites`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_INVITE_CREATE_FAILED");
+  }
+  const data = (await response.json()) as { invite: MarketInvite };
+  return {
+    invite: {
+      ...data.invite,
+      marketLogoUrl: withAssetBase(data.invite.marketLogoUrl) ?? null,
+      fromCountryFlagUrl: withAssetBase(data.invite.fromCountryFlagUrl) ?? null,
+    },
+  };
+}
+
+export async function fetchCountryMarketInvites(token: string): Promise<{ invites: MarketInvite[] }> {
+  const response = await fetch(`${API}/country/market-invites`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_INVITES_FAILED");
+  }
+  const data = (await response.json()) as { invites: MarketInvite[] };
+  return {
+    invites: (data.invites ?? []).map((invite) => ({
+      ...invite,
+      marketLogoUrl: withAssetBase(invite.marketLogoUrl) ?? null,
+      fromCountryFlagUrl: withAssetBase(invite.fromCountryFlagUrl) ?? null,
+    })),
+  };
+}
+
+export async function respondMarketInvite(
+  token: string,
+  inviteId: string,
+  action: "accept" | "reject",
+): Promise<{ invite: MarketInvite }> {
+  const response = await fetch(`${API}/market-invites/${encodeURIComponent(inviteId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ action }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_INVITE_ACTION_FAILED");
+  }
+  const data = (await response.json()) as { invite: MarketInvite };
+  return {
+    invite: {
+      ...data.invite,
+      marketLogoUrl: withAssetBase(data.invite.marketLogoUrl) ?? null,
+      fromCountryFlagUrl: withAssetBase(data.invite.fromCountryFlagUrl) ?? null,
+    },
+  };
+}
+
+export async function leaveMarket(token: string, marketId: string): Promise<{ ok: boolean; marketIdLeft: string; newMarketId: string }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/leave`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_LEAVE_FAILED");
+  }
+  return (await response.json()) as { ok: boolean; marketIdLeft: string; newMarketId: string };
 }
 
 export async function fetchCurrentTurnOrders(token: string): Promise<{ turnId: number; orders: Order[] }> {

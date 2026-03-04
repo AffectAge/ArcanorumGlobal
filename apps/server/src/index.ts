@@ -57,6 +57,7 @@ const env = {
 const uploadsRoot = resolve(__dirname, "../uploads");
 const flagsDir = resolve(uploadsRoot, "flags");
 const crestsDir = resolve(uploadsRoot, "crests");
+const marketsDir = resolve(uploadsRoot, "markets");
 const resourceIconsDir = resolve(uploadsRoot, "resource-icons");
 const uiBackgroundsDir = resolve(uploadsRoot, "ui-backgrounds");
 const civilopediaImagesDir = resolve(uploadsRoot, "civilopedia");
@@ -74,6 +75,7 @@ const contentUploadDirs = {
 } as const;
 mkdirSync(flagsDir, { recursive: true });
 mkdirSync(crestsDir, { recursive: true });
+mkdirSync(marketsDir, { recursive: true });
 mkdirSync(resourceIconsDir, { recursive: true });
 mkdirSync(uiBackgroundsDir, { recursive: true });
 mkdirSync(civilopediaImagesDir, { recursive: true });
@@ -110,6 +112,10 @@ const storage = multer.diskStorage({
     }
     if (file.fieldname === "uiBackground") {
       cb(null, uiBackgroundsDir);
+      return;
+    }
+    if (file.fieldname === "marketLogo") {
+      cb(null, marketsDir);
       return;
     }
     if (file.fieldname === "cultureLogo") {
@@ -321,18 +327,161 @@ function normalizeMarketId(value: unknown): string | null {
   return next;
 }
 
+function normalizeMarketVisibility(value: unknown): "public" | "private" {
+  return value === "private" ? "private" : "public";
+}
+
+function ensureMarketsStateShape(): void {
+  if (!gameSettings.markets) {
+    gameSettings.markets = { countryMarketByCountryId: {}, marketById: {}, marketInvitesById: {} };
+    return;
+  }
+  if (!gameSettings.markets.countryMarketByCountryId || typeof gameSettings.markets.countryMarketByCountryId !== "object") {
+    gameSettings.markets.countryMarketByCountryId = {};
+  }
+  if (!gameSettings.markets.marketById || typeof gameSettings.markets.marketById !== "object") {
+    gameSettings.markets.marketById = {};
+  }
+  if (!gameSettings.markets.marketInvitesById || typeof gameSettings.markets.marketInvitesById !== "object") {
+    gameSettings.markets.marketInvitesById = {};
+  }
+}
+
+function createDefaultMarketRecord(marketId: string, ownerCountryId: string): {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+  ownerCountryId: string;
+  memberCountryIds: string[];
+  visibility: "public" | "private";
+  createdAt: string;
+} {
+  return {
+    id: marketId,
+    name: `Рынок ${marketId}`,
+    logoUrl: null,
+    ownerCountryId,
+    memberCountryIds: [ownerCountryId],
+    visibility: "public",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function upsertMarketMembership(countryId: string, targetMarketIdRaw: string | null): string {
+  ensureMarketsStateShape();
+  const targetMarketId = normalizeMarketId(targetMarketIdRaw) ?? countryId;
+  const marketById = gameSettings.markets.marketById;
+  if (!marketById[targetMarketId]) {
+    marketById[targetMarketId] = createDefaultMarketRecord(targetMarketId, countryId);
+  }
+  for (const market of Object.values(marketById)) {
+    market.memberCountryIds = (market.memberCountryIds ?? []).filter((id) => id !== countryId);
+  }
+  const target = marketById[targetMarketId];
+  if (!target.memberCountryIds.includes(countryId)) {
+    target.memberCountryIds.push(countryId);
+  }
+  if (!target.ownerCountryId || !target.memberCountryIds.includes(target.ownerCountryId)) {
+    target.ownerCountryId = target.memberCountryIds[0] ?? countryId;
+  }
+  gameSettings.markets.countryMarketByCountryId[countryId] = targetMarketId;
+  return targetMarketId;
+}
+
+function rebuildCountryMarketIndexFromMembers(): void {
+  ensureMarketsStateShape();
+  const assignment: Record<string, string> = {};
+  for (const [marketId, market] of Object.entries(gameSettings.markets.marketById)) {
+    market.id = marketId;
+    market.memberCountryIds = [...new Set((market.memberCountryIds ?? []).map((id) => String(id).trim()).filter(Boolean))];
+    market.visibility = normalizeMarketVisibility(market.visibility);
+    market.createdAt =
+      typeof market.createdAt === "string" && market.createdAt.trim() ? market.createdAt : new Date().toISOString();
+    if (!market.ownerCountryId || !market.memberCountryIds.includes(market.ownerCountryId)) {
+      market.ownerCountryId = market.memberCountryIds[0] ?? market.ownerCountryId ?? marketId;
+    }
+    for (const countryId of market.memberCountryIds) {
+      if (!assignment[countryId]) {
+        assignment[countryId] = marketId;
+      }
+    }
+  }
+  gameSettings.markets.countryMarketByCountryId = assignment;
+}
+
+function ensureMarketModelReady(): void {
+  ensureMarketsStateShape();
+  const knownCountryIds = new Set<string>([
+    ...Object.keys(worldBase.resourcesByCountry ?? {}),
+    ...Object.keys(gameSettings.markets.countryMarketByCountryId ?? {}),
+  ]);
+  for (const countryId of knownCountryIds) {
+    const preferred = normalizeMarketId(gameSettings.markets.countryMarketByCountryId[countryId]) ?? countryId;
+    upsertMarketMembership(countryId, preferred);
+  }
+  rebuildCountryMarketIndexFromMembers();
+}
+
 function getCountryMarketId(countryId: string): string {
+  ensureMarketModelReady();
   const raw = gameSettings.markets.countryMarketByCountryId[countryId];
-  return normalizeMarketId(raw) ?? countryId;
+  const next = normalizeMarketId(raw) ?? countryId;
+  if (!gameSettings.markets.marketById[next]) {
+    gameSettings.markets.marketById[next] = createDefaultMarketRecord(next, countryId);
+  }
+  return next;
 }
 
 function setCountryMarketId(countryId: string, marketId: string | null): void {
-  const next = normalizeMarketId(marketId);
-  if (!next || next === countryId) {
-    delete gameSettings.markets.countryMarketByCountryId[countryId];
-    return;
+  ensureMarketModelReady();
+  upsertMarketMembership(countryId, marketId);
+  rebuildCountryMarketIndexFromMembers();
+}
+
+function getMarketById(marketId: string): (typeof gameSettings.markets.marketById)[string] | null {
+  ensureMarketModelReady();
+  return gameSettings.markets.marketById[marketId] ?? null;
+}
+
+function getCountryMarketRecord(countryId: string): (typeof gameSettings.markets.marketById)[string] {
+  const marketId = getCountryMarketId(countryId);
+  const market = getMarketById(marketId);
+  if (market) return market;
+  const fallback = createDefaultMarketRecord(marketId, countryId);
+  gameSettings.markets.marketById[marketId] = fallback;
+  rebuildCountryMarketIndexFromMembers();
+  return fallback;
+}
+
+function cleanupMarketsAfterCountryRemoval(removedCountryId: string): void {
+  ensureMarketsStateShape();
+  const validCountryIds = new Set<string>(Object.keys(worldBase.resourcesByCountry ?? {}));
+  const marketById = gameSettings.markets.marketById;
+  for (const [marketId, market] of Object.entries(marketById)) {
+    const members = [...new Set((market.memberCountryIds ?? []).filter((countryId) => validCountryIds.has(countryId)))];
+    market.memberCountryIds = members;
+    if (!members.includes(market.ownerCountryId)) {
+      market.ownerCountryId = members[0] ?? "";
+    }
+    if (members.length === 0) {
+      if (market.logoUrl) removeUploadedByUrl(market.logoUrl);
+      delete marketById[marketId];
+    }
   }
-  gameSettings.markets.countryMarketByCountryId[countryId] = next;
+
+  for (const [inviteId, invite] of Object.entries(gameSettings.markets.marketInvitesById)) {
+    if (
+      invite.fromCountryId === removedCountryId ||
+      invite.toCountryId === removedCountryId ||
+      !marketById[invite.marketId] ||
+      !validCountryIds.has(invite.fromCountryId) ||
+      !validCountryIds.has(invite.toCountryId)
+    ) {
+      delete gameSettings.markets.marketInvitesById[inviteId];
+    }
+  }
+
+  ensureMarketModelReady();
 }
 
 type PopulationDimensionKey = "culturePct" | "ideologyPct" | "religionPct" | "racePct" | "professionPct";
@@ -450,6 +599,31 @@ type GameSettings = {
   };
   markets: {
     countryMarketByCountryId: Record<string, string>;
+    marketById: Record<
+      string,
+      {
+        id: string;
+        name: string;
+        logoUrl: string | null;
+        ownerCountryId: string;
+        memberCountryIds: string[];
+        visibility: "public" | "private";
+        createdAt: string;
+      }
+    >;
+    marketInvitesById: Record<
+      string,
+      {
+        id: string;
+        marketId: string;
+        fromCountryId: string;
+        toCountryId: string;
+        status: "pending" | "accepted" | "rejected" | "canceled";
+        expiresAt: string;
+        createdAt: string;
+        updatedAt: string;
+      }
+    >;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -2015,6 +2189,8 @@ const defaultGameSettings = (): GameSettings => ({
   },
   markets: {
     countryMarketByCountryId: {},
+    marketById: {},
+    marketInvitesById: {},
   },
   colonization: {
     maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
@@ -2217,6 +2393,67 @@ function parseAndApplyPersistentState(input: unknown): boolean {
                   .filter((row): row is [string, string] => Boolean(row[0] && row[1])),
               )
             : { ...defaults.markets.countryMarketByCountryId },
+        marketById:
+          next.markets && typeof next.markets === "object" && next.markets.marketById && typeof next.markets.marketById === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.marketById as Record<string, unknown>).map(([marketId, raw]) => {
+                  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+                  const ownerCountryId =
+                    typeof value.ownerCountryId === "string" && value.ownerCountryId.trim()
+                      ? value.ownerCountryId.trim()
+                      : marketId;
+                  return [
+                    marketId,
+                    {
+                      id: marketId,
+                      name:
+                        typeof value.name === "string" && value.name.trim() ? value.name.trim() : `Рынок ${marketId}`,
+                      logoUrl: typeof value.logoUrl === "string" || value.logoUrl === null ? (value.logoUrl ?? null) : null,
+                      ownerCountryId,
+                      memberCountryIds: Array.isArray(value.memberCountryIds)
+                        ? [
+                            ...new Set(
+                              value.memberCountryIds
+                                .filter((row): row is string => typeof row === "string" && row.trim().length > 0)
+                                .map((row) => row.trim()),
+                            ),
+                          ]
+                        : [ownerCountryId],
+                      visibility: normalizeMarketVisibility(value.visibility),
+                      createdAt:
+                        typeof value.createdAt === "string" && value.createdAt.trim()
+                          ? value.createdAt.trim()
+                          : new Date().toISOString(),
+                    },
+                  ];
+                }),
+              )
+            : { ...defaults.markets.marketById },
+        marketInvitesById:
+          next.markets && typeof next.markets === "object" && next.markets.marketInvitesById && typeof next.markets.marketInvitesById === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.marketInvitesById as Record<string, unknown>).map(([inviteId, raw]) => {
+                  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+                  const nowIso = new Date().toISOString();
+                  const statusRaw = typeof value.status === "string" ? value.status : "pending";
+                  const status =
+                    statusRaw === "accepted" || statusRaw === "rejected" || statusRaw === "canceled" ? statusRaw : "pending";
+                  return [
+                    inviteId,
+                    {
+                      id: inviteId,
+                      marketId: typeof value.marketId === "string" ? value.marketId : "",
+                      fromCountryId: typeof value.fromCountryId === "string" ? value.fromCountryId : "",
+                      toCountryId: typeof value.toCountryId === "string" ? value.toCountryId : "",
+                      status,
+                      expiresAt: typeof value.expiresAt === "string" && value.expiresAt.trim() ? value.expiresAt : nowIso,
+                      createdAt: typeof value.createdAt === "string" && value.createdAt.trim() ? value.createdAt : nowIso,
+                      updatedAt: typeof value.updatedAt === "string" && value.updatedAt.trim() ? value.updatedAt : nowIso,
+                    },
+                  ];
+                }),
+              )
+            : { ...defaults.markets.marketInvitesById },
       },
       colonization: {
         maxActiveColonizations:
@@ -2404,6 +2641,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
 
   rebuildTurnOrderIndexes();
   rebuildEconomyTickCountryIndexFromWorldBase();
+  ensureMarketModelReady();
 
   return true;
 }
@@ -4331,6 +4569,266 @@ app.get("/economy/market-overview", async (req, res) => {
     infraByProvince,
     alerts: latestMarketOverview.alertsByCountry[countryId] ?? [],
   });
+});
+
+const marketInviteCreateSchema = z.object({
+  toCountryId: z.string().trim().min(1).max(120),
+  expiresInDays: z.coerce.number().int().min(1).max(365).optional(),
+});
+
+const marketInviteActionSchema = z.object({
+  action: z.enum(["accept", "reject"]),
+});
+
+const marketPatchSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  visibility: z.enum(["public", "private"]).optional(),
+});
+
+async function buildMarketDetailsResponse(marketId: string): Promise<{
+  market: {
+    id: string;
+    name: string;
+    logoUrl: string | null;
+    ownerCountryId: string;
+    ownerCountryName: string;
+    memberCountryIds: string[];
+    visibility: "public" | "private";
+    createdAt: string;
+    members: Array<{ countryId: string; countryName: string; flagUrl: string | null; isOwner: boolean }>;
+  };
+}> {
+  const market = getMarketById(marketId);
+  if (!market) {
+    throw new Error("MARKET_NOT_FOUND");
+  }
+  const countries = await prisma.country.findMany({
+    where: { id: { in: market.memberCountryIds } },
+    select: { id: true, name: true, flagUrl: true },
+  });
+  const byId = new Map(countries.map((country) => [country.id, country] as const));
+  const members = market.memberCountryIds.map((countryId) => {
+    const country = byId.get(countryId);
+    return {
+      countryId,
+      countryName: country?.name ?? countryId,
+      flagUrl: country?.flagUrl ?? null,
+      isOwner: market.ownerCountryId === countryId,
+    };
+  });
+  return {
+    market: {
+      id: market.id,
+      name: market.name,
+      logoUrl: market.logoUrl,
+      ownerCountryId: market.ownerCountryId,
+      ownerCountryName: byId.get(market.ownerCountryId)?.name ?? market.ownerCountryId,
+      memberCountryIds: [...market.memberCountryIds],
+      visibility: market.visibility,
+      createdAt: market.createdAt,
+      members,
+    },
+  };
+}
+
+app.get("/markets/:marketId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  if (!marketId) {
+    return res.status(400).json({ error: "MARKET_ID_REQUIRED" });
+  }
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (!market.memberCountryIds.includes(auth.countryId)) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  try {
+    return res.json(await buildMarketDetailsResponse(marketId));
+  } catch {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+});
+
+app.patch("/markets/:marketId", upload.single("marketLogo"), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketPatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const logoFile = req.file as Express.Multer.File | undefined;
+  if (logoFile && !validateImageDimensions(logoFile)) {
+    removeUploadedFile(logoFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "marketLogo", max: "256x256" });
+  }
+
+  if (typeof parsed.data.name === "string") {
+    market.name = parsed.data.name.trim();
+  }
+  if (typeof parsed.data.visibility === "string") {
+    market.visibility = normalizeMarketVisibility(parsed.data.visibility);
+  }
+  if (logoFile) {
+    const previous = market.logoUrl;
+    market.logoUrl = `/uploads/markets/${logoFile.filename}`;
+    if (previous) {
+      removeUploadedByUrl(previous);
+    }
+  }
+  market.id = marketId;
+  savePersistentState();
+  return res.json(await buildMarketDetailsResponse(marketId));
+});
+
+app.post("/markets/:marketId/invites", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketInviteCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const toCountryId = parsed.data.toCountryId;
+  const target = await prisma.country.findUnique({ where: { id: toCountryId }, select: { id: true, name: true } });
+  if (!target) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+  if (market.memberCountryIds.includes(toCountryId)) {
+    return res.status(400).json({ error: "COUNTRY_ALREADY_IN_MARKET" });
+  }
+  const hasPending = Object.values(gameSettings.markets.marketInvitesById).some(
+    (invite) => invite.marketId === marketId && invite.toCountryId === toCountryId && invite.status === "pending",
+  );
+  if (hasPending) {
+    return res.status(409).json({ error: "INVITE_ALREADY_PENDING" });
+  }
+  const now = new Date();
+  const expiresInDays = parsed.data.expiresInDays ?? 14;
+  const expiresAt = new Date(now.getTime() + expiresInDays * 24 * 60 * 60 * 1000).toISOString();
+  const inviteId = randomUUID();
+  gameSettings.markets.marketInvitesById[inviteId] = {
+    id: inviteId,
+    marketId,
+    fromCountryId: auth.countryId,
+    toCountryId,
+    status: "pending",
+    expiresAt,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  savePersistentState();
+  return res.status(201).json({ invite: gameSettings.markets.marketInvitesById[inviteId] });
+});
+
+app.get("/country/market-invites", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const nowMs = Date.now();
+  const invites = Object.values(gameSettings.markets.marketInvitesById)
+    .filter((invite) => invite.toCountryId === auth.countryId && invite.status === "pending")
+    .filter((invite) => new Date(invite.expiresAt).getTime() > nowMs)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const countryIds = [...new Set(invites.flatMap((invite) => [invite.fromCountryId, invite.toCountryId]))];
+  const countries = countryIds.length
+    ? await prisma.country.findMany({ where: { id: { in: countryIds } }, select: { id: true, name: true, flagUrl: true } })
+    : [];
+  const countryById = new Map(countries.map((country) => [country.id, country] as const));
+  const data = invites.map((invite) => ({
+    ...invite,
+    marketName: gameSettings.markets.marketById[invite.marketId]?.name ?? invite.marketId,
+    marketLogoUrl: gameSettings.markets.marketById[invite.marketId]?.logoUrl ?? null,
+    fromCountryName: countryById.get(invite.fromCountryId)?.name ?? invite.fromCountryId,
+    fromCountryFlagUrl: countryById.get(invite.fromCountryId)?.flagUrl ?? null,
+    toCountryName: countryById.get(invite.toCountryId)?.name ?? invite.toCountryId,
+  }));
+  return res.json({ invites: data });
+});
+
+app.patch("/market-invites/:inviteId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const parsed = marketInviteActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const inviteId = String(req.params.inviteId || "").trim();
+  const invite = gameSettings.markets.marketInvitesById[inviteId];
+  if (!invite) {
+    return res.status(404).json({ error: "INVITE_NOT_FOUND" });
+  }
+  if (invite.toCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  if (invite.status !== "pending") {
+    return res.status(409).json({ error: "INVITE_ALREADY_RESOLVED" });
+  }
+  if (new Date(invite.expiresAt).getTime() <= Date.now()) {
+    invite.status = "canceled";
+    invite.updatedAt = new Date().toISOString();
+    savePersistentState();
+    return res.status(409).json({ error: "INVITE_EXPIRED" });
+  }
+  invite.status = parsed.data.action === "accept" ? "accepted" : "rejected";
+  invite.updatedAt = new Date().toISOString();
+  if (parsed.data.action === "accept") {
+    upsertMarketMembership(auth.countryId, invite.marketId);
+    rebuildCountryMarketIndexFromMembers();
+  }
+  savePersistentState();
+  return res.json({ invite });
+});
+
+app.post("/markets/:marketId/leave", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (!market.memberCountryIds.includes(auth.countryId)) {
+    return res.status(403).json({ error: "NOT_MARKET_MEMBER" });
+  }
+  if (market.ownerCountryId === auth.countryId) {
+    return res.status(400).json({ error: "OWNER_CANNOT_LEAVE" });
+  }
+  upsertMarketMembership(auth.countryId, auth.countryId);
+  rebuildCountryMarketIndexFromMembers();
+  savePersistentState();
+  return res.json({ ok: true, marketIdLeft: marketId, newMarketId: getCountryMarketId(auth.countryId) });
 });
 
 app.get("/admin/ws-delta-metrics", async (req, res) => {
@@ -6513,12 +7011,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
       return true;
     });
   }
-  delete gameSettings.markets.countryMarketByCountryId[countryIdParam];
-  for (const [countryId, marketId] of Object.entries(gameSettings.markets.countryMarketByCountryId)) {
-    if (marketId === countryIdParam) {
-      delete gameSettings.markets.countryMarketByCountryId[countryId];
-    }
-  }
+  cleanupMarketsAfterCountryRemoval(countryIdParam);
 
   savePersistentState();
   broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
