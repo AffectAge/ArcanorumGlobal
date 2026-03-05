@@ -1,7 +1,9 @@
 import { Dialog } from "@headlessui/react";
+import * as echarts from "echarts";
+import type { EChartsType } from "echarts";
 import { motion } from "framer-motion";
 import { AlertTriangle, ArrowDownUp, Globe2, LineChart, Settings2, SlidersHorizontal, TrendingDown, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   fetchContentEntries,
@@ -17,7 +19,10 @@ import {
 } from "../lib/api";
 import { CustomSelect } from "./CustomSelect";
 import { CurrentMarketMembershipModal } from "./CurrentMarketMembershipModal";
+import { MarketAlertsModal } from "./MarketAlertsModal";
+import { MarketInfrastructureModal } from "./MarketInfrastructureModal";
 import { MarketManagementModal } from "./MarketManagementModal";
+import { Tooltip } from "./Tooltip";
 
 type Props = {
   open: boolean;
@@ -58,6 +63,142 @@ const formatCompact = (value: number): string => {
   return `${sign}${Math.floor(abs)}`;
 };
 
+const MARKET_METRIC_WINDOW_TURNS = 10;
+
+const toCoveragePct = (demand: number, offer: number): number => {
+  const safeDemand = Math.max(0, Number(demand));
+  const safeOffer = Math.max(0, Number(offer));
+  if (safeDemand <= 0) return 100;
+  return Math.max(0, Math.min(100, (safeOffer / safeDemand) * 100));
+};
+
+const buildCoverageHistory = (demandHistory: number[], offerHistory: number[]): number[] => {
+  const length = Math.max(demandHistory.length, offerHistory.length);
+  const result: number[] = [];
+  for (let i = 0; i < length; i += 1) {
+    const demand = Number(demandHistory[i] ?? 0);
+    const offer = Number(offerHistory[i] ?? 0);
+    result.push(toCoveragePct(demand, offer));
+  }
+  return result;
+};
+
+const getLastDelta = (history: number[]): number => {
+  if (history.length < 2) return 0;
+  return Number(history[history.length - 1] ?? 0) - Number(history[history.length - 2] ?? 0);
+};
+
+function Sparkline({
+  values,
+  stroke,
+}: {
+  values: number[];
+  stroke: string;
+}) {
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const instanceRef = useRef<EChartsType | null>(null);
+  const trimmed = values.slice(-MARKET_METRIC_WINDOW_TURNS);
+  const min = trimmed.length > 0 ? Math.min(...trimmed) : 0;
+  const max = trimmed.length > 0 ? Math.max(...trimmed) : 0;
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const existing = instanceRef.current;
+    const chart =
+      existing && existing.getDom() === chartRef.current
+        ? existing
+        : (() => {
+            existing?.dispose();
+            return echarts.init(chartRef.current!);
+          })();
+    instanceRef.current = chart;
+
+    const data = trimmed.length > 0 ? trimmed : [0];
+    chart.setOption({
+      animation: true,
+      animationDuration: 500,
+      animationEasing: "cubicOut",
+      grid: { left: 0, right: 0, top: 0, bottom: 0, containLabel: false },
+      xAxis: {
+        type: "category",
+        show: false,
+        boundaryGap: false,
+        data: data.map((_, idx) => idx),
+      },
+      yAxis: {
+        type: "value",
+        show: false,
+        min: "dataMin",
+        max: "dataMax",
+      },
+      tooltip: { show: false },
+      series: [
+        {
+          type: "bar",
+          data,
+          barMaxWidth: 6,
+          itemStyle: {
+            color: `${stroke}33`,
+            borderRadius: [2, 2, 0, 0],
+          },
+          label: {
+            show: true,
+            position: "top",
+            color: "rgba(226,232,240,0.6)",
+            fontSize: 8,
+            fontWeight: 700,
+            formatter: (params: { value: number }) => formatCompact(Number(params.value ?? 0)),
+          },
+          emphasis: { disabled: true },
+          z: 1,
+        },
+        {
+          type: "line",
+          data,
+          smooth: true,
+          symbol: "none",
+          lineStyle: {
+            color: stroke,
+            width: 2,
+          },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: `${stroke}24` },
+              { offset: 1, color: `${stroke}00` },
+            ]),
+          },
+          z: 3,
+        },
+      ],
+    });
+
+    const onResize = () => {
+      chart.resize();
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
+  }, [trimmed, stroke]);
+
+  useEffect(() => {
+    return () => {
+      instanceRef.current?.dispose();
+      instanceRef.current = null;
+    };
+  }, []);
+
+  return (
+    <div className="flex items-stretch gap-2">
+      <div className="flex h-[50px] w-10 flex-col justify-between text-right text-[9px] leading-none text-white/45">
+        <span>{formatCompact(max)}</span>
+        <span>{formatCompact(min)}</span>
+      </div>
+      <div ref={chartRef} className="h-[50px] w-full rounded bg-black/20" />
+    </div>
+  );
+}
+
 export function MarketModal({ open, onClose, token, countryId, countryName, mode = "both", title = "Рынок" }: Props) {
   const [overview, setOverview] = useState<MarketOverviewResponse | null>(null);
   const [incomingInvites, setIncomingInvites] = useState<MarketInvite[]>([]);
@@ -73,6 +214,8 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
   const [pendingLeave, setPendingLeave] = useState(false);
   const [selectedGoodId, setSelectedGoodId] = useState("");
   const [infrastructureCategoryNamesById, setInfrastructureCategoryNamesById] = useState<Record<string, string>>({});
+  const [infrastructureModalOpen, setInfrastructureModalOpen] = useState(false);
+  const [alertsModalOpen, setAlertsModalOpen] = useState(false);
 
   const effectiveTab: ViewTab = mode === "global" ? "global" : mode === "country" ? "country" : tab;
 
@@ -260,10 +403,14 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
           >
             <div className="flex items-center justify-between border-b border-white/10 bg-[#0e1523] px-6 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-white">{title}</h2>
-                <p className="text-xs text-white/60">
-                  {effectiveTab === "country" ? `Наш рынок (${countryName})` : "Глобальный рынок"}
-                </p>
+                <Tooltip content="Сводка цен, спроса, предложения, инфраструктуры и алертов по рынкам.">
+                  <h2 className="text-lg font-semibold text-white">{title}</h2>
+                </Tooltip>
+                <Tooltip content="Текущий источник данных: ваш рынок или общий мировой рынок.">
+                  <p className="text-xs text-white/60">
+                    {effectiveTab === "country" ? `Наш рынок (${countryName})` : "Глобальный рынок"}
+                  </p>
+                </Tooltip>
               </div>
               <div className="flex items-center gap-2">
                 {mode !== "global" && overview?.marketId && (
@@ -284,6 +431,20 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                     <Settings2 size={13} /> Членство
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setInfrastructureModalOpen(true)}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-cyan-400/35 bg-cyan-500/15 px-3 text-xs font-semibold text-cyan-200"
+                >
+                  <Globe2 size={13} /> Инфраструктура
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlertsModalOpen(true)}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-400/35 bg-red-500/15 px-3 text-xs font-semibold text-red-200"
+                >
+                  <AlertTriangle size={13} /> Алерты
+                </button>
                 <button
                   type="button"
                   onClick={onClose}
@@ -363,13 +524,25 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-500/10 px-2.5 py-1 text-xs text-red-200">
-                  <AlertTriangle size={13} /> {criticalCount}
+                  <Tooltip content="Количество товаров с покрытием спроса ниже 50%.">
+                    <span className="inline-flex items-center gap-1.5">
+                      <AlertTriangle size={13} /> {criticalCount}
+                    </span>
+                  </Tooltip>
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-200">
-                  <SlidersHorizontal size={13} /> {infraOverloadCount}
+                  <Tooltip content="Количество провинций с перегрузом инфраструктуры (покрытие ниже 100%).">
+                    <span className="inline-flex items-center gap-1.5">
+                      <SlidersHorizontal size={13} /> {infraOverloadCount}
+                    </span>
+                  </Tooltip>
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200">
-                  <ArrowDownUp size={13} /> {rows.length}
+                  <Tooltip content="Количество товаров в текущей выборке таблицы.">
+                    <span className="inline-flex items-center gap-1.5">
+                      <ArrowDownUp size={13} /> {rows.length}
+                    </span>
+                  </Tooltip>
                 </span>
               </div>
             </div>
@@ -377,11 +550,21 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
             <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 xl:grid-cols-[1.7fr_1fr]">
               <div className="panel-border arc-scrollbar min-h-0 overflow-auto rounded-xl bg-black/25">
                 <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-2 border-b border-white/10 bg-black/35 px-3 py-2 text-xs font-semibold text-white/70">
-                  <div>Товар</div>
-                  <div className="text-right">Цена</div>
-                  <div className="text-right">Спрос</div>
-                  <div className="text-right">Предложение</div>
-                  <div className="text-right">Покрытие</div>
+                  <Tooltip content="Товар из каталога контента.">
+                    <div>Товар</div>
+                  </Tooltip>
+                  <Tooltip content="Текущая цена в выбранном рынке/глобале.">
+                    <div className="text-right">Цена</div>
+                  </Tooltip>
+                  <Tooltip content="Запрошенный объем потребления за ход.">
+                    <div className="text-right">Спрос</div>
+                  </Tooltip>
+                  <Tooltip content="Фактическое предложение: производство + запасы на складах.">
+                    <div className="text-right">Предложение</div>
+                  </Tooltip>
+                  <Tooltip content="Процент покрытия спроса предложением.">
+                    <div className="text-right">Покрытие</div>
+                  </Tooltip>
                 </div>
                 <div className="space-y-1 p-2">
                   {rows.map((row) => (
@@ -417,119 +600,112 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
               </div>
 
               <div className="arc-scrollbar min-h-0 space-y-3 overflow-auto pr-1">
-                <div className="panel-border rounded-xl bg-black/25 p-3">
-                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-white/80">
-                    <Globe2 size={14} className="text-arc-accent" />
-                    Инфраструктура провинций
-                  </div>
-                  <div className="space-y-1">
-                    {infraRows.map((row) => (
-                      <div
-                        key={row.provinceId}
-                        className={`rounded-lg border px-3 py-2 text-xs ${
-                          row.coverage < 1 ? "border-amber-400/35 bg-amber-500/10" : "border-white/10 bg-black/20"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-white/80">{row.provinceId}</span>
-                          <span className={`font-semibold ${row.coverage < 1 ? "text-amber-200" : "text-emerald-200"}`}>
-                            {(row.coverage * 100).toFixed(1)}%
-                          </span>
-                        </div>
-                        <div className="mt-1 text-white/55">
-                          {formatNumber(row.capacity)} / {formatNumber(row.required)}
-                        </div>
-                      </div>
-                    ))}
-                    {infraRows.length === 0 && <div className="text-xs text-white/50">Нет данных по инфраструктуре.</div>}
-                  </div>
-                </div>
-
-                {effectiveTab === "global" && (
-                  <div className="panel-border rounded-xl bg-black/25 p-3">
-                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-white/80">
-                      <Globe2 size={14} className="text-cyan-300" />
-                      Shared инфраструктура рынков
-                    </div>
-                    <div className="space-y-1">
-                      {sharedInfraRows.map((row) => (
-                        <div key={row.marketId} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold text-white/80">{row.marketName}</span>
-                            <span className="text-cyan-200">{formatCompact(row.available)}</span>
-                          </div>
-                          <div className="mt-1 text-white/55">
-                            Доступно: {formatCompact(row.available)} / {formatCompact(row.capacity)}
-                          </div>
-                          <div className="text-white/55">Потреблено за ход: {formatCompact(row.consumed)}</div>
-                          {Object.keys(row.availableByCategory ?? {}).length > 0 && (
-                            <div className="mt-1 rounded border border-white/10 bg-black/25 p-1.5">
-                              <div className="mb-1 text-[10px] text-white/50">По категориям</div>
-                              <div className="space-y-0.5">
-                                {Object.entries(row.availableByCategory ?? {})
-                                  .sort((a, b) => a[0].localeCompare(b[0], "ru"))
-                                  .map(([categoryId, available]) => {
-                                    const cap = Number(row.capacityByCategory?.[categoryId] ?? 0);
-                                    const consumed = Number(row.consumedByCategory?.[categoryId] ?? 0);
-                                    return (
-                                      <div key={`${row.marketId}-${categoryId}`} className="flex items-center justify-between gap-2 text-[10px]">
-                                        <span className="text-white/70">{infrastructureCategoryNamesById[categoryId] ?? categoryId}</span>
-                                        <span className="text-white/55">
-                                          {formatCompact(available)} / {formatCompact(cap)} · {formatCompact(consumed)}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      {sharedInfraRows.length === 0 && (
-                        <div className="text-xs text-white/50">Нет данных по shared инфраструктуре.</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
                 <div className="panel-border rounded-xl bg-black/30 p-3">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
-                    <AlertTriangle size={13} className="text-red-300" />
-                    Алерты рынка
-                  </div>
-                  <div className="space-y-1 text-xs">
-                    {(overview?.alerts ?? []).slice(0, 12).map((alert) => (
-                      <div key={alert.id} className="rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-white/70">
-                        {alert.message}
-                      </div>
-                    ))}
-                    {(overview?.alerts ?? []).length === 0 && <div className="text-white/45">Нет алертов.</div>}
-                  </div>
-                </div>
-
-                <div className="panel-border rounded-xl bg-black/30 p-3">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
-                    <LineChart size={13} className="text-cyan-300" />
-                    История товара
-                  </div>
+                  <Tooltip content="Исторические ряды по выбранному товару за последние ходы.">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
+                      <LineChart size={13} className="text-cyan-300" />
+                      История товара
+                    </div>
+                  </Tooltip>
                   {selectedRow ? (
-                    <div className="space-y-1 text-xs">
-                      <div className="text-white/80">{selectedRow.goodName}</div>
-                      <div className="text-white/55">
-                        Цена: {((effectiveTab === "country" ? selectedRow.countryPriceHistory : selectedRow.globalPriceHistory) ?? []).map(formatCompact).join(" · ") || "—"}
+                    <div className="space-y-2 text-xs">
+                      <div className="text-white/85">
+                        {selectedRow.goodName} · последние {MARKET_METRIC_WINDOW_TURNS} ходов
                       </div>
-                      <div className="text-white/55">
-                        Спрос: {((effectiveTab === "country" ? selectedRow.countryDemandHistory : selectedRow.globalDemandHistory) ?? []).map(formatCompact).join(" · ") || "—"}
-                      </div>
-                      <div className="text-white/55">
-                        Предложение: {((effectiveTab === "country" ? selectedRow.countryOfferHistory : selectedRow.globalOfferHistory) ?? []).map(formatCompact).join(" · ") || "—"}
-                      </div>
-                      <div className="text-white/55">
-                        Производство факт: {((effectiveTab === "country" ? selectedRow.countryProductionFactHistory : selectedRow.globalProductionFactHistory) ?? []).map(formatCompact).join(" · ") || "—"}
-                      </div>
-                      <div className="text-white/55">
-                        Производство макс: {((effectiveTab === "country" ? selectedRow.countryProductionMaxHistory : selectedRow.globalProductionMaxHistory) ?? []).map(formatCompact).join(" · ") || "—"}
-                      </div>
+                      {(() => {
+                        const demandHistory =
+                          (effectiveTab === "country" ? selectedRow.countryDemandHistory : selectedRow.globalDemandHistory) ?? [];
+                        const offerHistory =
+                          (effectiveTab === "country" ? selectedRow.countryOfferHistory : selectedRow.globalOfferHistory) ?? [];
+                        const coverageHistory = buildCoverageHistory(demandHistory, offerHistory);
+                        const currentDemand = effectiveTab === "country" ? selectedRow.countryDemand : selectedRow.globalDemand;
+                        const currentOffer = effectiveTab === "country" ? selectedRow.countryOffer : selectedRow.globalOffer;
+                        const series = [
+                          {
+                            key: "price",
+                            label: "Цена за ед.",
+                            value: effectiveTab === "country" ? selectedRow.countryPrice : selectedRow.globalPrice,
+                            history:
+                              (effectiveTab === "country" ? selectedRow.countryPriceHistory : selectedRow.globalPriceHistory) ?? [],
+                            stroke: "#22d3ee",
+                          },
+                          {
+                            key: "demand",
+                            label: "Спрос",
+                            value: currentDemand,
+                            history: demandHistory,
+                            stroke: "#f59e0b",
+                          },
+                          {
+                            key: "offer",
+                            label: "Предложение",
+                            value: currentOffer,
+                            history: offerHistory,
+                            stroke: "#34d399",
+                          },
+                          {
+                            key: "coverage",
+                            label: "Покрытие",
+                            value: effectiveTab === "country" ? selectedRow.countryCoveragePct : selectedRow.globalCoveragePct,
+                            history: coverageHistory,
+                            stroke: "#f472b6",
+                            suffix: "%",
+                          },
+                          {
+                            key: "prodFact",
+                            label: "Произв. факт",
+                            value:
+                              ((effectiveTab === "country"
+                                ? selectedRow.countryProductionFactHistory
+                                : selectedRow.globalProductionFactHistory) ?? []).slice(-1)[0] ?? 0,
+                            history:
+                              (effectiveTab === "country"
+                                ? selectedRow.countryProductionFactHistory
+                                : selectedRow.globalProductionFactHistory) ?? [],
+                            stroke: "#60a5fa",
+                          },
+                          {
+                            key: "prodMax",
+                            label: "Произв. макс",
+                            value:
+                              ((effectiveTab === "country"
+                                ? selectedRow.countryProductionMaxHistory
+                                : selectedRow.globalProductionMaxHistory) ?? []).slice(-1)[0] ?? 0,
+                            history:
+                              (effectiveTab === "country"
+                                ? selectedRow.countryProductionMaxHistory
+                                : selectedRow.globalProductionMaxHistory) ?? [],
+                            stroke: "#a78bfa",
+                          },
+                        ];
+                        return series.map((metric) => (
+                          <div key={metric.key} className="rounded-lg border border-white/10 bg-black/25 p-2">
+                            <div className="mb-1 flex items-center justify-between">
+                              <span className="text-white/70">{metric.label}</span>
+                              <span className="inline-flex items-center gap-2">
+                                <span className="font-bold text-white/85">
+                                  {metric.suffix ? `${metric.value.toFixed(1)}${metric.suffix}` : formatCompact(metric.value)}
+                                </span>
+                                <span
+                                  className={`text-[11px] font-semibold ${
+                                    getLastDelta(metric.history) >= 0 ? "text-emerald-300" : "text-red-300"
+                                  }`}
+                                >
+                                  {(() => {
+                                    const delta = getLastDelta(metric.history);
+                                    const abs = Math.abs(delta);
+                                    if (metric.suffix) {
+                                      return `${delta >= 0 ? "+" : "-"}${abs.toFixed(1)}${metric.suffix}`;
+                                    }
+                                    return `${delta >= 0 ? "+" : "-"}${formatCompact(abs)}`;
+                                  })()}
+                                </span>
+                              </span>
+                            </div>
+                            <Sparkline values={metric.history} stroke={metric.stroke} />
+                          </div>
+                        ));
+                      })()}
                     </div>
                   ) : (
                     <div className="text-xs text-white/45">Выберите товар в таблице.</div>
@@ -574,6 +750,21 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
         onLeave={() => {
           void handleLeaveCurrentMarket();
         }}
+      />
+      <MarketInfrastructureModal
+        open={infrastructureModalOpen}
+        onClose={() => setInfrastructureModalOpen(false)}
+        infraRows={infraRows}
+        sharedInfraRows={sharedInfraRows}
+        showShared={effectiveTab === "global"}
+        formatNumber={formatNumber}
+        formatCompact={formatCompact}
+        infrastructureCategoryNamesById={infrastructureCategoryNamesById}
+      />
+      <MarketAlertsModal
+        open={alertsModalOpen}
+        onClose={() => setAlertsModalOpen(false)}
+        alerts={overview?.alerts ?? []}
       />
     </>
   );
