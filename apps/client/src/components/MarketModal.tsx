@@ -69,7 +69,7 @@ const toCoveragePct = (demand: number, offer: number): number => {
   const safeDemand = Math.max(0, Number(demand));
   const safeOffer = Math.max(0, Number(offer));
   if (safeDemand <= 0) return 100;
-  return Math.max(0, Math.min(100, (safeOffer / safeDemand) * 100));
+  return Math.max(0, (safeOffer / safeDemand) * 100);
 };
 
 const buildCoverageHistory = (demandHistory: number[], offerHistory: number[]): number[] => {
@@ -88,12 +88,36 @@ const getLastDelta = (history: number[]): number => {
   return Number(history[history.length - 1] ?? 0) - Number(history[history.length - 2] ?? 0);
 };
 
+const getRelativeDeltaPct = (history: number[]): number => {
+  if (history.length < 2) return 0;
+  const prev = Number(history[history.length - 2] ?? 0);
+  const curr = Number(history[history.length - 1] ?? 0);
+  if (!Number.isFinite(prev) || Math.abs(prev) < 1e-9) return 0;
+  return ((curr - prev) / prev) * 100;
+};
+
 function Sparkline({
+  chartId,
   values,
   stroke,
+  targetLine,
+  currentTurnId,
+  syncedTurnId,
+  activeTooltipChartId,
+  onSyncTurnChange,
+  renderSharedTooltipHtml,
+  tooltipEnabled = true,
 }: {
+  chartId: string;
   values: number[];
   stroke: string;
+  targetLine?: number;
+  currentTurnId?: number;
+  syncedTurnId?: number | null;
+  activeTooltipChartId?: string | null;
+  onSyncTurnChange?: (turnId: number | null, chartId: string | null) => void;
+  renderSharedTooltipHtml?: (turnId: number) => string;
+  tooltipEnabled?: boolean;
 }) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const instanceRef = useRef<EChartsType | null>(null);
@@ -131,7 +155,45 @@ function Sparkline({
         min: "dataMin",
         max: "dataMax",
       },
-      tooltip: { show: false },
+      tooltip: {
+        show: tooltipEnabled,
+        trigger: "axis",
+        confine: true,
+        backgroundColor: "transparent",
+        borderWidth: 0,
+        padding: 0,
+        axisPointer: {
+          type: "line",
+          lineStyle: {
+            color: "rgba(148,163,184,0.55)",
+            width: 1,
+          },
+        },
+        formatter: (params: Array<{ dataIndex?: number; value?: number }>) => {
+          const p = params?.[0];
+          const idx = Number(p?.dataIndex ?? 0);
+          const value = Number(p?.value ?? 0);
+          const startTurn = typeof currentTurnId === "number" ? Math.max(1, currentTurnId - data.length + 1) : null;
+          const turn = startTurn != null ? startTurn + idx : null;
+          const turnLabel = turn != null ? `Ход ${turn}` : `Точка ${idx + 1}`;
+          const shared = turn != null ? renderSharedTooltipHtml?.(turn) : "";
+          return `
+            <div style="
+              background:#000;
+              border:1px solid rgba(148,163,184,0.35);
+              color:#e2e8f0;
+              border-radius:8px;
+              padding:6px 8px;
+              box-shadow:0 8px 20px rgba(0,0,0,0.35);
+              font-size:11px;
+              font-weight:600;
+            ">
+              <div style="opacity:0.8;margin-bottom:2px;">${turnLabel}</div>
+              ${shared || `<div>${formatCompact(value)}</div>`}
+            </div>
+          `;
+        },
+      },
       series: [
         {
           type: "bar",
@@ -142,14 +204,24 @@ function Sparkline({
             borderRadius: [2, 2, 0, 0],
           },
           label: {
-            show: true,
+            show: false,
             position: "top",
             color: "rgba(226,232,240,0.6)",
             fontSize: 8,
             fontWeight: 700,
             formatter: (params: { value: number }) => formatCompact(Number(params.value ?? 0)),
           },
-          emphasis: { disabled: true },
+          emphasis: {
+            focus: "series",
+            label: {
+              show: true,
+              position: "top",
+              color: "rgba(226,232,240,0.92)",
+              fontSize: 9,
+              fontWeight: 700,
+              formatter: (params: { value: number }) => formatCompact(Number(params.value ?? 0)),
+            },
+          },
           z: 1,
         },
         {
@@ -167,10 +239,39 @@ function Sparkline({
               { offset: 1, color: `${stroke}00` },
             ]),
           },
+          markLine:
+            typeof targetLine === "number"
+              ? {
+                  symbol: "none",
+                  silent: true,
+                  label: { show: false },
+                  lineStyle: {
+                    color: "rgba(226,232,240,0.45)",
+                    type: "dashed",
+                    width: 1,
+                  },
+                  data: [{ yAxis: targetLine }],
+                }
+              : undefined,
           z: 3,
         },
       ],
     });
+
+    const startTurn = typeof currentTurnId === "number" ? Math.max(1, currentTurnId - data.length + 1) : null;
+    const handleAxisPointer = (event: unknown) => {
+      const maybe = event as { axesInfo?: Array<{ value?: number | string }> } | undefined;
+      const axisValue = Number(maybe?.axesInfo?.[0]?.value);
+      if (!Number.isFinite(axisValue) || axisValue < 0) return;
+      if (startTurn == null) return;
+      const turn = startTurn + Math.floor(axisValue);
+      onSyncTurnChange?.(turn, chartId);
+    };
+    const handleGlobalOut = () => {
+      onSyncTurnChange?.(null, null);
+    };
+    chart.on("updateAxisPointer", handleAxisPointer);
+    chart.getZr().on("globalout", handleGlobalOut);
 
     const onResize = () => {
       chart.resize();
@@ -178,8 +279,35 @@ function Sparkline({
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
+      chart.off("updateAxisPointer", handleAxisPointer);
+      chart.getZr().off("globalout", handleGlobalOut);
     };
-  }, [trimmed, stroke]);
+  }, [trimmed, stroke, targetLine, currentTurnId, onSyncTurnChange, renderSharedTooltipHtml, tooltipEnabled, activeTooltipChartId, chartId]);
+
+  useEffect(() => {
+    const chart = instanceRef.current;
+    if (!chart) return;
+    const dataLength = trimmed.length > 0 ? trimmed.length : 1;
+    const startTurn = typeof currentTurnId === "number" ? Math.max(1, currentTurnId - dataLength + 1) : null;
+    if (syncedTurnId == null || startTurn == null) {
+      chart.dispatchAction({ type: "hideTip" });
+      return;
+    }
+    if (activeTooltipChartId !== chartId) {
+      chart.dispatchAction({ type: "hideTip" });
+      return;
+    }
+    const idx = syncedTurnId - startTurn;
+    if (idx < 0 || idx >= dataLength) {
+      chart.dispatchAction({ type: "hideTip" });
+      return;
+    }
+    chart.dispatchAction({
+      type: "showTip",
+      seriesIndex: 1,
+      dataIndex: idx,
+    });
+  }, [syncedTurnId, currentTurnId, trimmed, activeTooltipChartId, chartId]);
 
   useEffect(() => {
     return () => {
@@ -213,6 +341,8 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
   const [pendingJoin, setPendingJoin] = useState(false);
   const [pendingLeave, setPendingLeave] = useState(false);
   const [selectedGoodId, setSelectedGoodId] = useState("");
+  const [syncedTurnId, setSyncedTurnId] = useState<number | null>(null);
+  const [activeTooltipChartId, setActiveTooltipChartId] = useState<string | null>(null);
   const [infrastructureCategoryNamesById, setInfrastructureCategoryNamesById] = useState<Record<string, string>>({});
   const [infrastructureModalOpen, setInfrastructureModalOpen] = useState(false);
   const [alertsModalOpen, setAlertsModalOpen] = useState(false);
@@ -316,6 +446,11 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
       setSelectedGoodId(rows[0]?.goodId ?? "");
     }
   }, [rows, selectedGoodId]);
+
+  useEffect(() => {
+    setSyncedTurnId(null);
+    setActiveTooltipChartId(null);
+  }, [selectedGoodId, effectiveTab]);
 
   const handleInviteAction = async (inviteId: string, action: "accept" | "reject") => {
     try {
@@ -678,6 +813,27 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                             stroke: "#a78bfa",
                           },
                         ];
+                        const renderSharedTooltipHtml = (turnId: number): string => {
+                          const rows = series.map((metric) => {
+                            const history = metric.history ?? [];
+                            const startTurn =
+                              typeof overview?.turnId === "number" ? Math.max(1, overview.turnId - history.length + 1) : null;
+                            const idx = startTurn != null ? turnId - startTurn : -1;
+                            const raw = idx >= 0 && idx < history.length ? Number(history[idx] ?? NaN) : Number.NaN;
+                            const valueText = Number.isFinite(raw)
+                              ? metric.suffix
+                                ? `${raw.toFixed(1)}${metric.suffix}`
+                                : formatCompact(raw)
+                              : "—";
+                            return `
+                              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                                <span style="color:${metric.stroke};opacity:0.95;">${metric.label}</span>
+                                <span style="color:#e2e8f0;font-weight:700;">${valueText}</span>
+                              </div>
+                            `;
+                          });
+                          return `<div style="display:flex;flex-direction:column;gap:2px;min-width:180px;">${rows.join("")}</div>`;
+                        };
                         return series.map((metric) => (
                           <div key={metric.key} className="rounded-lg border border-white/10 bg-black/25 p-2">
                             <div className="mb-1 flex items-center justify-between">
@@ -688,11 +844,13 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                                 </span>
                                 <span
                                   className={`text-[11px] font-semibold ${
-                                    getLastDelta(metric.history) >= 0 ? "text-emerald-300" : "text-red-300"
+                                    (metric.key === "coverage" ? getRelativeDeltaPct(metric.history) : getLastDelta(metric.history)) >= 0
+                                      ? "text-emerald-300"
+                                      : "text-red-300"
                                   }`}
                                 >
                                   {(() => {
-                                    const delta = getLastDelta(metric.history);
+                                    const delta = metric.key === "coverage" ? getRelativeDeltaPct(metric.history) : getLastDelta(metric.history);
                                     const abs = Math.abs(delta);
                                     if (metric.suffix) {
                                       return `${delta >= 0 ? "+" : "-"}${abs.toFixed(1)}${metric.suffix}`;
@@ -702,7 +860,21 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                                 </span>
                               </span>
                             </div>
-                            <Sparkline values={metric.history} stroke={metric.stroke} />
+                            <Sparkline
+                              chartId={metric.key}
+                              values={metric.history}
+                              stroke={metric.stroke}
+                              targetLine={metric.key === "coverage" ? 100 : undefined}
+                              currentTurnId={overview?.turnId}
+                              syncedTurnId={syncedTurnId}
+                              activeTooltipChartId={activeTooltipChartId}
+                              onSyncTurnChange={(turn, sourceChartId) => {
+                                setSyncedTurnId(turn);
+                                setActiveTooltipChartId(sourceChartId);
+                              }}
+                              renderSharedTooltipHtml={renderSharedTooltipHtml}
+                              tooltipEnabled
+                            />
                           </div>
                         ));
                       })()}
