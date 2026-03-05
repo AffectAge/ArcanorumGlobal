@@ -250,13 +250,13 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
     <>
       <Dialog open={open} onClose={onClose} className="fixed inset-0 z-[170]">
         <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-        <div className="absolute inset-4 flex items-center justify-center">
+        <div className="fixed inset-0 p-4 md:p-6">
           <Dialog.Panel
             as={motion.div}
             initial={{ opacity: 0, y: 14, scale: 0.985 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.99 }}
-            className="panel-border flex h-[min(92vh,980px)] w-[min(96vw,1500px)] flex-col overflow-hidden rounded-2xl bg-[#0b111b] shadow-2xl"
+            className="panel-border flex h-full w-full flex-col overflow-hidden rounded-2xl bg-[#0b111b] shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-white/10 bg-[#0e1523] px-6 py-4">
               <div>
