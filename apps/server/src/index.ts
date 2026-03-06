@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { Prisma, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import multer from "multer";
@@ -3165,7 +3165,61 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
   return [...base];
 }
 
-const defaultGameSettings = (): GameSettings => ({
+const persistedContentLibraryPath = resolve(__dirname, "../data/content-library.json");
+type PersistedContentLibrary = {
+  content?: unknown;
+  civilopedia?: {
+    categories?: unknown;
+    entries?: unknown;
+  };
+  map?: {
+    backgroundImageUrl?: unknown;
+  };
+  resourceIcons?: Partial<Record<keyof GameSettings["resourceIcons"], unknown>>;
+};
+
+let cachedPersistedContentLibrary: PersistedContentLibrary | null | undefined;
+
+function getPersistedContentLibraryFromDisk(): PersistedContentLibrary | null {
+  if (cachedPersistedContentLibrary !== undefined) {
+    return cachedPersistedContentLibrary;
+  }
+  if (!existsSync(persistedContentLibraryPath)) {
+    cachedPersistedContentLibrary = null;
+    return null;
+  }
+  try {
+    const raw = readFileSync(persistedContentLibraryPath, "utf8");
+    const parsed = JSON.parse(raw) as PersistedContentLibrary;
+    cachedPersistedContentLibrary = parsed && typeof parsed === "object" ? parsed : null;
+    return cachedPersistedContentLibrary;
+  } catch (error) {
+    console.error("[content-library] Failed to read content-library.json:", error);
+    cachedPersistedContentLibrary = null;
+    return null;
+  }
+}
+
+function persistContentLibraryFromSettings(): void {
+  const snapshot = {
+    content: gameSettings.content,
+    civilopedia: gameSettings.civilopedia,
+    map: {
+      backgroundImageUrl: gameSettings.map.backgroundImageUrl,
+    },
+    resourceIcons: gameSettings.resourceIcons,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    writeFileSync(persistedContentLibraryPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    cachedPersistedContentLibrary = snapshot;
+  } catch (error) {
+    console.error("[content-library] Failed to persist content-library.json:", error);
+  }
+}
+
+const defaultGameSettings = (): GameSettings => {
+  const defaults: GameSettings = {
     content: {
       races: [],
       resourceCategories: [],
@@ -3179,61 +3233,128 @@ const defaultGameSettings = (): GameSettings => ({
       industries: [],
       cultures: [],
     },
-  civilopedia: {
-    categories: defaultCivilopediaCategories(),
-    entries: defaultCivilopediaEntries(),
-  },
-  economy: {
-    baseConstructionPerTurn: 5,
-    baseDucatsPerTurn: 5,
-    baseGoldPerTurn: 10,
-    demolitionCostConstructionPercent: 20,
-    marketPriceSmoothing: 0.2,
-  },
-  markets: {
-    countryMarketByCountryId: {},
-    marketById: {},
-    marketInvitesById: {},
-    sanctionsById: {},
-  },
-  colonization: {
-    maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
-    pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
-    pointsCostPer1000Km2: 5,
-    ducatsCostPer1000Km2: 5,
-  },
-  customization: {
-    renameDucats: 20,
-    recolorDucats: 10,
-    flagDucats: 15,
-    crestDucats: 15,
-    provinceRenameDucats: 25,
-  },
-  registration: {
-    requireAdminApproval: false,
-  },
-  eventLog: {
-    retentionTurns: 3,
-  },
-  turnTimer: {
-    enabled: true,
-    secondsPerTurn: 86_400,
-    pauseWhenNoPlayersOnline: false,
-  },
-  map: {
-    showAntarctica: false,
-    backgroundImageUrl: null,
-  },
-  resourceIcons: {
-    culture: null,
-    science: null,
-    religion: null,
-    colonization: null,
-    construction: null,
-    ducats: null,
-    gold: null,
-  },
-});
+    civilopedia: {
+      categories: defaultCivilopediaCategories(),
+      entries: defaultCivilopediaEntries(),
+    },
+    economy: {
+      baseConstructionPerTurn: 5,
+      baseDucatsPerTurn: 5,
+      baseGoldPerTurn: 10,
+      demolitionCostConstructionPercent: 20,
+      marketPriceSmoothing: 0.2,
+    },
+    markets: {
+      countryMarketByCountryId: {},
+      marketById: {},
+      marketInvitesById: {},
+      sanctionsById: {},
+    },
+    colonization: {
+      maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
+      pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
+      pointsCostPer1000Km2: 5,
+      ducatsCostPer1000Km2: 5,
+    },
+    customization: {
+      renameDucats: 20,
+      recolorDucats: 10,
+      flagDucats: 15,
+      crestDucats: 15,
+      provinceRenameDucats: 25,
+    },
+    registration: {
+      requireAdminApproval: false,
+    },
+    eventLog: {
+      retentionTurns: 3,
+    },
+    turnTimer: {
+      enabled: true,
+      secondsPerTurn: 86_400,
+      pauseWhenNoPlayersOnline: false,
+    },
+    map: {
+      showAntarctica: false,
+      backgroundImageUrl: null,
+    },
+    resourceIcons: {
+      culture: null,
+      science: null,
+      religion: null,
+      colonization: null,
+      construction: null,
+      ducats: null,
+      gold: null,
+    },
+  };
+
+  const library = getPersistedContentLibraryFromDisk();
+  if (!library) {
+    return defaults;
+  }
+
+  const civilopediaEntries = normalizeCivilopediaEntries(library.civilopedia?.entries);
+  return {
+    ...defaults,
+    content: {
+      races: normalizeContentRaces((library.content as { races?: unknown } | undefined)?.races),
+      resourceCategories: normalizeContentCultures(
+        (library.content as { resourceCategories?: unknown } | undefined)?.resourceCategories,
+      ),
+      professions: normalizeContentCultures((library.content as { professions?: unknown } | undefined)?.professions),
+      ideologies: normalizeContentCultures((library.content as { ideologies?: unknown } | undefined)?.ideologies),
+      religions: normalizeContentCultures((library.content as { religions?: unknown } | undefined)?.religions),
+      technologies: normalizeContentCultures((library.content as { technologies?: unknown } | undefined)?.technologies),
+      buildings: normalizeContentBuildings((library.content as { buildings?: unknown } | undefined)?.buildings),
+      goods: normalizeContentGoods((library.content as { goods?: unknown } | undefined)?.goods),
+      companies: normalizeContentCultures((library.content as { companies?: unknown } | undefined)?.companies),
+      industries: normalizeContentCultures((library.content as { industries?: unknown } | undefined)?.industries),
+      cultures: normalizeContentCultures((library.content as { cultures?: unknown } | undefined)?.cultures),
+    },
+    civilopedia: {
+      categories: normalizeCivilopediaCategories(library.civilopedia?.categories, civilopediaEntries),
+      entries: civilopediaEntries,
+    },
+    map: {
+      ...defaults.map,
+      backgroundImageUrl:
+        typeof library.map?.backgroundImageUrl === "string" || library.map?.backgroundImageUrl === null
+          ? (library.map.backgroundImageUrl ?? null)
+          : defaults.map.backgroundImageUrl,
+    },
+    resourceIcons: {
+      culture:
+        typeof library.resourceIcons?.culture === "string" || library.resourceIcons?.culture === null
+          ? (library.resourceIcons.culture ?? null)
+          : defaults.resourceIcons.culture,
+      science:
+        typeof library.resourceIcons?.science === "string" || library.resourceIcons?.science === null
+          ? (library.resourceIcons.science ?? null)
+          : defaults.resourceIcons.science,
+      religion:
+        typeof library.resourceIcons?.religion === "string" || library.resourceIcons?.religion === null
+          ? (library.resourceIcons.religion ?? null)
+          : defaults.resourceIcons.religion,
+      colonization:
+        typeof library.resourceIcons?.colonization === "string" || library.resourceIcons?.colonization === null
+          ? (library.resourceIcons.colonization ?? null)
+          : defaults.resourceIcons.colonization,
+      construction:
+        typeof library.resourceIcons?.construction === "string" || library.resourceIcons?.construction === null
+          ? (library.resourceIcons.construction ?? null)
+          : defaults.resourceIcons.construction,
+      ducats:
+        typeof library.resourceIcons?.ducats === "string" || library.resourceIcons?.ducats === null
+          ? (library.resourceIcons.ducats ?? null)
+          : defaults.resourceIcons.ducats,
+      gold:
+        typeof library.resourceIcons?.gold === "string" || library.resourceIcons?.gold === null
+          ? (library.resourceIcons.gold ?? null)
+          : defaults.resourceIcons.gold,
+    },
+  };
+};
 
 function normalizeResourceTotals(input: unknown): ResourceTotals {
   const source = input && typeof input === "object" ? (input as Partial<ResourceTotals>) : {};
@@ -3735,6 +3856,7 @@ function savePersistentState(): void {
     persistStateDirty = false;
     persistStateQueue = persistStateQueue
       .then(async () => {
+        persistContentLibraryFromSettings();
         await persistStateToDb();
       })
       .catch((error) => {
@@ -3754,6 +3876,7 @@ function flushPersistentStateNow(): Promise<void> {
   persistStateDirty = false;
   persistStateQueue = persistStateQueue
     .then(async () => {
+      persistContentLibraryFromSettings();
       await persistStateToDb();
     })
     .catch((error) => {
@@ -3775,6 +3898,39 @@ async function ensureWorldDeltaLogTable(): Promise<void> {
   await prisma.$executeRawUnsafe(
     `CREATE INDEX IF NOT EXISTS idx_world_delta_log_version ON WorldDeltaLog(worldStateVersion)`,
   );
+}
+
+async function ensureCorePrismaTables(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS Country (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT NOT NULL,
+      flagUrl TEXT,
+      crestUrl TEXT,
+      passwordHash TEXT NOT NULL,
+      isLocked INTEGER NOT NULL DEFAULT 0,
+      isAdmin INTEGER NOT NULL DEFAULT 0,
+      blockedUntilTurn INTEGER,
+      blockedUntilAt DATETIME,
+      lockReason TEXT,
+      ignoreUntilTurn INTEGER,
+      eventLogRetentionTurns INTEGER NOT NULL DEFAULT 3,
+      isRegistrationApproved INTEGER NOT NULL DEFAULT 1,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS GameState (
+      id TEXT PRIMARY KEY NOT NULL,
+      turnId INTEGER NOT NULL,
+      gameSettingsJson JSONB NOT NULL,
+      worldBaseJson JSONB NOT NULL,
+      ordersByTurnJson JSONB NOT NULL,
+      resolveReadyByTurnJson JSONB NOT NULL,
+      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 }
 
 async function persistWorldDeltaToDb(delta: WorldDelta): Promise<void> {
@@ -9577,8 +9733,10 @@ wss.on("connection", (socket) => {
 });
 
 async function startServer(): Promise<void> {
+  await ensureCorePrismaTables();
   await ensureWorldDeltaLogTable();
   await loadPersistentState();
+  persistContentLibraryFromSettings();
   await cleanupOrphanUploadsOnServerStart();
   if (await migratePersistedMarketNamesToReadable()) {
     savePersistentState();

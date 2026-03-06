@@ -1,0 +1,436 @@
+{
+  "content": {
+    "races": [
+      {
+        "id": "afdedf7b-8688-46bf-a801-75213f5fd949",
+        "name": "Новая раса 6",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": "/uploads/races/e6574bd9-bee2-4868-a2cf-820c440b3bcb.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "e8815103-867d-4395-b8c1-08d206b32b67",
+        "name": "Новая раса 3",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": "/uploads/races/e75cd6d9-92ab-4d7e-a5b0-a12cf436f2f7.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "d5c1501b-bc58-4296-a4b6-58dad59a25f8",
+        "name": "Новая раса 2",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "2cd134c5-b2ac-4521-8916-3a67bce8fcc3",
+        "name": "Новая раса",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
+    "resourceCategories": [
+      {
+        "id": "62a2dc28-4c04-4785-92d6-5b316c303238",
+        "name": "Новая категория инфраструктуры",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "41f3488a-cc0b-4be1-bbcd-20db6ac1a344",
+        "name": "ывапвап",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
+    "professions": [
+      {
+        "id": "b83aade4-cf91-4c63-b535-e4057c6f55be",
+        "name": "Новая профессия 4",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "f3bbf2ac-1a1f-4841-bcb2-3862ed2b5f43",
+        "name": "Новая профессия 3",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "d25117fb-262c-45c2-9eb6-1beb404954ca",
+        "name": "Новая профессия 2",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "f3419c02-665a-4c10-8ef8-4c6a6f62f6f3",
+        "name": "Новая профессия",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
+    "ideologies": [
+      {
+        "id": "fdc72ad4-85b4-4e60-b292-35ab3c66b2f2",
+        "name": "Новая идеология 4",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "66d6b2cc-121a-470b-903c-33ebd21913d0",
+        "name": "Новая идеология 3",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "b2289b58-6d9f-4cf1-b33b-94ec5c2da150",
+        "name": "Новая идеология 2",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "b85179ee-a948-43b3-add3-20e2dbac35ab",
+        "name": "Новая идеология",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
+    "religions": [
+      {
+        "id": "2e6b616c-ccc8-4939-8d53-4cbe337698c7",
+        "name": "Новая религия 4",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "bd21adad-759a-42de-a79a-7ec2250d1850",
+        "name": "Новая религия 3",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "8d8f107e-4272-4c88-b3f4-f6902e517250",
+        "name": "Новая религия 2",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "9ec8030a-c9b3-4c39-bf5c-d34bb00bdb25",
+        "name": "Новая религия",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
+    "technologies": [],
+    "buildings": [
+      {
+        "id": "11f3f7f5-6aed-4b55-a090-92baadbe67eb",
+        "name": "Завод стали",
+        "description": "",
+        "color": "#d84a0e",
+        "logoUrl": "/uploads/buildings/b5041700-db01-4150-97dc-73e37d20565e.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "costConstruction": 100,
+        "costDucats": 10,
+        "startingDucats": 100000,
+        "inputs": [
+          {
+            "goodId": "85c52344-8320-4445-8ead-0b6eb87cac0c",
+            "amount": 1
+          },
+          {
+            "goodId": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
+            "amount": 1
+          }
+        ],
+        "outputs": [
+          {
+            "goodId": "a858dbc0-30c6-4143-9fe7-6e9f5317931e",
+            "amount": 2
+          }
+        ],
+        "workforceRequirements": [],
+        "infrastructureUse": 0,
+        "marketInfrastructureByCategory": {
+          "41f3488a-cc0b-4be1-bbcd-20db6ac1a344": 20
+        },
+        "allowedCountryIds": [],
+        "deniedCountryIds": [],
+        "countryBuildLimits": [],
+        "globalBuildLimit": 100
+      },
+      {
+        "id": "ee863649-4f11-407a-98ff-20976ebe5b42",
+        "name": "Электростанция",
+        "description": "",
+        "color": "#d9c702",
+        "logoUrl": "/uploads/buildings/1143a372-fdac-446d-9e7a-ebd7595b36a4.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "costConstruction": 100,
+        "costDucats": 10,
+        "startingDucats": 10000,
+        "inputs": [],
+        "outputs": [
+          {
+            "goodId": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
+            "amount": 1
+          }
+        ],
+        "workforceRequirements": [],
+        "infrastructureUse": 0,
+        "marketInfrastructureByCategory": {
+          "41f3488a-cc0b-4be1-bbcd-20db6ac1a344": 1
+        },
+        "allowedCountryIds": [],
+        "deniedCountryIds": [],
+        "countryBuildLimits": [],
+        "globalBuildLimit": 100
+      },
+      {
+        "id": "17a2ad98-97ba-477a-83c5-2e0ab6f1ce94",
+        "name": "Угольная шахта",
+        "description": "",
+        "color": "#1c52f2",
+        "logoUrl": "/uploads/buildings/6c45d366-37c6-4050-a1e1-bfac82d7f35a.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "costConstruction": 20000,
+        "costDucats": 100000,
+        "startingDucats": 200000,
+        "inputs": [
+          {
+            "goodId": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
+            "amount": 1
+          }
+        ],
+        "outputs": [
+          {
+            "goodId": "85c52344-8320-4445-8ead-0b6eb87cac0c",
+            "amount": 1
+          }
+        ],
+        "workforceRequirements": [],
+        "infrastructureUse": 1000,
+        "marketInfrastructureByCategory": {
+          "41f3488a-cc0b-4be1-bbcd-20db6ac1a344": 100
+        },
+        "allowedCountryIds": [],
+        "deniedCountryIds": [],
+        "countryBuildLimits": [],
+        "globalBuildLimit": 100
+      }
+    ],
+    "goods": [
+      {
+        "id": "a858dbc0-30c6-4143-9fe7-6e9f5317931e",
+        "name": "Сталь",
+        "description": "",
+        "color": "#4dfe71",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "resourceCategoryId": null,
+        "basePrice": 1,
+        "minPrice": 0.1,
+        "maxPrice": 10,
+        "infraPerUnit": 1,
+        "infrastructureCostPerUnit": 1
+      },
+      {
+        "id": "85c52344-8320-4445-8ead-0b6eb87cac0c",
+        "name": "Уголь",
+        "description": "",
+        "color": "#323234",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "resourceCategoryId": "41f3488a-cc0b-4be1-bbcd-20db6ac1a344",
+        "basePrice": 1,
+        "minPrice": 0.1,
+        "maxPrice": 10,
+        "infraPerUnit": 1,
+        "infrastructureCostPerUnit": 1
+      },
+      {
+        "id": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
+        "name": "Энергия",
+        "description": "",
+        "color": "#ffda24",
+        "logoUrl": "/uploads/goods/b430c844-2307-44bb-9cbf-b4f8a44d982e.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "resourceCategoryId": "41f3488a-cc0b-4be1-bbcd-20db6ac1a344",
+        "basePrice": 10,
+        "minPrice": 1,
+        "maxPrice": 100,
+        "infraPerUnit": 1,
+        "infrastructureCostPerUnit": 1
+      }
+    ],
+    "companies": [
+      {
+        "id": "6b813210-eb6d-48ff-a931-dc903f666368",
+        "name": "Новая компания",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
+    "industries": [
+      {
+        "id": "b7171edf-aaa5-4276-a622-256726c561b3",
+        "name": "Новая отрасль",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
+    "cultures": [
+      {
+        "id": "1298f710-15a2-457d-9eae-dfb6d25e6343",
+        "name": "Римская",
+        "description": "",
+        "color": "#b80062",
+        "logoUrl": "/uploads/cultures/f327331f-e1a0-44e5-a585-4d814d77706d.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "6e011849-3b31-44b0-9b73-defee3cf00a7",
+        "name": "Итальянская",
+        "description": "",
+        "color": "#1db920",
+        "logoUrl": "/uploads/cultures/d27edff6-5edc-4b6e-959c-ae99b0e79770.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "0c42d63c-3d4c-42ee-b1ba-8544781d2a64",
+        "name": "Степная",
+        "description": "",
+        "color": "#000000",
+        "logoUrl": "/uploads/cultures/a999b768-d1a9-4de2-9910-0325ec51e8ad.png",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      },
+      {
+        "id": "398a55e0-f654-4257-b322-dfad203bc24e",
+        "name": "Славянская",
+        "description": "",
+        "color": "#bb8511",
+        "logoUrl": "/uploads/cultures/14326bd4-1f7c-4b54-816d-2b0a8cc6624e.webp",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ]
+  },
+  "civilopedia": {
+    "categories": [
+      "basics",
+      "colonization",
+      "map",
+      "turns",
+      "journal",
+      "economy",
+      "Провинции"
+    ],
+    "entries": [
+      {
+        "id": "province:UKR-4826",
+        "category": "Провинции",
+        "title": "Провинция: Kiev City",
+        "summary": "Справочная статья по провинции Kiev City.",
+        "keywords": [
+          "провинция",
+          "Kiev City",
+          "UKR-4826"
+        ],
+        "imageUrl": "http://localhost:3001/uploads/civilopedia/ec9624b1-827f-4fe9-9b70-cdd9c8594f0a.png?v=1772834030310",
+        "relatedEntryIds": [
+          "map-modes",
+          "colonization-race"
+        ],
+        "sections": [
+          {
+            "title": "Общая информация",
+            "paragraphs": [
+              "Провинция: [color:#67e8f9]Kiev City[/color]",
+              "ID провинции: UKR-4826",
+              "Заполните описание, стратегическую ценность, особенности колонизации и исторические заметки."
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "map": {
+    "backgroundImageUrl": "/uploads/ui-backgrounds/0a0afb78-07e4-4a6a-91ec-d29166dd3c9a.png"
+  },
+  "resourceIcons": {
+    "culture": "/uploads/resource-icons/ec51c2c7-5986-4cc3-9fda-5130e37ca0d2.png",
+    "science": "/uploads/resource-icons/e46d6a58-b4ea-4ee4-84a1-c2f320e632b3.png",
+    "religion": "/uploads/resource-icons/d4216b5c-f722-4d1a-be9c-38a7b6ac4b32.png",
+    "colonization": "/uploads/resource-icons/f8c4034c-a417-4000-a3e9-b51aaed0ba72.png",
+    "construction": "/uploads/resource-icons/0c6643b2-f1a5-4759-b541-ba3d17502211.png",
+    "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
+    "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
+  },
+  "updatedAt": "2026-03-06T22:11:22.052Z"
+}

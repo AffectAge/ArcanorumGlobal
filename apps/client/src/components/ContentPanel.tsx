@@ -412,6 +412,91 @@ export function ContentPanel({ open, token, onClose }: Props) {
           ? Math.max(1, Math.floor(entry.globalBuildLimit))
           : null,
     });
+  const buildDraftSnapshot = () =>
+    JSON.stringify({
+      id: selectedEntry?.id ?? "",
+      name: draftName.trim(),
+      description: draftDescription.trim(),
+      color: draftColor,
+      logoUrl: draftLogoUrl,
+      malePortraitUrl: draftMalePortraitUrl,
+      femalePortraitUrl: draftFemalePortraitUrl,
+      basePrice:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftBasePrice))
+            ? Number(Number(draftBasePrice).toFixed(3))
+            : null
+          : null,
+      minPrice:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftMinPrice))
+            ? Number(Number(draftMinPrice).toFixed(3))
+            : null
+          : null,
+      maxPrice:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftMaxPrice))
+            ? Number(Number(draftMaxPrice).toFixed(3))
+            : null
+          : null,
+      infraPerUnit:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftInfraPerUnit))
+            ? Number(Math.max(0, Number(draftInfraPerUnit)).toFixed(3))
+            : null
+          : null,
+      infrastructureCostPerUnit:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftInfraPerUnit))
+            ? Number(Math.max(0.01, Number(draftInfraPerUnit)).toFixed(3))
+            : null
+          : null,
+      resourceCategoryId: activeCategory === "goods" ? draftResourceCategoryId.trim() || null : null,
+      baseWage:
+        activeCategory === "professions"
+          ? Number.isFinite(Number(draftBaseWage))
+            ? Number(Number(draftBaseWage).toFixed(3))
+            : null
+          : null,
+      costConstruction:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftCostConstruction))
+            ? Math.max(1, Math.floor(Number(draftCostConstruction)))
+            : null
+          : null,
+      costDucats:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftCostDucats))
+            ? Number(Math.max(0, Number(draftCostDucats)).toFixed(3))
+            : null
+          : null,
+      startingDucats:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftStartingDucats))
+            ? Number(Math.max(0, Number(draftStartingDucats)).toFixed(3))
+            : null
+          : null,
+      infrastructureUse:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftInfrastructureUse))
+            ? Number(Math.max(0, Number(draftInfrastructureUse)).toFixed(3))
+            : null
+          : null,
+      inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
+      outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : [],
+      workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : [],
+      marketInfrastructureByCategory:
+        activeCategory === "buildings" ? normalizeCategoryAmountDraft(draftMarketInfrastructureByCategory) : {},
+      allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : [],
+      deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : [],
+      countryBuildLimits: activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : [],
+      globalBuildLimit:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftGlobalBuildLimit))
+            ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
+            : null
+          : null,
+    });
 
   const filteredEntries = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -699,87 +784,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
 
   const hasUnsavedChanges = useMemo(() => {
     if (!selectedEntry) return false;
-    return (
-      JSON.stringify({
-        id: selectedEntry.id,
-        name: draftName.trim(),
-        description: draftDescription.trim(),
-        color: draftColor,
-        logoUrl: draftLogoUrl,
-        malePortraitUrl: draftMalePortraitUrl,
-        femalePortraitUrl: draftFemalePortraitUrl,
-        basePrice:
-          activeCategory === "goods"
-            ? Number.isFinite(Number(draftBasePrice))
-              ? Number(Number(draftBasePrice).toFixed(3))
-              : null
-            : null,
-        minPrice:
-          activeCategory === "goods"
-            ? Number.isFinite(Number(draftMinPrice))
-              ? Number(Number(draftMinPrice).toFixed(3))
-              : null
-            : null,
-        maxPrice:
-          activeCategory === "goods"
-            ? Number.isFinite(Number(draftMaxPrice))
-              ? Number(Number(draftMaxPrice).toFixed(3))
-              : null
-            : null,
-        infraPerUnit:
-          activeCategory === "goods"
-            ? Number.isFinite(Number(draftInfraPerUnit))
-              ? Number(Math.max(0, Number(draftInfraPerUnit)).toFixed(3))
-              : null
-            : null,
-        resourceCategoryId: activeCategory === "goods" ? draftResourceCategoryId.trim() || null : null,
-        baseWage:
-          activeCategory === "professions"
-            ? Number.isFinite(Number(draftBaseWage))
-              ? Number(Number(draftBaseWage).toFixed(3))
-              : null
-            : null,
-        costConstruction:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftCostConstruction))
-              ? Math.max(1, Math.floor(Number(draftCostConstruction)))
-              : null
-            : null,
-        costDucats:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftCostDucats))
-              ? Number(Math.max(0, Number(draftCostDucats)).toFixed(3))
-              : null
-            : null,
-        startingDucats:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftStartingDucats))
-              ? Number(Math.max(0, Number(draftStartingDucats)).toFixed(3))
-              : null
-            : null,
-        infrastructureUse:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftInfrastructureUse))
-              ? Number(Math.max(0, Number(draftInfrastructureUse)).toFixed(3))
-              : null
-            : null,
-        marketInfrastructureByCategory:
-          activeCategory === "buildings" ? normalizeCategoryAmountDraft(draftMarketInfrastructureByCategory) : {},
-        inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
-        outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : [],
-        workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : [],
-        allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : [],
-        deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : [],
-        countryBuildLimits:
-          activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : [],
-        globalBuildLimit:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftGlobalBuildLimit))
-              ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
-              : null
-            : null,
-      }) !== savedSnapshot
-    );
+    return buildDraftSnapshot() !== savedSnapshot;
   }, [
     activeCategory,
     draftBasePrice,
