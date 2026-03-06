@@ -5909,7 +5909,11 @@ app.get("/markets/:marketId/sanctions", async (req, res) => {
   const sanctions = Object.values(gameSettings.markets.sanctionsById ?? {})
     .filter((sanction) => sanction.initiatorCountryId === market.ownerCountryId)
     .sort((a, b) => b.startTurn - a.startTurn || a.id.localeCompare(b.id));
-  return res.json({ sanctions: await enrichMarketSanctions(sanctions), ownerCountryId: market.ownerCountryId });
+  return res.json({
+    sanctions: await enrichMarketSanctions(sanctions),
+    ownerCountryId: market.ownerCountryId,
+    turnId,
+  });
 });
 
 app.post("/markets/:marketId/sanctions", async (req, res) => {

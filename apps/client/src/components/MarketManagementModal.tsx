@@ -91,7 +91,7 @@ export function MarketManagementModal({ open, onClose, token, countryId, marketI
         return country.name.toLowerCase().includes(q) || country.id.toLowerCase().includes(q);
       })
       .sort((a, b) => a.name.localeCompare(b.name, "ru"))
-      .map((country) => ({ value: country.id, label: `${country.name} (${country.id})` }));
+      .map((country) => ({ value: country.id, label: country.name }));
   }, [countries, inviteSearch, marketDetails?.memberCountryIds, outgoingInvites]);
 
   useEffect(() => {
@@ -104,7 +104,7 @@ export function MarketManagementModal({ open, onClose, token, countryId, marketI
     () =>
       (marketDetails?.members ?? [])
         .filter((member) => !member.isOwner)
-        .map((member) => ({ value: member.countryId, label: `${member.countryName} (${member.countryId})` })),
+        .map((member) => ({ value: member.countryId, label: member.countryName })),
     [marketDetails?.members],
   );
 

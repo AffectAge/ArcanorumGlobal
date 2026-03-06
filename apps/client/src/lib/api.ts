@@ -481,7 +481,7 @@ export async function transferMarketOwner(
 export async function fetchMarketSanctions(
   token: string,
   marketId: string,
-): Promise<{ sanctions: MarketSanction[]; ownerCountryId: string }> {
+): Promise<{ sanctions: MarketSanction[]; ownerCountryId: string; turnId: number }> {
   const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/sanctions`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -489,7 +489,7 @@ export async function fetchMarketSanctions(
     const err = await response.json().catch(() => ({}));
     throw new Error(err?.error ?? "MARKET_SANCTIONS_FETCH_FAILED");
   }
-  return (await response.json()) as { sanctions: MarketSanction[]; ownerCountryId: string };
+  return (await response.json()) as { sanctions: MarketSanction[]; ownerCountryId: string; turnId: number };
 }
 
 export async function createMarketSanction(
