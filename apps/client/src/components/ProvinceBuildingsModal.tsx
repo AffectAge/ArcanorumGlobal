@@ -1615,9 +1615,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                           <div className="h-full overflow-hidden rounded-md flex items-stretch">
                             <div className={`flex w-[84px] shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black ${canAdd ? "border border-emerald-400/40" : "border border-red-400/40"}`}>
                               {building.logoUrl ? (
-                                <img src={building.logoUrl} alt="" className="h-10 w-10 object-contain" />
+                                <img src={building.logoUrl} alt="" className="h-[72px] w-[72px] object-contain" />
                               ) : (
-                                <Factory size={16} className="text-white/60" />
+                                <Factory size={30} className="text-white/60" />
                               )}
                             </div>
                             <div className="min-w-0 flex-1 p-3">
@@ -1702,9 +1702,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                           <div className="h-full overflow-hidden rounded-md flex items-stretch">
                             <div className="flex w-[84px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-amber-400/40 bg-black">
                               {card.iconUrl ? (
-                                <img src={card.iconUrl} alt="" className="h-10 w-10 object-contain" />
+                                <img src={card.iconUrl} alt="" className="h-[72px] w-[72px] object-contain" />
                               ) : (
-                                <Factory size={16} className="text-white/60" />
+                                <Factory size={30} className="text-white/60" />
                               )}
                             </div>
                             <div className="min-w-0 flex h-full flex-1 flex-col p-3">

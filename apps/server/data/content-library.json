@@ -175,102 +175,25 @@
     "technologies": [],
     "buildings": [
       {
-        "id": "11f3f7f5-6aed-4b55-a090-92baadbe67eb",
-        "name": "Завод стали",
+        "id": "7c365c6b-552d-441d-a794-47639f3e1171",
+        "name": "Ветряная электростанция",
         "description": "",
-        "color": "#d84a0e",
-        "logoUrl": "/uploads/buildings/b5041700-db01-4150-97dc-73e37d20565e.png",
+        "color": "#8bebfe",
+        "logoUrl": "/uploads/buildings/4cd09d07-87c9-4d58-a4f9-8211b50f7be7.png?v=1772837048299",
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "costConstruction": 100,
         "costDucats": 10,
-        "startingDucats": 100000,
-        "inputs": [
-          {
-            "goodId": "85c52344-8320-4445-8ead-0b6eb87cac0c",
-            "amount": 1
-          },
-          {
-            "goodId": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
-            "amount": 1
-          }
-        ],
-        "outputs": [
-          {
-            "goodId": "a858dbc0-30c6-4143-9fe7-6e9f5317931e",
-            "amount": 2
-          }
-        ],
-        "workforceRequirements": [],
-        "infrastructureUse": 0,
-        "marketInfrastructureByCategory": {
-          "41f3488a-cc0b-4be1-bbcd-20db6ac1a344": 20
-        },
-        "allowedCountryIds": [],
-        "deniedCountryIds": [],
-        "countryBuildLimits": [],
-        "globalBuildLimit": 100
-      },
-      {
-        "id": "ee863649-4f11-407a-98ff-20976ebe5b42",
-        "name": "Электростанция",
-        "description": "",
-        "color": "#d9c702",
-        "logoUrl": "/uploads/buildings/1143a372-fdac-446d-9e7a-ebd7595b36a4.png",
-        "malePortraitUrl": null,
-        "femalePortraitUrl": null,
-        "costConstruction": 100,
-        "costDucats": 10,
-        "startingDucats": 10000,
+        "startingDucats": 0,
         "inputs": [],
-        "outputs": [
-          {
-            "goodId": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
-            "amount": 1
-          }
-        ],
+        "outputs": [],
         "workforceRequirements": [],
         "infrastructureUse": 0,
-        "marketInfrastructureByCategory": {
-          "41f3488a-cc0b-4be1-bbcd-20db6ac1a344": 1
-        },
+        "marketInfrastructureByCategory": {},
         "allowedCountryIds": [],
         "deniedCountryIds": [],
         "countryBuildLimits": [],
-        "globalBuildLimit": 100
-      },
-      {
-        "id": "17a2ad98-97ba-477a-83c5-2e0ab6f1ce94",
-        "name": "Угольная шахта",
-        "description": "",
-        "color": "#1c52f2",
-        "logoUrl": "/uploads/buildings/6c45d366-37c6-4050-a1e1-bfac82d7f35a.png",
-        "malePortraitUrl": null,
-        "femalePortraitUrl": null,
-        "costConstruction": 20000,
-        "costDucats": 100000,
-        "startingDucats": 200000,
-        "inputs": [
-          {
-            "goodId": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
-            "amount": 1
-          }
-        ],
-        "outputs": [
-          {
-            "goodId": "85c52344-8320-4445-8ead-0b6eb87cac0c",
-            "amount": 1
-          }
-        ],
-        "workforceRequirements": [],
-        "infrastructureUse": 1000,
-        "marketInfrastructureByCategory": {
-          "41f3488a-cc0b-4be1-bbcd-20db6ac1a344": 100
-        },
-        "allowedCountryIds": [],
-        "deniedCountryIds": [],
-        "countryBuildLimits": [],
-        "globalBuildLimit": 100
+        "globalBuildLimit": 1
       }
     ],
     "goods": [
@@ -432,5 +355,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-03-06T22:24:58.398Z"
+  "updatedAt": "2026-03-06T22:44:13.570Z"
 }
