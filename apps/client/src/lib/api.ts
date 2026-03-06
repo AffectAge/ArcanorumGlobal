@@ -249,6 +249,25 @@ export type MarketCatalogItem = {
   hasPendingJoinRequest: boolean;
 };
 
+export type MarketSanction = {
+  id: string;
+  initiatorCountryId: string;
+  initiatorCountryName?: string;
+  direction: "import" | "export" | "both";
+  targetType: "country" | "market";
+  targetId: string;
+  targetName?: string;
+  goods?: string[];
+  goodsNamed?: Array<{ id: string; name: string }>;
+  mode: "ban" | "cap";
+  capAmountPerTurn?: number | null;
+  startTurn: number;
+  durationTurns: number;
+  enabled?: boolean;
+  activeNow?: boolean;
+  expiresAtTurn?: number;
+};
+
 export async function fetchMarketOverview(token: string): Promise<MarketOverviewResponse> {
   const response = await fetch(`${API}/economy/market-overview`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -457,6 +476,99 @@ export async function transferMarketOwner(
       })),
     },
   };
+}
+
+export async function fetchMarketSanctions(
+  token: string,
+  marketId: string,
+): Promise<{ sanctions: MarketSanction[]; ownerCountryId: string }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/sanctions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTIONS_FETCH_FAILED");
+  }
+  return (await response.json()) as { sanctions: MarketSanction[]; ownerCountryId: string };
+}
+
+export async function createMarketSanction(
+  token: string,
+  marketId: string,
+  payload: {
+    direction: "import" | "export" | "both";
+    targetType: "country" | "market";
+    targetId: string;
+    goods?: string[];
+    mode: "ban" | "cap";
+    capAmountPerTurn?: number | null;
+    startTurn?: number;
+    durationTurns: number;
+    enabled?: boolean;
+  },
+): Promise<{ sanction: MarketSanction }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/sanctions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTION_CREATE_FAILED");
+  }
+  return (await response.json()) as { sanction: MarketSanction };
+}
+
+export async function updateMarketSanction(
+  token: string,
+  marketId: string,
+  sanctionId: string,
+  payload: Partial<{
+    direction: "import" | "export" | "both";
+    targetType: "country" | "market";
+    targetId: string;
+    goods: string[];
+    mode: "ban" | "cap";
+    capAmountPerTurn: number | null;
+    startTurn: number;
+    durationTurns: number;
+    enabled: boolean;
+  }>,
+): Promise<{ sanction: MarketSanction }> {
+  const response = await fetch(
+    `${API}/markets/${encodeURIComponent(marketId)}/sanctions/${encodeURIComponent(sanctionId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTION_UPDATE_FAILED");
+  }
+  return (await response.json()) as { sanction: MarketSanction };
+}
+
+export async function deleteMarketSanction(token: string, marketId: string, sanctionId: string): Promise<{ ok: true }> {
+  const response = await fetch(
+    `${API}/markets/${encodeURIComponent(marketId)}/sanctions/${encodeURIComponent(sanctionId)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTION_DELETE_FAILED");
+  }
+  return (await response.json()) as { ok: true };
 }
 
 export async function leaveMarket(token: string, marketId: string): Promise<{ ok: boolean; marketIdLeft: string; newMarketId: string }> {
@@ -899,6 +1011,22 @@ export type GameSettings = {
   };
   markets?: {
     countryMarketByCountryId: Record<string, string>;
+    sanctionsById?: Record<
+      string,
+      {
+        id: string;
+        initiatorCountryId: string;
+        direction: "import" | "export" | "both";
+        targetType: "country" | "market";
+        targetId: string;
+        goods?: string[];
+        mode: "ban" | "cap";
+        capAmountPerTurn?: number | null;
+        startTurn: number;
+        durationTurns: number;
+        enabled?: boolean;
+      }
+    >;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -1126,6 +1254,25 @@ export async function updateGameSettings(
       baseGoldPerTurn?: number;
       demolitionCostConstructionPercent?: number;
       marketPriceSmoothing?: number;
+    };
+    markets?: {
+      countryMarketByCountryId?: Record<string, string>;
+      sanctionsById?: Record<
+        string,
+        {
+          id?: string;
+          initiatorCountryId: string;
+          direction: "import" | "export" | "both";
+          targetType: "country" | "market";
+          targetId: string;
+          goods?: string[];
+          mode: "ban" | "cap";
+          capAmountPerTurn?: number | null;
+          startTurn: number;
+          durationTurns: number;
+          enabled?: boolean;
+        }
+      >;
     };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };

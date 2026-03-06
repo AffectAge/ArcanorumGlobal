@@ -360,7 +360,7 @@ function normalizeMarketVisibility(value: unknown): "public" | "private" {
 
 function ensureMarketsStateShape(): void {
   if (!gameSettings.markets) {
-    gameSettings.markets = { countryMarketByCountryId: {}, marketById: {}, marketInvitesById: {} };
+    gameSettings.markets = { countryMarketByCountryId: {}, marketById: {}, marketInvitesById: {}, sanctionsById: {} };
     return;
   }
   if (!gameSettings.markets.countryMarketByCountryId || typeof gameSettings.markets.countryMarketByCountryId !== "object") {
@@ -371,6 +371,9 @@ function ensureMarketsStateShape(): void {
   }
   if (!gameSettings.markets.marketInvitesById || typeof gameSettings.markets.marketInvitesById !== "object") {
     gameSettings.markets.marketInvitesById = {};
+  }
+  if (!gameSettings.markets.sanctionsById || typeof gameSettings.markets.sanctionsById !== "object") {
+    gameSettings.markets.sanctionsById = {};
   }
 }
 
@@ -571,6 +574,15 @@ function cleanupMarketsAfterCountryRemoval(removedCountryId: string): void {
     }
   }
 
+  for (const [sanctionId, sanction] of Object.entries(gameSettings.markets.sanctionsById ?? {})) {
+    const initiatorExists = validCountryIds.has(sanction.initiatorCountryId);
+    const targetExists =
+      sanction.targetType === "country" ? validCountryIds.has(sanction.targetId) : Boolean(marketById[sanction.targetId]);
+    if (!initiatorExists || !targetExists) {
+      delete gameSettings.markets.sanctionsById[sanctionId];
+    }
+  }
+
   ensureMarketModelReady();
 }
 
@@ -683,6 +695,20 @@ type MarketTradePolicyEntry = {
   >;
 };
 
+type MarketSanctionEntry = {
+  id: string;
+  initiatorCountryId: string;
+  direction: "import" | "export" | "both";
+  targetType: "country" | "market";
+  targetId: string;
+  goods?: string[];
+  mode: "ban" | "cap";
+  capAmountPerTurn?: number | null;
+  startTurn: number;
+  durationTurns: number;
+  enabled?: boolean;
+};
+
 type GameSettings = {
   content: {
     races: GameContentEntry[];
@@ -756,6 +782,7 @@ type GameSettings = {
         updatedAt: string;
       }
     >;
+    sanctionsById: Record<string, MarketSanctionEntry>;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -1046,6 +1073,65 @@ function normalizeCountryResourceTradePolicyMap(
     const key = countryId.trim();
     if (!key) continue;
     normalized[key] = normalizeMarketTradePolicyMap(rawValue);
+  }
+  return normalized;
+}
+
+function normalizeMarketSanctionsMap(input: unknown): Record<string, MarketSanctionEntry> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, MarketSanctionEntry> = {};
+  for (const [entryId, rawValue] of Object.entries(source)) {
+    const fallbackId = entryId.trim();
+    if (!fallbackId) continue;
+    const value = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : {};
+    const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : fallbackId;
+    const initiatorCountryId =
+      typeof value.initiatorCountryId === "string" && value.initiatorCountryId.trim()
+        ? value.initiatorCountryId.trim()
+        : "";
+    const targetId = typeof value.targetId === "string" && value.targetId.trim() ? value.targetId.trim() : "";
+    if (!initiatorCountryId || !targetId) continue;
+    const directionRaw = typeof value.direction === "string" ? value.direction : "both";
+    const direction: MarketSanctionEntry["direction"] =
+      directionRaw === "import" || directionRaw === "export" ? directionRaw : "both";
+    const targetTypeRaw = typeof value.targetType === "string" ? value.targetType : "country";
+    const targetType: MarketSanctionEntry["targetType"] = targetTypeRaw === "market" ? "market" : "country";
+    const modeRaw = typeof value.mode === "string" ? value.mode : "ban";
+    const mode: MarketSanctionEntry["mode"] = modeRaw === "cap" ? "cap" : "ban";
+    const goods = Array.isArray(value.goods)
+      ? [
+          ...new Set(
+            value.goods.filter((row): row is string => typeof row === "string").map((row) => row.trim()).filter(Boolean),
+          ),
+        ]
+      : [];
+    const capAmountPerTurn =
+      typeof value.capAmountPerTurn === "number" && Number.isFinite(value.capAmountPerTurn)
+        ? round3(Math.max(0, Number(value.capAmountPerTurn)))
+        : null;
+    const startTurn =
+      typeof value.startTurn === "number" && Number.isFinite(value.startTurn)
+        ? Math.max(1, Math.floor(value.startTurn))
+        : turnId;
+    const durationTurns =
+      typeof value.durationTurns === "number" && Number.isFinite(value.durationTurns)
+        ? Math.max(1, Math.floor(value.durationTurns))
+        : 1;
+    const enabled = typeof value.enabled === "boolean" ? value.enabled : true;
+    normalized[id] = {
+      id,
+      initiatorCountryId,
+      direction,
+      targetType,
+      targetId,
+      goods,
+      mode,
+      capAmountPerTurn: mode === "cap" ? capAmountPerTurn ?? 0 : null,
+      startTurn,
+      durationTurns,
+      enabled,
+    };
   }
   return normalized;
 }
@@ -1750,6 +1836,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
   const remainingSharedInfrastructureByMarketIdAndCategory: Record<string, Record<string, number>> = {};
   const consumedSharedInfrastructureByMarketIdAndCategory: Record<string, Record<string, number>> = {};
   const worldTradeUsedAmountByScope: Record<string, number> = {};
+  const sanctionUsedAmountById: Record<string, number> = {};
   const infraByProvince: Record<string, { capacity: number; required: number; coverage: number }> = {};
   const alertsByCountry: Record<string, MarketOverviewAlert[]> = {};
   const importsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>> = {};
@@ -1760,6 +1847,42 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
   const pushCountryAlert = (countryId: string, alert: Omit<MarketOverviewAlert, "id">): void => {
     if (!alertsByCountry[countryId]) alertsByCountry[countryId] = [];
     alertsByCountry[countryId].push({ id: `a-${turnId}-${++alertSeq}`, ...alert });
+  };
+  type ActiveTradeSanction = MarketSanctionEntry & {
+    goodsSet: Set<string> | null;
+    expiresAtTurnExclusive: number;
+  };
+  const sanctionsRaw = Object.values(gameSettings.markets.sanctionsById ?? {});
+  const activeSanctionsByInitiator = new Map<string, ActiveTradeSanction[]>();
+  for (const sanction of sanctionsRaw) {
+    if (sanction.enabled === false) continue;
+    const startTurn = Math.max(1, Math.floor(Number(sanction.startTurn ?? turnId)));
+    const durationTurns = Math.max(1, Math.floor(Number(sanction.durationTurns ?? 1)));
+    const expiresAtTurnExclusive = startTurn + durationTurns;
+    if (turnId < startTurn || turnId >= expiresAtTurnExclusive) continue;
+    const list = activeSanctionsByInitiator.get(sanction.initiatorCountryId) ?? [];
+    list.push({
+      ...sanction,
+      goodsSet: sanction.goods && sanction.goods.length > 0 ? new Set(sanction.goods) : null,
+      expiresAtTurnExclusive,
+    });
+    activeSanctionsByInitiator.set(sanction.initiatorCountryId, list);
+  }
+  const collectTradeSanctions = (params: {
+    initiatorCountryId: string;
+    direction: "import" | "export";
+    targetCountryId: string;
+    targetMarketId: string;
+    goodId: string;
+  }): ActiveTradeSanction[] => {
+    const list = activeSanctionsByInitiator.get(params.initiatorCountryId) ?? [];
+    if (list.length === 0) return [];
+    return list.filter((sanction) => {
+      if (!(sanction.direction === "both" || sanction.direction === params.direction)) return false;
+      if (sanction.goodsSet && !sanction.goodsSet.has(params.goodId)) return false;
+      if (sanction.targetType === "country") return sanction.targetId === params.targetCountryId;
+      return sanction.targetId === params.targetMarketId;
+    });
   };
 
   type SellerSlot = {
@@ -2173,6 +2296,37 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
             const maxAffordableNow = Math.floor((Number(instance.ducats ?? 0) - purchaseCost) / option.unitPrice);
             if (maxAffordableNow <= 0) break;
             const isExternalTrade = seller.marketId !== marketId;
+            const isCrossCountryTrade = seller.countryId !== ownerCountryId;
+            let applicableCapSanctions: ActiveTradeSanction[] = [];
+            let maxBySanctions = Number.POSITIVE_INFINITY;
+            if (isCrossCountryTrade) {
+              const buyerSideSanctions = collectTradeSanctions({
+                initiatorCountryId: ownerCountryId,
+                direction: "import",
+                targetCountryId: seller.countryId,
+                targetMarketId: seller.marketId,
+                goodId: input.goodId,
+              });
+              const sellerSideSanctions = collectTradeSanctions({
+                initiatorCountryId: seller.countryId,
+                direction: "export",
+                targetCountryId: ownerCountryId,
+                targetMarketId: marketId,
+                goodId: input.goodId,
+              });
+              const allSanctions = [...buyerSideSanctions, ...sellerSideSanctions];
+              if (allSanctions.some((sanction) => sanction.mode === "ban")) {
+                continue;
+              }
+              applicableCapSanctions = allSanctions.filter((sanction) => sanction.mode === "cap");
+              for (const sanction of applicableCapSanctions) {
+                const cap = Math.max(0, Number(sanction.capAmountPerTurn ?? 0));
+                const used = Math.max(0, Number(sanctionUsedAmountById[sanction.id] ?? 0));
+                const remaining = round3(Math.max(0, cap - used));
+                maxBySanctions = Math.min(maxBySanctions, remaining);
+              }
+              if (maxBySanctions <= 0) continue;
+            }
             let maxByPolicy = Number.POSITIVE_INFINITY;
             let buyerPolicyScope = "all";
             let sellerPolicyScope = "all";
@@ -2236,7 +2390,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
               }
             }
 
-            const transfer = round3(Math.min(remainingNeed, transferCap, maxAffordableNow, maxByInfra, maxByPolicy));
+            const transfer = round3(
+              Math.min(remainingNeed, transferCap, maxAffordableNow, maxByInfra, maxByPolicy, maxBySanctions),
+            );
             if (transfer <= 0) continue;
             remainingNeed = round3(Math.max(0, remainingNeed - transfer));
             const transferCost = round3(transfer * option.unitPrice);
@@ -2284,6 +2440,11 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
             if (isExternalTrade) {
               consumePolicyLimit(marketId, input.goodId, "import", buyerPolicyScope, transfer);
               consumePolicyLimit(seller.marketId, input.goodId, "export", sellerPolicyScope, transfer);
+            }
+            for (const sanction of applicableCapSanctions) {
+              sanctionUsedAmountById[sanction.id] = round3(
+                Math.max(0, Number(sanctionUsedAmountById[sanction.id] ?? 0)) + transfer,
+              );
             }
             purchaseCost = round3(purchaseCost + transferCost);
             purchasedByGood[input.goodId] = round3((purchasedByGood[input.goodId] ?? 0) + transfer);
@@ -2895,6 +3056,7 @@ const defaultGameSettings = (): GameSettings => ({
     countryMarketByCountryId: {},
     marketById: {},
     marketInvitesById: {},
+    sanctionsById: {},
   },
   colonization: {
     maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
@@ -3171,6 +3333,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
                 }),
               )
             : { ...defaults.markets.marketInvitesById },
+        sanctionsById:
+          next.markets && typeof next.markets === "object" && next.markets.sanctionsById && typeof next.markets.sanctionsById === "object"
+            ? normalizeMarketSanctionsMap(next.markets.sanctionsById)
+            : { ...defaults.markets.sanctionsById },
       },
       colonization: {
         maxActiveColonizations:
@@ -5384,6 +5550,30 @@ const marketPatchSchema = z.object({
   visibility: z.enum(["public", "private"]).optional(),
 });
 
+const marketSanctionCreateSchema = z.object({
+  direction: z.enum(["import", "export", "both"]),
+  targetType: z.enum(["country", "market"]),
+  targetId: z.string().trim().min(1).max(120),
+  goods: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
+  mode: z.enum(["ban", "cap"]),
+  capAmountPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).nullable().optional(),
+  startTurn: z.coerce.number().int().min(1).optional(),
+  durationTurns: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER),
+  enabled: z.boolean().optional(),
+});
+
+const marketSanctionPatchSchema = z.object({
+  direction: z.enum(["import", "export", "both"]).optional(),
+  targetType: z.enum(["country", "market"]).optional(),
+  targetId: z.string().trim().min(1).max(120).optional(),
+  goods: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
+  mode: z.enum(["ban", "cap"]).optional(),
+  capAmountPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).nullable().optional(),
+  startTurn: z.coerce.number().int().min(1).optional(),
+  durationTurns: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
+  enabled: z.boolean().optional(),
+});
+
 async function buildMarketDetailsResponse(marketId: string): Promise<{
   market: {
     id: string;
@@ -5466,6 +5656,56 @@ async function enrichMarketInvites(
     toCountryName: countryById.get(invite.toCountryId)?.name ?? invite.toCountryId,
     toCountryFlagUrl: countryById.get(invite.toCountryId)?.flagUrl ?? null,
   }));
+}
+
+async function enrichMarketSanctions(
+  sanctions: MarketSanctionEntry[],
+): Promise<
+  Array<
+    MarketSanctionEntry & {
+      initiatorCountryName: string;
+      targetName: string;
+      goodsNamed: Array<{ id: string; name: string }>;
+      activeNow: boolean;
+      expiresAtTurn: number;
+    }
+  >
+> {
+  const countryIds = new Set<string>();
+  for (const sanction of sanctions) {
+    countryIds.add(sanction.initiatorCountryId);
+    if (sanction.targetType === "country") countryIds.add(sanction.targetId);
+  }
+  const countries = countryIds.size
+    ? await prisma.country.findMany({
+        where: { id: { in: [...countryIds] } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const countryById = new Map(countries.map((country) => [country.id, country.name] as const));
+  const goodsById = new Map(gameSettings.content.goods.map((good) => [good.id, good.name] as const));
+  return sanctions.map((sanction) => {
+    const targetName =
+      sanction.targetType === "country"
+        ? countryById.get(sanction.targetId) ?? sanction.targetId
+        : getMarketDisplayName({
+            marketId: sanction.targetId,
+            marketName: gameSettings.markets.marketById[sanction.targetId]?.name ?? sanction.targetId,
+            ownerCountryName: null,
+          });
+    const goodsNamed = (sanction.goods ?? []).map((id) => ({ id, name: goodsById.get(id) ?? id }));
+    const expiresAtTurn = sanction.startTurn + sanction.durationTurns;
+    const activeNow =
+      sanction.enabled !== false && turnId >= sanction.startTurn && turnId < sanction.startTurn + sanction.durationTurns;
+    return {
+      ...sanction,
+      initiatorCountryName: countryById.get(sanction.initiatorCountryId) ?? sanction.initiatorCountryId,
+      targetName,
+      goodsNamed,
+      activeNow,
+      expiresAtTurn,
+    };
+  });
 }
 
 app.get("/markets/:marketId", async (req, res) => {
@@ -5649,6 +5889,173 @@ app.get("/markets/:marketId/invites", async (req, res) => {
     .filter((invite) => invite.marketId === marketId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return res.json({ invites: await enrichMarketInvites(invites) });
+});
+
+app.get("/markets/:marketId/sanctions", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  const isOwner = market.ownerCountryId === auth.countryId;
+  const isMember = market.memberCountryIds.includes(auth.countryId);
+  if (!isOwner && !isMember) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const sanctions = Object.values(gameSettings.markets.sanctionsById ?? {})
+    .filter((sanction) => sanction.initiatorCountryId === market.ownerCountryId)
+    .sort((a, b) => b.startTurn - a.startTurn || a.id.localeCompare(b.id));
+  return res.json({ sanctions: await enrichMarketSanctions(sanctions), ownerCountryId: market.ownerCountryId });
+});
+
+app.post("/markets/:marketId/sanctions", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketSanctionCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const payload = parsed.data;
+  if (payload.targetType === "country") {
+    const countryExists = await prisma.country.findUnique({
+      where: { id: payload.targetId },
+      select: { id: true },
+    });
+    if (!countryExists) {
+      return res.status(404).json({ error: "TARGET_COUNTRY_NOT_FOUND" });
+    }
+  } else {
+    const targetMarket = getMarketById(payload.targetId);
+    if (!targetMarket) {
+      return res.status(404).json({ error: "TARGET_MARKET_NOT_FOUND" });
+    }
+  }
+  const validGoods = new Set(gameSettings.content.goods.map((good) => good.id));
+  const goods = [...new Set((payload.goods ?? []).map((goodId) => goodId.trim()).filter(Boolean))].filter((goodId) =>
+    validGoods.has(goodId),
+  );
+  if ((payload.goods ?? []).length > 0 && goods.length === 0) {
+    return res.status(400).json({ error: "NO_VALID_GOODS" });
+  }
+  if (payload.mode === "cap" && (payload.capAmountPerTurn == null || payload.capAmountPerTurn <= 0)) {
+    return res.status(400).json({ error: "CAP_AMOUNT_REQUIRED" });
+  }
+  const sanctionId = randomUUID();
+  const sanction: MarketSanctionEntry = {
+    id: sanctionId,
+    initiatorCountryId: market.ownerCountryId,
+    direction: payload.direction,
+    targetType: payload.targetType,
+    targetId: payload.targetId,
+    goods,
+    mode: payload.mode,
+    capAmountPerTurn: payload.mode === "cap" ? round3(Math.max(0, Number(payload.capAmountPerTurn ?? 0))) : null,
+    startTurn: payload.startTurn ?? turnId,
+    durationTurns: payload.durationTurns,
+    enabled: payload.enabled ?? true,
+  };
+  gameSettings.markets.sanctionsById[sanctionId] = sanction;
+  savePersistentState();
+  return res.status(201).json({ sanction: (await enrichMarketSanctions([sanction]))[0] });
+});
+
+app.patch("/markets/:marketId/sanctions/:sanctionId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const sanctionId = String(req.params.sanctionId || "").trim();
+  const sanction = gameSettings.markets.sanctionsById[sanctionId];
+  if (!sanction || sanction.initiatorCountryId !== market.ownerCountryId) {
+    return res.status(404).json({ error: "SANCTION_NOT_FOUND" });
+  }
+  const parsed = marketSanctionPatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const payload = parsed.data;
+  const nextTargetType = payload.targetType ?? sanction.targetType;
+  const nextTargetId = payload.targetId ?? sanction.targetId;
+  if (nextTargetType === "country") {
+    const countryExists = await prisma.country.findUnique({ where: { id: nextTargetId }, select: { id: true } });
+    if (!countryExists) return res.status(404).json({ error: "TARGET_COUNTRY_NOT_FOUND" });
+  } else {
+    const targetMarket = getMarketById(nextTargetId);
+    if (!targetMarket) return res.status(404).json({ error: "TARGET_MARKET_NOT_FOUND" });
+  }
+  if (Array.isArray(payload.goods)) {
+    const validGoods = new Set(gameSettings.content.goods.map((good) => good.id));
+    const goods = [...new Set(payload.goods.map((goodId) => goodId.trim()).filter(Boolean))].filter((goodId) =>
+      validGoods.has(goodId),
+    );
+    if (payload.goods.length > 0 && goods.length === 0) {
+      return res.status(400).json({ error: "NO_VALID_GOODS" });
+    }
+    sanction.goods = goods;
+  }
+  sanction.direction = payload.direction ?? sanction.direction;
+  sanction.targetType = nextTargetType;
+  sanction.targetId = nextTargetId;
+  sanction.mode = payload.mode ?? sanction.mode;
+  sanction.startTurn = payload.startTurn ?? sanction.startTurn;
+  sanction.durationTurns = payload.durationTurns ?? sanction.durationTurns;
+  sanction.enabled = payload.enabled ?? sanction.enabled;
+  if (sanction.mode === "cap") {
+    const cap = payload.capAmountPerTurn ?? sanction.capAmountPerTurn;
+    if (cap == null || cap <= 0) {
+      return res.status(400).json({ error: "CAP_AMOUNT_REQUIRED" });
+    }
+    sanction.capAmountPerTurn = round3(Math.max(0, Number(cap)));
+  } else {
+    sanction.capAmountPerTurn = null;
+  }
+  savePersistentState();
+  return res.json({ sanction: (await enrichMarketSanctions([sanction]))[0] });
+});
+
+app.delete("/markets/:marketId/sanctions/:sanctionId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const sanctionId = String(req.params.sanctionId || "").trim();
+  const sanction = gameSettings.markets.sanctionsById[sanctionId];
+  if (!sanction || sanction.initiatorCountryId !== market.ownerCountryId) {
+    return res.status(404).json({ error: "SANCTION_NOT_FOUND" });
+  }
+  delete gameSettings.markets.sanctionsById[sanctionId];
+  savePersistentState();
+  return res.json({ ok: true });
 });
 
 app.get("/country/market-invites", async (req, res) => {
@@ -5990,6 +6397,23 @@ const gameSettingsSchema = z.object({
   markets: z
     .object({
       countryMarketByCountryId: z.record(z.string().trim().min(1).max(120)).optional(),
+      sanctionsById: z
+        .record(
+          z.object({
+            id: z.string().trim().min(1).max(120).optional(),
+            initiatorCountryId: z.string().trim().min(1).max(120),
+            direction: z.enum(["import", "export", "both"]),
+            targetType: z.enum(["country", "market"]),
+            targetId: z.string().trim().min(1).max(120),
+            goods: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
+            mode: z.enum(["ban", "cap"]),
+            capAmountPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).nullable().optional(),
+            startTurn: z.coerce.number().int().min(1),
+            durationTurns: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER),
+            enabled: z.boolean().optional(),
+          }),
+        )
+        .optional(),
     })
     .optional(),
   colonization: z
@@ -6843,6 +7267,9 @@ app.patch("/admin/game-settings", async (req, res) => {
         .map(([countryId, marketId]) => [countryId, normalizeMarketId(marketId)])
         .filter((row): row is [string, string] => Boolean(row[0] && row[1])),
     );
+  }
+  if (nextMarkets?.sanctionsById && typeof nextMarkets.sanctionsById === "object") {
+    gameSettings.markets.sanctionsById = normalizeMarketSanctionsMap(nextMarkets.sanctionsById);
   }
 
   const nextColonization = parsed.data.colonization;

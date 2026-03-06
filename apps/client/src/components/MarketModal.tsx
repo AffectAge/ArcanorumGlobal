@@ -2,7 +2,7 @@ import { Dialog } from "@headlessui/react";
 import * as echarts from "echarts";
 import type { EChartsType } from "echarts";
 import { motion } from "framer-motion";
-import { AlertTriangle, ArrowDownUp, BarChart3, Globe2, LineChart, Settings2, SlidersHorizontal, TrendingDown, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, BarChart3, Globe2, LineChart, Settings2, ShieldBan, SlidersHorizontal, TrendingDown, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -23,6 +23,7 @@ import { CurrentMarketMembershipModal } from "./CurrentMarketMembershipModal";
 import { MarketAlertsModal } from "./MarketAlertsModal";
 import { MarketInfrastructureModal } from "./MarketInfrastructureModal";
 import { MarketManagementModal } from "./MarketManagementModal";
+import { MarketSanctionsModal } from "./MarketSanctionsModal";
 import { Tooltip } from "./Tooltip";
 
 type Props = {
@@ -471,6 +472,7 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [pendingInviteActionId, setPendingInviteActionId] = useState<string | null>(null);
   const [managementOpen, setManagementOpen] = useState(false);
+  const [sanctionsOpen, setSanctionsOpen] = useState(false);
   const [membershipOpen, setMembershipOpen] = useState(false);
   const [selectedMarketId, setSelectedMarketId] = useState("");
   const [pendingJoin, setPendingJoin] = useState(false);
@@ -711,6 +713,15 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                     className="inline-flex h-9 items-center gap-2 rounded-lg border border-arc-accent/35 bg-arc-accent/15 px-3 text-xs font-semibold text-arc-accent"
                   >
                     <Settings2 size={13} /> Управление
+                  </button>
+                )}
+                {mode !== "global" && currentMarket && (
+                  <button
+                    type="button"
+                    onClick={() => setSanctionsOpen(true)}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-400/35 bg-rose-500/15 px-3 text-xs font-semibold text-rose-200"
+                  >
+                    <ShieldBan size={13} /> Санкции
                   </button>
                 )}
                 {mode !== "global" && currentMarket && (
@@ -1056,6 +1067,16 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
       <MarketManagementModal
         open={managementOpen}
         onClose={() => setManagementOpen(false)}
+        token={token}
+        countryId={countryId}
+        marketId={overview?.marketId ?? null}
+        onUpdated={() => {
+          void load();
+        }}
+      />
+      <MarketSanctionsModal
+        open={sanctionsOpen}
+        onClose={() => setSanctionsOpen(false)}
         token={token}
         countryId={countryId}
         marketId={overview?.marketId ?? null}

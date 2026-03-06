@@ -297,10 +297,15 @@ export function MarketManagementModal({ open, onClose, token, countryId, marketI
                 <div className="mb-2 text-sm font-semibold text-white/80">История исходящих приглашений</div>
                 <div className="space-y-1">
                   {outgoingInvites.map((invite) => (
-                    <div key={invite.id} className="flex items-center justify-between rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs">
+                    <div
+                      key={invite.id}
+                      className="flex items-center justify-between rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs"
+                    >
                       <div className="min-w-0">
                         <div className="truncate text-white/80">{invite.toCountryName ?? invite.toCountryId}</div>
-                        <div className="text-white/50">Статус: {invite.status} · Истекает: {new Date(invite.expiresAt).toLocaleDateString("ru-RU")}</div>
+                        <div className="text-white/50">
+                          Статус: {invite.status} · Истекает: {new Date(invite.expiresAt).toLocaleDateString("ru-RU")}
+                        </div>
                       </div>
                       {invite.status === "pending" ? (
                         <button
