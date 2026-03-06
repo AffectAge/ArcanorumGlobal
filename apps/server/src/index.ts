@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { Prisma, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import multer from "multer";
@@ -52,6 +52,7 @@ const env = {
   jwtSecret: process.env.JWT_SECRET ?? "dev_secret_change_me",
   serverStatus: (process.env.SERVER_STATUS as ServerStatus) ?? "online",
   redisUrl: process.env.REDIS_URL,
+  autoCleanupUploadsOnStart: process.env.AUTO_CLEANUP_UPLOADS_ON_START !== "false",
 };
 
 const uploadsRoot = resolve(__dirname, "../uploads");
@@ -317,19 +318,22 @@ let globalGoodOfferHistoryByResourceId: Record<string, number[]> = {};
 let globalGoodProductionFactHistoryByResourceId: Record<string, number[]> = {};
 let globalGoodProductionMaxHistoryByResourceId: Record<string, number[]> = {};
 let previousTradeInfraLoadByProvince: Record<string, number> = {};
-let latestMarketOverview: MarketOverviewState = {
-  turnId: 1,
-  demandByCountry: {},
-  offerByCountry: {},
-  demandGlobal: {},
-  offerGlobal: {},
-  infraByProvince: {},
-  alertsByCountry: {},
-  importsByCountryByCountryAndGood: {},
-  exportsByCountryByCountryAndGood: {},
-  importsByMarketByMarketAndGood: {},
-  exportsByMarketByMarketAndGood: {},
-};
+function createEmptyMarketOverviewState(nextTurnId: number): MarketOverviewState {
+  return {
+    turnId: Math.max(1, Math.floor(Number(nextTurnId) || 1)),
+    demandByCountry: {},
+    offerByCountry: {},
+    demandGlobal: {},
+    offerGlobal: {},
+    infraByProvince: {},
+    alertsByCountry: {},
+    importsByCountryByCountryAndGood: {},
+    exportsByCountryByCountryAndGood: {},
+    importsByMarketByMarketAndGood: {},
+    exportsByMarketByMarketAndGood: {},
+  };
+}
+let latestMarketOverview: MarketOverviewState = createEmptyMarketOverviewState(1);
 
 function round3(value: number): number {
   return Number(value.toFixed(3));
@@ -993,6 +997,120 @@ function normalizeNumberHistoryMap(input: unknown): Record<string, number[]> {
     normalized[nextKey] = values;
   }
   return normalized;
+}
+
+function normalizeNumberMapL2(input: unknown): Record<string, Record<string, number>> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, Record<string, number>> = {};
+  for (const [scopeId, rawValue] of Object.entries(source)) {
+    const key = scopeId.trim();
+    if (!key) continue;
+    normalized[key] = normalizeNumberMap(rawValue);
+  }
+  return normalized;
+}
+
+function normalizeNumberMapL3(input: unknown): Record<string, Record<string, Record<string, number>>> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, Record<string, Record<string, number>>> = {};
+  for (const [scopeId, rawGoods] of Object.entries(source)) {
+    const key = scopeId.trim();
+    if (!key || !rawGoods || typeof rawGoods !== "object") continue;
+    const goodsMap: Record<string, Record<string, number>> = {};
+    for (const [goodId, rawPartners] of Object.entries(rawGoods as Record<string, unknown>)) {
+      const goodKey = goodId.trim();
+      if (!goodKey) continue;
+      goodsMap[goodKey] = normalizeNumberMap(rawPartners);
+    }
+    normalized[key] = goodsMap;
+  }
+  return normalized;
+}
+
+function normalizeInfraOverviewMap(
+  input: unknown,
+): Record<string, { capacity: number; required: number; coverage: number }> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, { capacity: number; required: number; coverage: number }> = {};
+  for (const [provinceId, rawValue] of Object.entries(source)) {
+    const key = provinceId.trim();
+    if (!key || !rawValue || typeof rawValue !== "object") continue;
+    const row = rawValue as Record<string, unknown>;
+    const capacity =
+      typeof row.capacity === "number" && Number.isFinite(row.capacity) ? round3(Math.max(0, row.capacity)) : 0;
+    const required =
+      typeof row.required === "number" && Number.isFinite(row.required) ? round3(Math.max(0, row.required)) : 0;
+    const coverage =
+      typeof row.coverage === "number" && Number.isFinite(row.coverage)
+        ? round3(Math.max(0, row.coverage))
+        : required <= 0
+          ? 1
+          : round3(Math.max(0, Math.min(1, capacity / required)));
+    normalized[key] = { capacity, required, coverage };
+  }
+  return normalized;
+}
+
+function normalizeMarketOverviewAlertsMap(input: unknown): Record<string, MarketOverviewAlert[]> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, MarketOverviewAlert[]> = {};
+  for (const [countryId, rawAlerts] of Object.entries(source)) {
+    const key = countryId.trim();
+    if (!key || !Array.isArray(rawAlerts)) continue;
+    const alerts: MarketOverviewAlert[] = [];
+    for (const rawAlert of rawAlerts) {
+      if (!rawAlert || typeof rawAlert !== "object") continue;
+      const row = rawAlert as Record<string, unknown>;
+      const severity = row.severity === "critical" ? "critical" : "warning";
+      const kindRaw = typeof row.kind === "string" ? row.kind : "";
+      const kind: MarketOverviewAlert["kind"] =
+        kindRaw === "critical-deficit" || kindRaw === "infra-overload" || kindRaw === "building-inactive"
+          ? kindRaw
+          : "critical-deficit";
+      const message = typeof row.message === "string" ? row.message.trim() : "";
+      if (!message) continue;
+      alerts.push({
+        id: typeof row.id === "string" && row.id.trim() ? row.id : randomUUID(),
+        severity,
+        kind,
+        message,
+        provinceId: typeof row.provinceId === "string" ? row.provinceId : undefined,
+        buildingId: typeof row.buildingId === "string" ? row.buildingId : undefined,
+        instanceId: typeof row.instanceId === "string" ? row.instanceId : undefined,
+        goodId: typeof row.goodId === "string" ? row.goodId : undefined,
+      });
+    }
+    normalized[key] = alerts;
+  }
+  return normalized;
+}
+
+function normalizeMarketOverviewState(input: unknown, fallbackTurnId: number): MarketOverviewState {
+  if (!input || typeof input !== "object") {
+    return createEmptyMarketOverviewState(fallbackTurnId);
+  }
+  const row = input as Partial<MarketOverviewState>;
+  const nextTurnId =
+    typeof row.turnId === "number" && Number.isFinite(row.turnId) && row.turnId >= 1
+      ? Math.floor(row.turnId)
+      : Math.max(1, Math.floor(Number(fallbackTurnId) || 1));
+  return {
+    turnId: nextTurnId,
+    demandByCountry: normalizeNumberMapL2(row.demandByCountry),
+    offerByCountry: normalizeNumberMapL2(row.offerByCountry),
+    demandGlobal: normalizeNumberMap(row.demandGlobal),
+    offerGlobal: normalizeNumberMap(row.offerGlobal),
+    infraByProvince: normalizeInfraOverviewMap(row.infraByProvince),
+    alertsByCountry: normalizeMarketOverviewAlertsMap(row.alertsByCountry),
+    importsByCountryByCountryAndGood: normalizeNumberMapL3(row.importsByCountryByCountryAndGood),
+    exportsByCountryByCountryAndGood: normalizeNumberMapL3(row.exportsByCountryByCountryAndGood),
+    importsByMarketByMarketAndGood: normalizeNumberMapL3(row.importsByMarketByMarketAndGood),
+    exportsByMarketByMarketAndGood: normalizeNumberMapL3(row.exportsByMarketByMarketAndGood),
+  };
 }
 
 function normalizeMarketTradePolicyEntry(input: unknown): MarketTradePolicyEntry {
@@ -3212,6 +3330,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     worldBase: unknown;
     ordersByTurn: unknown;
     resolveReadyByTurn: unknown;
+    marketOverview: unknown;
   }>;
 
   if (typeof parsed.turnId === "number" && Number.isFinite(parsed.turnId) && parsed.turnId >= 1) {
@@ -3502,6 +3621,12 @@ function parseAndApplyPersistentState(input: unknown): boolean {
       ? (parsed.worldBase as { previousTradeInfraLoadByProvince?: unknown }).previousTradeInfraLoadByProvince
       : undefined,
   );
+  latestMarketOverview = normalizeMarketOverviewState(
+    parsed.worldBase && typeof parsed.worldBase === "object"
+      ? (parsed.worldBase as { latestMarketOverview?: unknown }).latestMarketOverview
+      : parsed.marketOverview,
+    turnId,
+  );
 
   ordersByTurn.clear();
   if (Array.isArray(parsed.ordersByTurn)) {
@@ -3566,6 +3691,7 @@ async function persistStateToDb(): Promise<void> {
       ...worldBase,
       turnId,
       previousTradeInfraLoadByProvince,
+      latestMarketOverview,
     },
     ordersByTurn: serializeOrdersByTurn(),
     resolveReadyByTurn: serializeResolveReadyByTurn(),
@@ -4894,12 +5020,135 @@ function removeUploadedFile(file?: Express.Multer.File): void {
   }
 }
 
-function removeUploadedByUrl(url?: string | null): void {
-  if (!url || !url.startsWith("/uploads/")) {
+function extractUploadRelativePathFromUrl(url?: string | null): string | null {
+  if (!url) return null;
+  const raw = String(url).trim();
+  if (!raw) return null;
+  const withoutHash = raw.split("#")[0] ?? "";
+  const withoutQuery = withoutHash.split("?")[0] ?? "";
+  if (withoutQuery.startsWith("/uploads/")) {
+    return withoutQuery.replace(/^\/uploads\//, "").replace(/\\/g, "/");
+  }
+  try {
+    const parsed = new URL(withoutQuery);
+    if (!parsed.pathname.startsWith("/uploads/")) {
+      return null;
+    }
+    return parsed.pathname.replace(/^\/uploads\//, "").replace(/\\/g, "/");
+  } catch {
+    return null;
+  }
+}
+
+function makeVersionedUploadUrl(relativePath: string): string {
+  const clean = relativePath.replace(/^\/+/, "");
+  return `/uploads/${clean}?v=${Date.now()}`;
+}
+
+function collectUploadPathsFromUnknown(input: unknown, sink: Set<string>): void {
+  if (input == null) return;
+  if (typeof input === "string") {
+    const rel = extractUploadRelativePathFromUrl(input);
+    if (rel) sink.add(rel);
+    return;
+  }
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      collectUploadPathsFromUnknown(item, sink);
+    }
+    return;
+  }
+  if (typeof input !== "object") {
+    return;
+  }
+  for (const value of Object.values(input as Record<string, unknown>)) {
+    collectUploadPathsFromUnknown(value, sink);
+  }
+}
+
+function listUploadFilesRecursively(root: string): string[] {
+  if (!existsSync(root)) {
+    return [];
+  }
+  const files: string[] = [];
+  const walk = (current: string, relativePrefix = "") => {
+    const entries = readdirSync(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const rel = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+      const abs = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs, rel);
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(rel.replace(/\\/g, "/"));
+      }
+    }
+  };
+  walk(root);
+  return files;
+}
+
+async function cleanupOrphanUploadsOnServerStart(): Promise<void> {
+  if (!env.autoCleanupUploadsOnStart) {
     return;
   }
 
-  const rel = url.replace(/^\/uploads\//, "");
+  try {
+    const referenced = new Set<string>();
+    collectUploadPathsFromUnknown(worldBase, referenced);
+    collectUploadPathsFromUnknown(gameSettings, referenced);
+    const countries = await prisma.country.findMany({
+      select: {
+        flagUrl: true,
+        crestUrl: true,
+      },
+    });
+    for (const country of countries) {
+      const flagRel = extractUploadRelativePathFromUrl(country.flagUrl);
+      if (flagRel) referenced.add(flagRel);
+      const crestRel = extractUploadRelativePathFromUrl(country.crestUrl);
+      if (crestRel) referenced.add(crestRel);
+    }
+
+    const uploadFiles = listUploadFilesRecursively(uploadsRoot);
+    const orphanFiles = uploadFiles.filter((path) => !referenced.has(path));
+    if (uploadFiles.length > 0 && referenced.size === 0) {
+      console.warn("[uploads] Startup cleanup skipped: no references detected.");
+      return;
+    }
+    const orphanRatio = uploadFiles.length > 0 ? orphanFiles.length / uploadFiles.length : 0;
+    if (orphanFiles.length > 10 && orphanRatio > 0.8) {
+      console.warn(
+        `[uploads] Startup cleanup skipped: suspicious orphan ratio ${Math.round(orphanRatio * 100)}% (${orphanFiles.length}/${uploadFiles.length}).`,
+      );
+      return;
+    }
+    if (orphanFiles.length === 0) {
+      return;
+    }
+
+    let removed = 0;
+    for (const rel of orphanFiles) {
+      try {
+        unlinkSync(resolve(uploadsRoot, rel));
+        removed += 1;
+      } catch {
+        // Ignore per-file delete failures and continue cleanup.
+      }
+    }
+
+    console.log(
+      `[uploads] Startup cleanup removed ${removed}/${orphanFiles.length} orphan files (tracked=${referenced.size}).`,
+    );
+  } catch (error) {
+    console.error("[uploads] Startup cleanup failed:", error);
+  }
+}
+
+function removeUploadedByUrl(url?: string | null): void {
+  const rel = extractUploadRelativePathFromUrl(url);
+  if (!rel) return;
   const absolute = resolve(uploadsRoot, rel);
   try {
     unlinkSync(absolute);
@@ -5832,7 +6081,7 @@ app.patch("/markets/:marketId", upload.single("marketLogo"), async (req, res) =>
   }
   if (logoFile) {
     const previous = market.logoUrl;
-    market.logoUrl = `/uploads/markets/${logoFile.filename}`;
+    market.logoUrl = makeVersionedUploadUrl(`markets/${logoFile.filename}`);
     if (previous) {
       removeUploadedByUrl(previous);
     }
@@ -6580,7 +6829,7 @@ app.patch("/admin/civilopedia/image", upload.single("civilopediaImage"), async (
     removeUploadedFile(file);
     return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "64x64" });
   }
-  return res.json({ imageUrl: `/uploads/civilopedia/${file.filename}` });
+  return res.json({ imageUrl: makeVersionedUploadUrl(`civilopedia/${file.filename}`) });
 });
 
 app.patch("/admin/civilopedia/inline-image", upload.single("civilopediaImage"), async (req, res) => {
@@ -6597,7 +6846,7 @@ app.patch("/admin/civilopedia/inline-image", upload.single("civilopediaImage"), 
     removeUploadedFile(file);
     return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "64x64" });
   }
-  return res.json({ imageUrl: `/uploads/civilopedia/${file.filename}` });
+  return res.json({ imageUrl: makeVersionedUploadUrl(`civilopedia/${file.filename}`) });
 });
 
 app.patch(
@@ -6646,7 +6895,7 @@ app.patch(
     for (const [key, file] of Object.entries(nextFiles) as Array<[keyof GameSettings["resourceIcons"], Express.Multer.File | undefined]>) {
       if (!file) continue;
       const previousUrl = gameSettings.resourceIcons[key];
-      gameSettings.resourceIcons[key] = `/uploads/resource-icons/${file.filename}`;
+      gameSettings.resourceIcons[key] = makeVersionedUploadUrl(`resource-icons/${file.filename}`);
       if (previousUrl) {
         removeUploadedByUrl(previousUrl);
       }
@@ -6688,7 +6937,7 @@ app.patch("/admin/ui-background", upload.single("uiBackground"), async (req, res
   }
 
   const previousUrl = gameSettings.map.backgroundImageUrl;
-  gameSettings.map.backgroundImageUrl = `/uploads/ui-backgrounds/${file.filename}`;
+  gameSettings.map.backgroundImageUrl = makeVersionedUploadUrl(`ui-backgrounds/${file.filename}`);
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
   }
@@ -6968,7 +7217,7 @@ app.patch("/admin/content/entries/:kind/:entryId/logo", upload.single("cultureLo
   const previousUrl = items[index].logoUrl;
   items[index] = {
     ...items[index],
-    logoUrl: `/uploads/${kind}/${file.filename}`,
+    logoUrl: makeVersionedUploadUrl(`${kind}/${file.filename}`),
   };
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
@@ -7033,7 +7282,7 @@ app.patch("/admin/content/entries/races/:entryId/portraits/:slot", upload.single
   const previousUrl = gameSettings.content.races[index][key] ?? null;
   gameSettings.content.races[index] = {
     ...gameSettings.content.races[index],
-    [key]: `/uploads/races/${file.filename}`,
+    [key]: makeVersionedUploadUrl(`races/${file.filename}`),
   };
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
@@ -7194,7 +7443,7 @@ app.patch("/admin/content/cultures/:cultureId/logo", upload.single("cultureLogo"
   const previousUrl = gameSettings.content.cultures[index].logoUrl;
   gameSettings.content.cultures[index] = {
     ...gameSettings.content.cultures[index],
-    logoUrl: `/uploads/cultures/${file.filename}`,
+    logoUrl: makeVersionedUploadUrl(`cultures/${file.filename}`),
   };
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
@@ -8375,10 +8624,10 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
     data.ignoreUntilTurn = parsed.data.ignoreUntilTurn === 0 ? null : parsed.data.ignoreUntilTurn;
   }
   if (flagFile) {
-    data.flagUrl = `/uploads/flags/${flagFile.filename}`;
+    data.flagUrl = makeVersionedUploadUrl(`flags/${flagFile.filename}`);
   }
   if (crestFile) {
-    data.crestUrl = `/uploads/crests/${crestFile.filename}`;
+    data.crestUrl = makeVersionedUploadUrl(`crests/${crestFile.filename}`);
   }
 
   try {
@@ -8587,10 +8836,10 @@ app.patch("/country/customization", upload.fields([{ name: "flag", maxCount: 1 }
     data.color = normalizedColor;
   }
   if (flagFile) {
-    data.flagUrl = `/uploads/flags/${flagFile.filename}`;
+    data.flagUrl = makeVersionedUploadUrl(`flags/${flagFile.filename}`);
   }
   if (crestFile) {
-    data.crestUrl = `/uploads/crests/${crestFile.filename}`;
+    data.crestUrl = makeVersionedUploadUrl(`crests/${crestFile.filename}`);
   }
 
   try {
@@ -8741,8 +8990,8 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
       data: {
         name: countryName,
         color: countryColor,
-        flagUrl: flagFile ? `/uploads/flags/${flagFile.filename}` : null,
-        crestUrl: crestFile ? `/uploads/crests/${crestFile.filename}` : null,
+        flagUrl: flagFile ? makeVersionedUploadUrl(`flags/${flagFile.filename}`) : null,
+        crestUrl: crestFile ? makeVersionedUploadUrl(`crests/${crestFile.filename}`) : null,
         passwordHash,
         isAdmin: isAdminCountry,
         isRegistrationApproved: !requiresApproval,
@@ -9330,6 +9579,7 @@ wss.on("connection", (socket) => {
 async function startServer(): Promise<void> {
   await ensureWorldDeltaLogTable();
   await loadPersistentState();
+  await cleanupOrphanUploadsOnServerStart();
   if (await migratePersistedMarketNamesToReadable()) {
     savePersistentState();
   }

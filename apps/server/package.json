@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "start": "node scripts/start-with-restart.mjs",
+    "start:raw": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:push": "prisma db push --skip-generate",
     "lint": "echo lint skipped",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "tiles:build": "node scripts/build-mvt-tiles.mjs"
+    "tiles:build": "node scripts/build-mvt-tiles.mjs",
+    "uploads:cleanup-orphans": "tsx scripts/cleanup-orphan-uploads.ts"
   },
   "dependencies": {
     "@arcanorum/shared": "0.1.0",
