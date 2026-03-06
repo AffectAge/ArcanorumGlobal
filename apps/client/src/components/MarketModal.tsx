@@ -98,29 +98,6 @@ const getRelativeDeltaPct = (history: number[]): number => {
   return ((curr - prev) / prev) * 100;
 };
 
-const PARTNER_COLORS = [
-  "#22d3ee",
-  "#34d399",
-  "#60a5fa",
-  "#f59e0b",
-  "#f472b6",
-  "#a78bfa",
-  "#fb7185",
-  "#84cc16",
-  "#f97316",
-  "#38bdf8",
-  "#facc15",
-  "#4ade80",
-];
-
-const colorByPartnerName = (name: string): string => {
-  let hash = 0;
-  for (let i = 0; i < name.length; i += 1) {
-    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  }
-  return PARTNER_COLORS[hash % PARTNER_COLORS.length] ?? "#94a3b8";
-};
-
 const buildTop10WithOthers = (input: Record<string, number>, labelByCountryId: Record<string, string>) => {
   const rows = Object.entries(input)
     .map(([countryId, value]) => ({ countryId, value: Math.max(0, Number(value)) }))
@@ -160,17 +137,11 @@ function TradePartnersChart({
     chart.setOption({
       animationDuration: 350,
       backgroundColor: "transparent",
-      legend: {
-        type: "scroll",
-        orient: "vertical",
-        right: 2,
-        top: 8,
-        bottom: 8,
-        textStyle: {
-          color: "rgba(226,232,240,0.78)",
-          fontSize: 10,
-          fontWeight: 600,
-        },
+      grid: {
+        left: 18,
+        right: 12,
+        top: 18,
+        bottom: 64,
       },
       tooltip: {
         trigger: "item",
@@ -179,37 +150,59 @@ function TradePartnersChart({
         borderColor: "rgba(148,163,184,0.35)",
         borderWidth: 1,
         textStyle: { color: "#e2e8f0", fontSize: 11, fontWeight: 600 },
-        formatter: (params: { name: string; value: number; percent: number }) =>
-          `${params.name}: ${formatCompact(Number(params.value ?? 0))} (${Number(params.percent ?? 0).toFixed(1)}%)`,
+        formatter: (params: { name: string; value: number }) => `${params.name}: ${formatCompact(Number(params.value ?? 0))}`,
+      },
+      xAxis: {
+        type: "category",
+        data: data.map((item) => item.name),
+        axisLabel: {
+          color: "rgba(226,232,240,0.82)",
+          fontSize: 10,
+          fontWeight: 600,
+          width: 72,
+          overflow: "truncate",
+          interval: 0,
+          rotate: 22,
+        },
+        axisTick: { show: false },
+        axisLine: { show: false },
+      },
+      yAxis: {
+        type: "value",
+        axisLabel: {
+          color: "rgba(226,232,240,0.6)",
+          fontSize: 10,
+          formatter: (value: number) => formatCompact(Number(value ?? 0)),
+        },
+        splitLine: {
+          show: true,
+          lineStyle: { color: "rgba(148,163,184,0.14)" },
+        },
       },
       series: [
         {
-          type: "pie",
-          radius: ["38%", "68%"],
-          center: ["34%", "50%"],
-          avoidLabelOverlap: true,
-          selectedMode: false,
-          label: {
-            show: false,
-          },
-          labelLine: {
-            show: false,
-          },
-          data: data.map((item, idx) => ({
-            name: item.name,
+          type: "bar",
+          data: data.map((item) => ({
             value: item.value,
             itemStyle: {
-              color: idx === data.length - 1 && item.name === "Другие" ? "rgba(148,163,184,0.55)" : colorByPartnerName(item.name),
-              opacity: idx === data.length - 1 && item.name === "Другие" ? 0.9 : 1,
+              color: item.name === "Другие" ? "rgba(148,163,184,0.55)" : color,
             },
           })),
+          barMaxWidth: 22,
           itemStyle: {
-            borderColor: "rgba(0,0,0,0.35)",
-            borderWidth: 1,
+            borderRadius: [4, 4, 0, 0],
+          },
+          label: {
+            show: true,
+            position: "top",
+            color: "rgba(226,232,240,0.82)",
+            fontSize: 10,
+            fontWeight: 700,
+            formatter: (p: { value: number }) => formatCompact(Number(p.value ?? 0)),
           },
           emphasis: {
-            scale: true,
-            scaleSize: 5,
+            focus: "series",
+            itemStyle: { opacity: 0.92 },
           },
         },
       ],

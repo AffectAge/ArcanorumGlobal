@@ -2078,6 +2078,16 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     if (!map[scopeId][goodId]) map[scopeId][goodId] = {};
     map[scopeId][goodId][partnerId] = round3((map[scopeId][goodId][partnerId] ?? 0) + value);
   };
+  const getScopeGoodTradeTotal = (
+    map: Record<string, Record<string, Record<string, number>>>,
+    scopeId: string,
+    goodId: string,
+  ): number => {
+    const byPartner = map[scopeId]?.[goodId] ?? {};
+    return round3(
+      Object.values(byPartner).reduce((sum, value) => sum + Math.max(0, Number(value ?? 0)), 0),
+    );
+  };
   const pushHistory = (map: Record<string, number[]>, key: string, value: number): void => {
     const prev = map[key] ?? [];
     map[key] = [...prev, round3(value)].slice(-MARKET_PRICE_HISTORY_LENGTH);
@@ -2646,11 +2656,15 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       const demand = Number(demandRequestedByCountry[marketId]?.[goodId] ?? 0);
       const offerFact = Number(productionByCountry[marketId]?.[goodId] ?? 0);
       const marketVolume = Number(marketVolumeByCountry[marketId]?.[goodId] ?? 0);
-      const offer = offerFact + marketVolume;
+      const importsTotal = getScopeGoodTradeTotal(importsByMarketByMarketAndGood, marketId, goodId);
+      const exportsTotal = getScopeGoodTradeTotal(exportsByMarketByMarketAndGood, marketId, goodId);
+      const netTrade = round3(importsTotal - exportsTotal);
+      const offer = Math.max(0, round3(offerFact + marketVolume + netTrade));
+      const adjustedWarehouse = Math.max(0, round3(marketVolume + netTrade));
       const nextPrice = updatePrice(current, demand, offer, getPriceMeta(goodId));
       countryGoodPrices[marketId][goodId] = nextPrice;
       marketRecord.priceByResourceId[goodId] = nextPrice;
-      marketRecord.warehouseByResourceId[goodId] = round3(marketVolume);
+      marketRecord.warehouseByResourceId[goodId] = adjustedWarehouse;
       pushHistory(marketRecord.priceHistoryByResourceId, goodId, nextPrice);
       pushHistory(marketRecord.demandHistoryByResourceId, goodId, demand);
       pushHistory(marketRecord.offerHistoryByResourceId, goodId, offer);
@@ -2695,7 +2709,10 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     for (const goodId of Object.keys(demand)) {
       const d = Number(demand[goodId] ?? 0);
       if (d <= 0) continue;
-      const o = Number(offerProduced[goodId] ?? 0) + Number(offerStock[goodId] ?? 0);
+      const importsTotal = getScopeGoodTradeTotal(importsByMarketByMarketAndGood, marketId, goodId);
+      const exportsTotal = getScopeGoodTradeTotal(exportsByMarketByMarketAndGood, marketId, goodId);
+      const netTrade = round3(importsTotal - exportsTotal);
+      const o = Math.max(0, Number(offerProduced[goodId] ?? 0) + Number(offerStock[goodId] ?? 0) + netTrade);
       const coverage = d > 0 ? o / d : 1;
       if (coverage < 0.5) {
         pushCountryAlert(countryId, {
@@ -2717,7 +2734,10 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     for (const goodId of keys) {
       const produced = Number(productionByCountry[countryId]?.[goodId] ?? 0);
       const stock = Number(marketVolumeByCountry[countryId]?.[goodId] ?? 0);
-      offerByCountry[countryId][goodId] = round3(produced + stock);
+      const importsTotal = getScopeGoodTradeTotal(importsByMarketByMarketAndGood, countryId, goodId);
+      const exportsTotal = getScopeGoodTradeTotal(exportsByMarketByMarketAndGood, countryId, goodId);
+      const netTrade = round3(importsTotal - exportsTotal);
+      offerByCountry[countryId][goodId] = round3(Math.max(0, produced + stock + netTrade));
     }
   }
   const offerGlobal: Record<string, number> = {};
