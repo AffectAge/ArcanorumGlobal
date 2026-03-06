@@ -237,7 +237,7 @@ export function AdminPanel({ open, token, currentCountryId, onClose, onSessionCo
     } catch (err) {
       const msg = err instanceof Error ? err.message : "COUNTRY_UPDATE_FAILED";
       if (msg === "IMAGE_DIMENSIONS_TOO_LARGE") {
-        toast.error("Изображение должно быть максимум 256x256");
+        toast.error("Проверьте формат: флаг 192x128 (3:2), герб 128x192 (2:3)");
       } else {
         toast.error("Не удалось обновить страну");
       }

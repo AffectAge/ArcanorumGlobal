@@ -67,12 +67,20 @@ function DucatValue({ value, iconUrl, className = "" }: { value: number; iconUrl
   );
 }
 
-async function isImageWithinMaxSize(file: File, maxSize = 256): Promise<boolean> {
+async function isImageWithinRule(
+  file: File,
+  rule: { maxWidth: number; maxHeight: number; ratioWidth: number; ratioHeight: number },
+): Promise<boolean> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const ok = img.width <= maxSize && img.height <= maxSize;
+      const ratio = img.width / Math.max(1, img.height);
+      const targetRatio = rule.ratioWidth / rule.ratioHeight;
+      const ok =
+        img.width <= rule.maxWidth &&
+        img.height <= rule.maxHeight &&
+        Math.abs(ratio - targetRatio) <= 0.01;
       URL.revokeObjectURL(url);
       resolve(ok);
     };
@@ -84,7 +92,17 @@ async function isImageWithinMaxSize(file: File, maxSize = 256): Promise<boolean>
   });
 }
 
-function FilePicker({ label, file, onChange }: { label: string; file: File | null; onChange: (file: File | null) => void }) {
+function FilePicker({
+  label,
+  file,
+  hint,
+  onChange,
+}: {
+  label: string;
+  file: File | null;
+  hint: string;
+  onChange: (file: File | null) => void;
+}) {
   return (
     <div>
       <label className="mb-1 block text-xs text-slate-300">{label}</label>
@@ -93,7 +111,7 @@ function FilePicker({ label, file, onChange }: { label: string; file: File | nul
         <span className="truncate">{file ? file.name : "Выбрать изображение"}</span>
         <input type="file" accept="image/*" className="hidden" onChange={(e) => onChange(e.target.files?.[0] ?? null)} />
       </label>
-      <p className="mt-1 text-xs text-slate-500">До 4MB, максимум 256x256</p>
+      <p className="mt-1 text-xs text-slate-500">{hint}</p>
     </div>
   );
 }
@@ -206,12 +224,12 @@ export function CountryCustomizationModal({ open, token, country, currentDucats,
       return;
     }
 
-    if (flagFile && !(await isImageWithinMaxSize(flagFile))) {
-      toast.error("Флаг должен быть максимум 256x256");
+    if (flagFile && !(await isImageWithinRule(flagFile, { maxWidth: 192, maxHeight: 128, ratioWidth: 3, ratioHeight: 2 }))) {
+      toast.error("Флаг: максимум 192x128, соотношение 3:2");
       return;
     }
-    if (crestFile && !(await isImageWithinMaxSize(crestFile))) {
-      toast.error("Герб должен быть максимум 256x256");
+    if (crestFile && !(await isImageWithinRule(crestFile, { maxWidth: 128, maxHeight: 192, ratioWidth: 2, ratioHeight: 3 }))) {
+      toast.error("Герб: максимум 128x192, соотношение 2:3");
       return;
     }
 
@@ -239,7 +257,7 @@ export function CountryCustomizationModal({ open, token, country, currentDucats,
       if (code === "INSUFFICIENT_DUCATS") {
         toast.error("Недостаточно дукатов");
       } else if (code === "IMAGE_DIMENSIONS_TOO_LARGE") {
-        toast.error("Изображение должно быть максимум 256x256");
+        toast.error("Проверьте формат: флаг 192x128 (3:2), герб 128x192 (2:3)");
       } else if (code === "FILE_TOO_LARGE") {
         toast.error("Файл слишком большой (до 4MB)");
       } else if (code === "ONLY_IMAGES") {
@@ -315,8 +333,18 @@ export function CountryCustomizationModal({ open, token, country, currentDucats,
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <FilePicker label="Новый флаг" file={flagFile} onChange={setFlagFile} />
-                <FilePicker label="Новый герб" file={crestFile} onChange={setCrestFile} />
+                <FilePicker
+                  label="Новый флаг"
+                  file={flagFile}
+                  hint="До 4MB, максимум 192x128, соотношение 3:2"
+                  onChange={setFlagFile}
+                />
+                <FilePicker
+                  label="Новый герб"
+                  file={crestFile}
+                  hint="До 4MB, максимум 128x192, соотношение 2:3"
+                  onChange={setCrestFile}
+                />
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">

@@ -226,7 +226,7 @@ export function TopBar({
             aria-label="Открыть детали страны"
           >
             <img src={flagUrl || "/placeholder-flag.svg"} alt="flag" className="h-8 w-12 rounded object-cover" />
-            <img src={crestUrl || "/placeholder-crest.svg"} alt="crest" className="h-8 w-8 rounded-full object-cover" />
+            <img src={crestUrl || "/placeholder-crest.svg"} alt="crest" className="h-8 w-[1.333rem] rounded object-cover" />
             <div className="font-display text-xl tracking-wide">{countryName}</div>
           </button>
           <AnimatePresence>

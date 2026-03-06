@@ -74,6 +74,8 @@ const contentUploadDirs = {
   industries: resolve(uploadsRoot, "industries"),
   technologies: resolve(uploadsRoot, "technologies"),
 } as const;
+const FLAG_IMAGE_RULE = { maxWidth: 192, maxHeight: 128, ratioWidth: 3, ratioHeight: 2 } as const;
+const CREST_IMAGE_RULE = { maxWidth: 128, maxHeight: 192, ratioWidth: 2, ratioHeight: 3 } as const;
 mkdirSync(flagsDir, { recursive: true });
 mkdirSync(crestsDir, { recursive: true });
 mkdirSync(marketsDir, { recursive: true });
@@ -5154,6 +5156,20 @@ function validateImageDimensions(file: Express.Multer.File, maxSize = 256): bool
   return width > 0 && height > 0 && width <= maxSize && height <= maxSize;
 }
 
+function validateImageRule(
+  file: Express.Multer.File,
+  rule: { maxWidth: number; maxHeight: number; ratioWidth: number; ratioHeight: number },
+): boolean {
+  const dimensions = imageSize(readFileSync(file.path));
+  const width = Number(dimensions.width ?? 0);
+  const height = Number(dimensions.height ?? 0);
+  if (width <= 0 || height <= 0) return false;
+  if (width > rule.maxWidth || height > rule.maxHeight) return false;
+  const expected = rule.ratioWidth / rule.ratioHeight;
+  const actual = width / height;
+  return Math.abs(actual - expected) <= 0.01;
+}
+
 function readProvinceId(properties: Record<string, unknown> | undefined) {
   const raw = properties?.id ?? properties?.ID_1 ?? properties?.adm1_code ?? properties?.name;
   return raw == null ? "" : String(raw);
@@ -8754,16 +8770,20 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
   const flagFile = files?.flag?.[0];
   const crestFile = files?.crest?.[0];
 
-  if (flagFile && !validateImageDimensions(flagFile)) {
+  if (flagFile && !validateImageRule(flagFile, FLAG_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "192x128", ratio: "3:2" });
   }
 
-  if (crestFile && !validateImageDimensions(crestFile)) {
+  if (crestFile && !validateImageRule(crestFile, CREST_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "128x192", ratio: "2:3" });
   }
 
   const data: { name?: string; color?: string; isAdmin?: boolean; ignoreUntilTurn?: number | null; flagUrl?: string | null; crestUrl?: string | null } = {};
@@ -8928,16 +8948,20 @@ app.patch("/country/customization", upload.fields([{ name: "flag", maxCount: 1 }
   const flagFile = files?.flag?.[0];
   const crestFile = files?.crest?.[0];
 
-  if (flagFile && !validateImageDimensions(flagFile)) {
+  if (flagFile && !validateImageRule(flagFile, FLAG_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "192x128", ratio: "3:2" });
   }
 
-  if (crestFile && !validateImageDimensions(crestFile)) {
+  if (crestFile && !validateImageRule(crestFile, CREST_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "128x192", ratio: "2:3" });
   }
 
   const normalizedName = parsed.data.countryName?.trim();
@@ -9123,16 +9147,20 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
   const flagFile = files?.flag?.[0];
   const crestFile = files?.crest?.[0];
 
-  if (flagFile && !validateImageDimensions(flagFile)) {
+  if (flagFile && !validateImageRule(flagFile, FLAG_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "192x128", ratio: "3:2" });
   }
 
-  if (crestFile && !validateImageDimensions(crestFile)) {
+  if (crestFile && !validateImageRule(crestFile, CREST_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "128x192", ratio: "2:3" });
   }
 
   const { countryName, countryColor, password } = parsed.data;
