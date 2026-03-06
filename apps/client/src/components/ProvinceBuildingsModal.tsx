@@ -1061,65 +1061,6 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
             </div>
           </div>
 
-          {marketOverview && (
-            <section className="rounded-xl border border-white/10 bg-black/25 p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-xs uppercase tracking-wide text-white/45">
-                  Рынок: {marketOverview.marketId}
-                </div>
-                <div className="text-[11px] text-white/60">Товаров: {marketOverview.goods.length}</div>
-              </div>
-              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {marketTopDeficitGoods.map((row) => (
-                  <div key={`market-good-${row.goodId}`} className="rounded-lg border border-white/10 bg-black/35 px-2 py-1.5 text-[11px] text-white/70">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-white/85">{row.goodName}</span>
-                      <span className={row.countryCoveragePct < 50 ? "font-bold text-red-300" : "font-semibold text-emerald-300"}>
-                        {Math.round(row.countryCoveragePct)}%
-                      </span>
-                    </div>
-                    <div className="mt-1 text-white/50">
-                      Цена: {formatCompact(row.countryPrice)} | Глоб: {formatCompact(row.globalPrice)}
-                    </div>
-                    <div className="text-white/45">
-                      Спрос/предл: {formatCompact(row.countryDemand)} / {formatCompact(row.countryOffer)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <div className="rounded-lg border border-white/10 bg-black/35 p-2">
-                  <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Инфраструктура провинций</div>
-                  <div className="arc-scrollbar max-h-28 space-y-1 overflow-auto pr-1">
-                    {infraRows.length === 0 && <div className="text-[11px] text-white/45">Нет данных</div>}
-                    {infraRows.map((row) => (
-                      <div key={`infra-${row.provinceId}`} className="flex items-center justify-between rounded-md border border-white/10 bg-black/30 px-2 py-1 text-[11px]">
-                        <span className="text-white/70">{row.provinceId}</span>
-                        <span className={row.coverage < 1 ? "font-bold text-amber-300" : "font-semibold text-emerald-300"}>
-                          {Math.round(row.coverage * 100)}%
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-white/10 bg-black/35 p-2">
-                  <div className="mb-1 text-[11px] uppercase tracking-wide text-white/45">Алерты</div>
-                  <div className="arc-scrollbar max-h-28 space-y-1 overflow-auto pr-1">
-                    {(marketOverview.alerts ?? []).length === 0 && <div className="text-[11px] text-white/45">Нет алертов</div>}
-                    {(marketOverview.alerts ?? []).map((alert) => (
-                      <div key={alert.id} className={`rounded-md border px-2 py-1 text-[11px] ${alert.severity === "critical" ? "border-red-400/40 bg-red-500/10 text-red-200" : "border-amber-400/40 bg-amber-500/10 text-amber-200"}`}>
-                        <div className="inline-flex items-center gap-1">
-                          <AlertTriangle size={11} />
-                          <span className="font-semibold">{alert.message}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
           <div className="arc-scrollbar grid min-h-0 grid-cols-1 gap-3 overflow-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
             {filteredCards.map((c) => (
               (() => {

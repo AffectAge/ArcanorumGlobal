@@ -174,6 +174,15 @@ export type MarketOverviewResponse = {
   countryId: string;
   marketId: string;
   goods: MarketOverviewItem[];
+  tradeByGood?: Record<
+    string,
+    {
+      countryImportsByCountry?: Record<string, number>;
+      countryExportsByCountry?: Record<string, number>;
+      globalImportsByMarket?: Record<string, number>;
+      globalExportsByMarket?: Record<string, number>;
+    }
+  >;
   infraByProvince: Record<string, { capacity: number; required: number; coverage: number }>;
   sharedInfrastructureByMarket?: Array<{
     marketId: string;

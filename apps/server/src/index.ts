@@ -325,6 +325,10 @@ let latestMarketOverview: MarketOverviewState = {
   offerGlobal: {},
   infraByProvince: {},
   alertsByCountry: {},
+  importsByCountryByCountryAndGood: {},
+  exportsByCountryByCountryAndGood: {},
+  importsByMarketByMarketAndGood: {},
+  exportsByMarketByMarketAndGood: {},
 };
 
 function round3(value: number): number {
@@ -811,6 +815,10 @@ type MarketOverviewState = {
   offerGlobal: Record<string, number>;
   infraByProvince: Record<string, { capacity: number; required: number; coverage: number }>;
   alertsByCountry: Record<string, MarketOverviewAlert[]>;
+  importsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>>;
+  exportsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>>;
+  importsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>>;
+  exportsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>>;
 };
 
 function normalizeContentCultures(input: unknown): GameSettings["content"]["cultures"] {
@@ -1744,6 +1752,10 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
   const worldTradeUsedAmountByScope: Record<string, number> = {};
   const infraByProvince: Record<string, { capacity: number; required: number; coverage: number }> = {};
   const alertsByCountry: Record<string, MarketOverviewAlert[]> = {};
+  const importsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>> = {};
+  const exportsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>> = {};
+  const importsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>> = {};
+  const exportsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>> = {};
   let alertSeq = 0;
   const pushCountryAlert = (countryId: string, alert: Omit<MarketOverviewAlert, "id">): void => {
     if (!alertsByCountry[countryId]) alertsByCountry[countryId] = [];
@@ -1931,6 +1943,18 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     if (!map[scopeId]) map[scopeId] = {};
     map[scopeId][categoryId] = round3((map[scopeId][categoryId] ?? 0) + value);
   };
+  const addScopeGoodPartnerAmount = (
+    map: Record<string, Record<string, Record<string, number>>>,
+    scopeId: string,
+    goodId: string,
+    partnerId: string,
+    value: number,
+  ): void => {
+    if (!scopeId || !goodId || !partnerId || value <= 0) return;
+    if (!map[scopeId]) map[scopeId] = {};
+    if (!map[scopeId][goodId]) map[scopeId][goodId] = {};
+    map[scopeId][goodId][partnerId] = round3((map[scopeId][goodId][partnerId] ?? 0) + value);
+  };
   const pushHistory = (map: Record<string, number[]>, key: string, value: number): void => {
     const prev = map[key] ?? [];
     map[key] = [...prev, round3(value)].slice(-MARKET_PRICE_HISTORY_LENGTH);
@@ -1963,6 +1987,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       a.instanceId.localeCompare(b.instanceId),
     );
     for (const instance of buildingInstances) {
+      const building = buildingById.get(instance.buildingId);
+      if (!building) continue;
+      const sellableGoodIds = new Set((building.outputs ?? []).map((row) => row.goodId).filter(Boolean));
       instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0)));
       instance.warehouseByGoodId = { ...(instance.warehouseByGoodId ?? {}) };
       instance.lastPurchaseByGoodId = {};
@@ -1983,6 +2010,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       instance.isInactive = false;
       instance.inactiveReason = null;
       for (const [goodId, amountRaw] of Object.entries(instance.warehouseByGoodId ?? {})) {
+        if (!sellableGoodIds.has(goodId)) continue;
         const amount = round3(Math.max(0, Number(amountRaw)));
         if (amount <= 0) continue;
         const slot: SellerSlot = {
@@ -2212,6 +2240,38 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
             if (transfer <= 0) continue;
             remainingNeed = round3(Math.max(0, remainingNeed - transfer));
             const transferCost = round3(transfer * option.unitPrice);
+            if (seller.countryId !== ownerCountryId) {
+              addScopeGoodPartnerAmount(
+                importsByCountryByCountryAndGood,
+                ownerCountryId,
+                input.goodId,
+                seller.countryId,
+                transfer,
+              );
+              addScopeGoodPartnerAmount(
+                exportsByCountryByCountryAndGood,
+                seller.countryId,
+                input.goodId,
+                ownerCountryId,
+                transfer,
+              );
+            }
+            if (isExternalTrade) {
+              addScopeGoodPartnerAmount(
+                importsByMarketByMarketAndGood,
+                marketId,
+                input.goodId,
+                seller.marketId,
+                transfer,
+              );
+              addScopeGoodPartnerAmount(
+                exportsByMarketByMarketAndGood,
+                seller.marketId,
+                input.goodId,
+                marketId,
+                transfer,
+              );
+            }
             if (categoryId) {
               const infraConsumed = round3(transfer * getInfraPerUnit(input.goodId));
               consumeProvinceInfra(provinceId, categoryId, infraConsumed);
@@ -2254,11 +2314,18 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       instance.lastInputCostDucats = round3(purchaseCost);
 
       let inputCoverage = 1;
+      const missingInputGoods: string[] = [];
       for (const input of building.inputs ?? []) {
         const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
         if (required <= 0) continue;
         const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
         inputCoverage = Math.min(inputCoverage, available / required);
+        if (available + 1e-9 < required) {
+          const goodName = goodById.get(input.goodId)?.name?.trim() || input.goodId;
+          if (!missingInputGoods.includes(goodName)) {
+            missingInputGoods.push(goodName);
+          }
+        }
       }
       if (!Number.isFinite(inputCoverage)) inputCoverage = 1;
       inputCoverage = round3(Math.max(0, Math.min(1, inputCoverage)));
@@ -2327,7 +2394,11 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
               : limiting.key === "infra"
                 ? "инфраструктуры"
                 : "финансов";
-        instance.inactiveReason = `Нулевая продуктивность (лимит: ${label}, ${(limiting.value * 100).toFixed(1)}%)`;
+        const missingInputsText =
+          limiting.key === "input" && missingInputGoods.length > 0
+            ? `; не хватает: ${missingInputGoods.slice(0, 4).join(", ")}${missingInputGoods.length > 4 ? "..." : ""}`
+            : "";
+        instance.inactiveReason = `Нулевая продуктивность (лимит: ${label}, ${(limiting.value * 100).toFixed(1)}%${missingInputsText})`;
         pushCountryAlert(ownerCountryId, {
           severity: "critical",
           kind: "building-inactive",
@@ -2577,6 +2648,10 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     offerGlobal,
     infraByProvince,
     alertsByCountry,
+    importsByCountryByCountryAndGood,
+    exportsByCountryByCountryAndGood,
+    importsByMarketByMarketAndGood,
+    exportsByMarketByMarketAndGood,
   };
   previousTradeInfraLoadByProvince = Object.fromEntries(
     adm1ProvinceIndex.map((province) => [
@@ -5268,11 +5343,23 @@ app.get("/economy/market-overview", async (req, res) => {
       availableByCategory,
     };
   });
+  const tradeByGood = Object.fromEntries(
+    gameSettings.content.goods.map((good) => [
+      good.id,
+      {
+        countryImportsByCountry: latestMarketOverview.importsByCountryByCountryAndGood[countryId]?.[good.id] ?? {},
+        countryExportsByCountry: latestMarketOverview.exportsByCountryByCountryAndGood[countryId]?.[good.id] ?? {},
+        globalImportsByMarket: latestMarketOverview.importsByMarketByMarketAndGood[marketId]?.[good.id] ?? {},
+        globalExportsByMarket: latestMarketOverview.exportsByMarketByMarketAndGood[marketId]?.[good.id] ?? {},
+      },
+    ]),
+  );
   return res.json({
     turnId,
     countryId,
     marketId,
     goods,
+    tradeByGood,
     infraByProvince,
     sharedInfrastructureByMarket,
     alerts: latestMarketOverview.alertsByCountry[countryId] ?? [],

@@ -2,10 +2,11 @@ import { Dialog } from "@headlessui/react";
 import * as echarts from "echarts";
 import type { EChartsType } from "echarts";
 import { motion } from "framer-motion";
-import { AlertTriangle, ArrowDownUp, Globe2, LineChart, Settings2, SlidersHorizontal, TrendingDown, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, BarChart3, Globe2, LineChart, Settings2, SlidersHorizontal, TrendingDown, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+  fetchCountries,
   fetchContentEntries,
   fetchCountryMarketInvites,
   fetchMarketsCatalog,
@@ -95,6 +96,140 @@ const getRelativeDeltaPct = (history: number[]): number => {
   if (!Number.isFinite(prev) || Math.abs(prev) < 1e-9) return 0;
   return ((curr - prev) / prev) * 100;
 };
+
+const PARTNER_COLORS = [
+  "#22d3ee",
+  "#34d399",
+  "#60a5fa",
+  "#f59e0b",
+  "#f472b6",
+  "#a78bfa",
+  "#fb7185",
+  "#84cc16",
+  "#f97316",
+  "#38bdf8",
+  "#facc15",
+  "#4ade80",
+];
+
+const colorByPartnerName = (name: string): string => {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return PARTNER_COLORS[hash % PARTNER_COLORS.length] ?? "#94a3b8";
+};
+
+const buildTop10WithOthers = (input: Record<string, number>, labelByCountryId: Record<string, string>) => {
+  const rows = Object.entries(input)
+    .map(([countryId, value]) => ({ countryId, value: Math.max(0, Number(value)) }))
+    .filter((row) => row.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const top = rows.slice(0, 10).map((row) => ({
+    name: labelByCountryId[row.countryId] ?? row.countryId,
+    value: row.value,
+  }));
+  const others = rows.slice(10).reduce((sum, row) => sum + row.value, 0);
+  if (others > 0) top.push({ name: "Другие", value: others });
+  return top;
+};
+
+function TradePartnersChart({
+  items,
+  color,
+}: {
+  items: Array<{ name: string; value: number }>;
+  color: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<EChartsType | null>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const existing = chartRef.current;
+    const chart =
+      existing && existing.getDom() === ref.current
+        ? existing
+        : (() => {
+            existing?.dispose();
+            return echarts.init(ref.current!);
+          })();
+    chartRef.current = chart;
+    const data = items.slice(0, 11);
+    chart.setOption({
+      animationDuration: 350,
+      backgroundColor: "transparent",
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        right: 2,
+        top: 8,
+        bottom: 8,
+        textStyle: {
+          color: "rgba(226,232,240,0.78)",
+          fontSize: 10,
+          fontWeight: 600,
+        },
+      },
+      tooltip: {
+        trigger: "item",
+        confine: true,
+        backgroundColor: "#000",
+        borderColor: "rgba(148,163,184,0.35)",
+        borderWidth: 1,
+        textStyle: { color: "#e2e8f0", fontSize: 11, fontWeight: 600 },
+        formatter: (params: { name: string; value: number; percent: number }) =>
+          `${params.name}: ${formatCompact(Number(params.value ?? 0))} (${Number(params.percent ?? 0).toFixed(1)}%)`,
+      },
+      series: [
+        {
+          type: "pie",
+          radius: ["38%", "68%"],
+          center: ["34%", "50%"],
+          avoidLabelOverlap: true,
+          selectedMode: false,
+          label: {
+            show: false,
+          },
+          labelLine: {
+            show: false,
+          },
+          data: data.map((item, idx) => ({
+            name: item.name,
+            value: item.value,
+            itemStyle: {
+              color: idx === data.length - 1 && item.name === "Другие" ? "rgba(148,163,184,0.55)" : colorByPartnerName(item.name),
+              opacity: idx === data.length - 1 && item.name === "Другие" ? 0.9 : 1,
+            },
+          })),
+          itemStyle: {
+            borderColor: "rgba(0,0,0,0.35)",
+            borderWidth: 1,
+          },
+          emphasis: {
+            scale: true,
+            scaleSize: 5,
+          },
+        },
+      ],
+    });
+
+    const onResize = () => chart.resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
+  }, [items, color]);
+
+  useEffect(() => {
+    return () => {
+      chartRef.current?.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  return <div ref={ref} className="h-[240px] w-full rounded bg-black/20" />;
+}
 
 function Sparkline({
   chartId,
@@ -343,6 +478,7 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
   const [selectedGoodId, setSelectedGoodId] = useState("");
   const [syncedTurnId, setSyncedTurnId] = useState<number | null>(null);
   const [activeTooltipChartId, setActiveTooltipChartId] = useState<string | null>(null);
+  const [countryNameById, setCountryNameById] = useState<Record<string, string>>({});
   const [infrastructureCategoryNamesById, setInfrastructureCategoryNamesById] = useState<Record<string, string>>({});
   const [infrastructureModalOpen, setInfrastructureModalOpen] = useState(false);
   const [alertsModalOpen, setAlertsModalOpen] = useState(false);
@@ -357,6 +493,8 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
       setIncomingInvites(invites.invites ?? []);
       setMarketsCatalog(markets.markets ?? []);
     }
+    const countries = await fetchCountries();
+    setCountryNameById(Object.fromEntries(countries.map((country) => [country.id, country.name] as const)));
   };
 
   useEffect(() => {
@@ -370,6 +508,7 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
           setOverview(null);
           setIncomingInvites([]);
           setMarketsCatalog([]);
+          setCountryNameById({});
         }
       }
     })();
@@ -436,10 +575,27 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
       ),
     [overview?.sharedInfrastructureByMarket],
   );
+  const marketNameById = useMemo(
+    () => Object.fromEntries((overview?.sharedInfrastructureByMarket ?? []).map((row) => [row.marketId, row.marketName] as const)),
+    [overview?.sharedInfrastructureByMarket],
+  );
 
   const criticalCount = useMemo(() => rows.filter((row) => row.coverage < 50).length, [rows]);
   const infraOverloadCount = useMemo(() => infraRows.filter((row) => row.coverage < 1).length, [infraRows]);
   const selectedRow = useMemo(() => rows.find((row) => row.goodId === selectedGoodId) ?? rows[0] ?? null, [rows, selectedGoodId]);
+  const tradePartners = useMemo(() => {
+    if (!selectedRow) {
+      return { imports: [] as Array<{ name: string; value: number }>, exports: [] as Array<{ name: string; value: number }> };
+    }
+    const bucket = overview?.tradeByGood?.[selectedRow.goodId] ?? {};
+    const importsRaw = effectiveTab === "country" ? bucket.countryImportsByCountry ?? {} : bucket.globalImportsByMarket ?? {};
+    const exportsRaw = effectiveTab === "country" ? bucket.countryExportsByCountry ?? {} : bucket.globalExportsByMarket ?? {};
+    const labelMap = effectiveTab === "country" ? countryNameById : marketNameById;
+    return {
+      imports: buildTop10WithOthers(importsRaw, labelMap),
+      exports: buildTop10WithOthers(exportsRaw, labelMap),
+    };
+  }, [selectedRow, overview?.tradeByGood, effectiveTab, countryNameById, marketNameById]);
 
   useEffect(() => {
     if (!rows.some((row) => row.goodId === selectedGoodId)) {
@@ -682,23 +838,11 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
               </div>
             </div>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 xl:grid-cols-[1.7fr_1fr]">
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 xl:grid-cols-[1.45fr_1fr]">
               <div className="panel-border arc-scrollbar min-h-0 overflow-auto rounded-xl bg-black/25">
-                <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-2 border-b border-white/10 bg-black/35 px-3 py-2 text-xs font-semibold text-white/70">
+                <div className="border-b border-white/10 bg-black/35 px-3 py-2 text-xs font-semibold text-white/70">
                   <Tooltip content="Товар из каталога контента.">
                     <div>Товар</div>
-                  </Tooltip>
-                  <Tooltip content="Текущая цена в выбранном рынке/глобале.">
-                    <div className="text-right">Цена</div>
-                  </Tooltip>
-                  <Tooltip content="Запрошенный объем потребления за ход.">
-                    <div className="text-right">Спрос</div>
-                  </Tooltip>
-                  <Tooltip content="Фактическое предложение: производство + запасы на складах.">
-                    <div className="text-right">Предложение</div>
-                  </Tooltip>
-                  <Tooltip content="Процент покрытия спроса предложением.">
-                    <div className="text-right">Покрытие</div>
                   </Tooltip>
                 </div>
                 <div className="space-y-1 p-2">
@@ -706,7 +850,7 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                     <div
                       key={row.goodId}
                       onClick={() => setSelectedGoodId(row.goodId)}
-                      className={`grid grid-cols-[2fr_1fr_1fr_1fr_1fr] items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+                      className={`flex items-center rounded-lg border px-3 py-2 text-sm ${
                         row.coverage < 50
                           ? "border-red-400/35 bg-red-500/10"
                           : row.goodId === selectedGoodId
@@ -718,12 +862,6 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                         {row.coverage < 50 ? <TrendingDown size={14} className="text-red-300" /> : <LineChart size={14} className="text-emerald-300" />}
                         <span className="truncate">{row.goodName}</span>
                       </div>
-                      <div className="text-right font-semibold text-white/80">{formatCompact(row.price)}</div>
-                      <div className="text-right text-white/70">{formatCompact(row.demand)}</div>
-                      <div className="text-right text-white/70">{formatCompact(row.offer)}</div>
-                      <div className={`text-right font-semibold ${row.coverage < 50 ? "text-red-200" : "text-emerald-200"}`}>
-                        {row.coverage.toFixed(1)}%
-                      </div>
                     </div>
                   ))}
                   {rows.length === 0 && (
@@ -734,8 +872,33 @@ export function MarketModal({ open, onClose, token, countryId, countryName, mode
                 </div>
               </div>
 
-              <div className="arc-scrollbar min-h-0 space-y-3 overflow-auto pr-1">
-                <div className="panel-border rounded-xl bg-black/30 p-3">
+              <div className="grid min-h-0 grid-cols-1 gap-3 pr-1 2xl:grid-cols-2">
+                <div className="panel-border arc-scrollbar h-full min-h-0 overflow-auto rounded-xl bg-black/30 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
+                      <BarChart3 size={13} className="text-arc-accent" />
+                      Торговые партнеры
+                    </div>
+                    {selectedRow ? (
+                      <div className="space-y-3 text-xs">
+                        <div className="rounded-lg border border-white/10 bg-black/25 p-2">
+                          <div className="mb-1 font-semibold text-emerald-200">
+                            {effectiveTab === "country" ? "Импорт из стран (топ 10)" : "Импорт из рынков (топ 10)"}
+                          </div>
+                          <TradePartnersChart items={tradePartners.imports} color="#34d399" />
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-black/25 p-2">
+                          <div className="mb-1 font-semibold text-cyan-200">
+                            {effectiveTab === "country" ? "Экспорт в страны (топ 10)" : "Экспорт в рынки (топ 10)"}
+                          </div>
+                          <TradePartnersChart items={tradePartners.exports} color="#22d3ee" />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-white/45">Выберите товар в таблице.</div>
+                    )}
+                  </div>
+
+                <div className="panel-border arc-scrollbar h-full min-h-0 overflow-auto rounded-xl bg-black/30 p-3">
                   <Tooltip content="Исторические ряды по выбранному товару за последние ходы.">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
                       <LineChart size={13} className="text-cyan-300" />
