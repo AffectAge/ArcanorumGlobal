@@ -55,6 +55,7 @@ const EMPTY_PROVINCE_COLONIZATION: WorldBase["provinceColonizationByProvince"] =
 const EMPTY_PROVINCE_INFRASTRUCTURE: Record<string, number> = {};
 const EMPTY_PROVINCE_LOGISTICS_CONSUMED: Record<string, Record<string, number>> = {};
 const EMPTY_PROVINCE_LOGISTICS_CAPACITY: Record<string, Record<string, number>> = {};
+const EMPTY_PROVINCE_BUILDINGS: Record<string, Array<{ buildingId?: string }>> = {};
 const EMPTY_COUNTRY_PROGRESS: Record<string, number> = {};
 
 function setInteractions(map: MapLibreMap, enabled: boolean) {
@@ -289,7 +290,7 @@ export function MapView({
   const provinceBuildingsByProvince = useGameStore(
     (s) =>
       ((s.worldBase as unknown as { provinceBuildingsByProvince?: Record<string, Array<{ buildingId?: string }>> })
-        ?.provinceBuildingsByProvince ?? {}),
+        ?.provinceBuildingsByProvince ?? EMPTY_PROVINCE_BUILDINGS),
   );
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
   const addEvent = useGameStore((s) => s.addEvent);
@@ -1572,60 +1573,74 @@ export function MapView({
       )}
 
       {selectedProvinceId && (
-        <div className="absolute right-4 top-24 z-30 w-80">
+        <div className="absolute right-4 top-24 z-30 w-[36rem] max-w-[calc(100vw-2rem)]">
           <Tooltip content="Данные провинции и pending-приказы">
-            <div className="glass panel-border rounded-xl p-3 text-sm">
-              <div className="mb-2 flex items-center gap-2 text-arc-accent">
-                <Crosshair size={15} />
-                <span className="font-semibold">{selectedProvinceDisplayName ?? selectedProvinceId}</span>
+            <div className="glass panel-border rounded-2xl p-4 text-sm shadow-2xl">
+              <div className="mb-4 flex items-start gap-2 text-arc-accent">
+                <Crosshair size={15} className="mt-0.5" />
+                <div>
+                  <div className="text-base font-semibold leading-none text-arc-accent">
+                    {selectedProvinceDisplayName ?? selectedProvinceId}
+                  </div>
+                  <div className="mt-1 text-[11px] text-white/45">ID: {selectedProvinceId}</div>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <div className="w-[84px] shrink-0 space-y-1">
-                  <Tooltip content="Основная информация" placement="left">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedProvincePanelTab("main")}
-                      className={`group relative inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-all duration-150 ${
-                        selectedProvincePanelTab === "main"
-                          ? "border-arc-accent/60 bg-arc-accent/20 text-arc-accent shadow-[0_0_14px_rgba(34,211,238,0.2)]"
-                          : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
-                      }`}
-                    >
-                      <Info size={14} />
-                    </button>
-                  </Tooltip>
-                  <Tooltip content="Детали инфраструктуры" placement="left">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedProvincePanelTab("infra")}
-                      className={`group relative inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-all duration-150 ${
-                        selectedProvincePanelTab === "infra"
-                          ? "border-arc-accent/60 bg-arc-accent/20 text-arc-accent shadow-[0_0_14px_rgba(34,211,238,0.2)]"
-                          : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
-                      }`}
-                    >
-                      <Workflow size={14} />
-                    </button>
-                  </Tooltip>
-                  <Tooltip content="Построенные здания" placement="left">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedProvincePanelTab("buildings")}
-                      className={`group relative inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-all duration-150 ${
-                        selectedProvincePanelTab === "buildings"
-                          ? "border-arc-accent/60 bg-arc-accent/20 text-arc-accent shadow-[0_0_14px_rgba(34,211,238,0.2)]"
-                          : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
-                      }`}
-                    >
-                      <Building2 size={14} />
-                    </button>
-                  </Tooltip>
+              <div className="grid gap-1 md:grid-cols-[64px_minmax(0,1fr)]">
+                <div className="rounded-xl border border-white/10 bg-black/30 p-2.5">
+                  <div className="flex flex-col items-center gap-2">
+                    <Tooltip content="Основная информация" placement="left">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProvincePanelTab("main")}
+                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border text-xs transition ${
+                          selectedProvincePanelTab === "main"
+                            ? "border-arc-accent/50 bg-arc-accent/15 text-arc-accent"
+                            : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                      >
+                        <Info size={16} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Детали инфраструктуры" placement="left">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProvincePanelTab("infra")}
+                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border text-xs transition ${
+                          selectedProvincePanelTab === "infra"
+                            ? "border-arc-accent/50 bg-arc-accent/15 text-arc-accent"
+                            : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                      >
+                        <Workflow size={16} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Построенные здания" placement="left">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProvincePanelTab("buildings")}
+                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border text-xs transition ${
+                          selectedProvincePanelTab === "buildings"
+                            ? "border-arc-accent/50 bg-arc-accent/15 text-arc-accent"
+                            : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                      >
+                        <Building2 size={16} />
+                      </button>
+                    </Tooltip>
+                  </div>
                 </div>
 
-                <div className="min-w-0 flex-1">
-                  {selectedProvincePanelTab === "main" && (
-                    <div className="space-y-1 text-xs text-slate-300">
-                      <div>ID: {selectedProvinceId}</div>
+                <div className="rounded-xl border border-white/10 bg-black/30 p-2.5 min-h-[290px]">
+                  <AnimatePresence mode="wait" initial={false}>
+                    {selectedProvincePanelTab === "main" && (
+                      <motion.div
+                        key="province-main"
+                        initial={{ opacity: 0, y: 6, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.995 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-2 text-xs text-slate-300"
+                      >
                       <div className="flex items-center gap-2">
                         <span>Владелец:</span>
                         {selectedOwnerFlagUrl && <img src={selectedOwnerFlagUrl} alt={selectedOwnerLabel} className="h-4 w-6 rounded-sm object-cover" />}
@@ -1648,10 +1663,13 @@ export function MapView({
                       )}
 
                       {selectedColonyProgressList.length > 0 && (
-                        <div className="mt-2 rounded-md bg-black/25 p-2 text-xs text-slate-300">
+                        <div className="rounded-md bg-black/25 p-2.5 text-xs text-slate-300">
                           <div className="mb-1 text-slate-400">Прогресс колонизации</div>
                           {selectedColonyProgressList.map(([countryId, points]) => (
-                            <div key={countryId} className="flex items-center justify-between">
+                            <div
+                              key={countryId}
+                              className="flex items-center justify-between rounded-md px-1 py-0.5 transition-transform duration-150 hover:-translate-y-0.5"
+                            >
                               <span>{countryById.get(countryId)?.name ?? countryId}</span>
                               <span>
                                 {points.toFixed(1)}/{selectedColonizationCost}
@@ -1669,22 +1687,32 @@ export function MapView({
                           Колонизация...
                         </button>
                       )}
-                    </div>
-                  )}
+                      </motion.div>
+                    )}
 
-                  {selectedProvincePanelTab === "infra" && (
-                    <div className="space-y-1 text-xs text-slate-300">
+                    {selectedProvincePanelTab === "infra" && (
+                      <motion.div
+                        key="province-infra"
+                        initial={{ opacity: 0, y: 6, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.995 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-2 text-xs text-slate-300"
+                      >
                       <div>
                         Инфраструктура: {Math.max(0, Math.floor(selectedInfrastructureCapacity - selectedInfrastructureConsumed)).toLocaleString("ru-RU")} /{" "}
                         {Math.floor(selectedInfrastructureCapacity).toLocaleString("ru-RU")}
                       </div>
                       <div>Потреблено за ход: {Math.floor(selectedInfrastructureConsumed).toLocaleString("ru-RU")}</div>
                       {selectedInfrastructureByCategory.length > 0 ? (
-                        <div className="mt-1 rounded-md border border-white/10 bg-black/20 p-2">
+                        <div className="rounded-md border border-white/10 bg-black/20 p-2.5">
                           <div className="mb-1 text-[11px] text-white/55">По категориям инфраструктуры</div>
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             {selectedInfrastructureByCategory.map((row) => (
-                              <div key={row.categoryId} className="flex items-center justify-between gap-2 text-[11px]">
+                              <div
+                                key={row.categoryId}
+                                className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1 text-[11px] transition-transform duration-150 hover:-translate-y-0.5"
+                              >
                                 <span className="text-white/75">{infrastructureCategoryNamesById[row.categoryId] ?? row.categoryId}</span>
                                 <span className="text-white/60">
                                   {Math.floor(row.available).toLocaleString("ru-RU")} / {Math.floor(row.capacity).toLocaleString("ru-RU")}
@@ -1698,20 +1726,30 @@ export function MapView({
                           Категории инфраструктуры не заданы
                         </div>
                       )}
-                    </div>
-                  )}
+                      </motion.div>
+                    )}
 
-                  {selectedProvincePanelTab === "buildings" && (
-                    <div className="space-y-1 text-xs text-slate-300">
+                    {selectedProvincePanelTab === "buildings" && (
+                      <motion.div
+                        key="province-buildings"
+                        initial={{ opacity: 0, y: 6, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.995 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-2 text-xs text-slate-300"
+                      >
                       <div>Построенные здания: {selectedBuiltBuildings.reduce((sum, row) => sum + row.count, 0)}</div>
                       {selectedBuiltBuildings.length === 0 ? (
                         <div className="rounded-md border border-dashed border-white/15 bg-black/20 p-2 text-[11px] text-white/50">
                           В провинции нет построенных зданий
                         </div>
                       ) : (
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                           {selectedBuiltBuildings.map((row) => (
-                            <div key={row.buildingId} className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
+                            <div
+                              key={row.buildingId}
+                              className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/20 px-2.5 py-2 transition-transform duration-150 hover:-translate-y-0.5 hover:border-white/25"
+                            >
                               <div className="flex min-w-0 items-center gap-2">
                                 {row.logoUrl ? (
                                   <img src={row.logoUrl} alt="" className="h-4 w-4 rounded-sm object-contain" />
@@ -1725,8 +1763,9 @@ export function MapView({
                           ))}
                         </div>
                       )}
-                    </div>
-                  )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               </div>
 

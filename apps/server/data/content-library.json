@@ -175,11 +175,32 @@
     "technologies": [],
     "buildings": [
       {
+        "id": "f043296d-e6bf-4693-876e-0c22b79c2298",
+        "name": "Шахта черных металлов",
+        "description": "",
+        "color": "#000000",
+        "logoUrl": "/uploads/buildings/2436324c-3c39-42d5-9040-1779574aaf83.png?v=1772871830535",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "costConstruction": 100,
+        "costDucats": 10,
+        "startingDucats": 0,
+        "inputs": [],
+        "outputs": [],
+        "workforceRequirements": [],
+        "infrastructureUse": 0,
+        "marketInfrastructureByCategory": {},
+        "allowedCountryIds": [],
+        "deniedCountryIds": [],
+        "countryBuildLimits": [],
+        "globalBuildLimit": 1
+      },
+      {
         "id": "023c3cd6-82b3-4ab4-9c7d-e4b357c004a8",
         "name": "Шахта цветных метталов",
         "description": "",
         "color": "#ca6302",
-        "logoUrl": "/uploads/buildings/51df065b-8f8c-4bfc-8a01-18d0d874ece0.png?v=1772837810939",
+        "logoUrl": "/uploads/buildings/04a6c583-6b6b-4977-9a56-f5f058ac61c1.png?v=1772871755545",
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "costConstruction": 100,
@@ -221,7 +242,7 @@
         "name": "Ветряная электростанция",
         "description": "",
         "color": "#8bebfe",
-        "logoUrl": "/uploads/buildings/2b3ebacc-71e1-4db5-8368-8bdd305ce30c.png?v=1772837460415",
+        "logoUrl": "/uploads/buildings/a79b579c-3f93-4f9d-b3b9-b8ff6decb135.png?v=1772871963161",
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "costConstruction": 100,
@@ -397,5 +418,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-03-07T08:19:03.436Z"
+  "updatedAt": "2026-03-07T08:26:06.862Z"
 }
