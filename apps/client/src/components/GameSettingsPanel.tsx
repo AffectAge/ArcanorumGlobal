@@ -524,7 +524,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           />
                         </div>
                       </div>
-                      <button onClick={saveEconomy} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveEconomy()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -605,7 +605,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           />
                         </button>
                       </label>
-                      <button onClick={saveTurnTimer} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveTurnTimer()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -663,7 +663,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         Базовая стоимость провинции рассчитывается от площади: `ставка за 1000 км² × площадь / 1000`. Ручная стоимость провинции в админ-редакторе остаётся как override.
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <button onClick={saveColonization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                        <button onClick={() => void saveColonization()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                           <Save size={14} />
                           Сохранить
                         </button>
@@ -693,7 +693,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <div><label className="mb-1 block text-xs text-slate-300">Смена герба</label><input type="number" min={0} value={crestDucats} onChange={(e) => setCrestDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                         <div><label className="mb-1 block text-xs text-slate-300">Переименование провинции</label><input type="number" min={0} value={provinceRenameDucats} onChange={(e) => setProvinceRenameDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                       </div>
-                      <button onClick={saveCustomization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveCustomization()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -729,7 +729,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           />
                         </button>
                       </label>
-                      <button onClick={saveRegistrationSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveRegistrationSettings()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -746,7 +746,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <label className="mb-1 block text-xs text-slate-300">Хранить события за последние (ходов)</label>
                         <input type="number" min={1} max={100} value={eventLogRetentionTurns} onChange={(e) => setEventLogRetentionTurns(Math.max(1, Number(e.target.value) || 1))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
                       </div>
-                      <button onClick={saveEventLogSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveEventLogSettings()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
