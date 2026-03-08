@@ -18,6 +18,17 @@ export type ContentCulture = {
   infraPerUnit?: number | null;
   infrastructureCostPerUnit?: number | null;
   resourceCategoryId?: string | null;
+  isResourceDiscoverable?: boolean | null;
+  explorationBaseWeight?: number | null;
+  explorationSmallVeinChancePct?: number | null;
+  explorationMediumVeinChancePct?: number | null;
+  explorationLargeVeinChancePct?: number | null;
+  explorationSmallVeinMin?: number | null;
+  explorationSmallVeinMax?: number | null;
+  explorationMediumVeinMin?: number | null;
+  explorationMediumVeinMax?: number | null;
+  explorationLargeVeinMin?: number | null;
+  explorationLargeVeinMax?: number | null;
   baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
@@ -55,6 +66,17 @@ type ContentEntryUpsertPayload = {
   infraPerUnit?: number | null;
   infrastructureCostPerUnit?: number | null;
   resourceCategoryId?: string | null;
+  isResourceDiscoverable?: boolean | null;
+  explorationBaseWeight?: number | null;
+  explorationSmallVeinChancePct?: number | null;
+  explorationMediumVeinChancePct?: number | null;
+  explorationLargeVeinChancePct?: number | null;
+  explorationSmallVeinMin?: number | null;
+  explorationSmallVeinMax?: number | null;
+  explorationMediumVeinMin?: number | null;
+  explorationMediumVeinMax?: number | null;
+  explorationLargeVeinMin?: number | null;
+  explorationLargeVeinMax?: number | null;
   baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
@@ -1008,6 +1030,10 @@ export type GameSettings = {
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
     marketPriceSmoothing: number;
+    explorationBaseEmptyChancePct: number;
+    explorationDepletionPerAttemptPct: number;
+    explorationDurationTurns: number;
+    explorationRollsPerExpedition: number;
   };
   markets?: {
     countryMarketByCountryId: Record<string, string>;
@@ -1254,6 +1280,10 @@ export async function updateGameSettings(
       baseGoldPerTurn?: number;
       demolitionCostConstructionPercent?: number;
       marketPriceSmoothing?: number;
+      explorationBaseEmptyChancePct?: number;
+      explorationDepletionPerAttemptPct?: number;
+      explorationDurationTurns?: number;
+      explorationRollsPerExpedition?: number;
     };
     markets?: {
       countryMarketByCountryId?: Record<string, string>;
@@ -1519,6 +1549,21 @@ export async function cancelCountryColonization(token: string, provinceId: strin
   if (!response.ok) {
     const err = await response.json();
     throw new Error(err.error ?? "COLONIZATION_CANCEL_FAILED");
+  }
+}
+
+export async function startCountryExploration(token: string, provinceId: string): Promise<void> {
+  const response = await fetch(`${API}/country/exploration/start`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ provinceId }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "EXPLORATION_START_FAILED");
   }
 }
 

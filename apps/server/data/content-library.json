@@ -269,11 +269,22 @@
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "resourceCategoryId": null,
+        "isResourceDiscoverable": false,
         "basePrice": 1,
         "minPrice": 0.1,
         "maxPrice": 10,
         "infraPerUnit": 1,
-        "infrastructureCostPerUnit": 1
+        "infrastructureCostPerUnit": 1,
+        "explorationBaseWeight": 1,
+        "explorationSmallVeinChancePct": 60,
+        "explorationMediumVeinChancePct": 30,
+        "explorationLargeVeinChancePct": 10,
+        "explorationSmallVeinMin": 10,
+        "explorationSmallVeinMax": 100,
+        "explorationMediumVeinMin": 100,
+        "explorationMediumVeinMax": 500,
+        "explorationLargeVeinMin": 500,
+        "explorationLargeVeinMax": 2000
       },
       {
         "id": "85c52344-8320-4445-8ead-0b6eb87cac0c",
@@ -284,11 +295,22 @@
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "resourceCategoryId": "41f3488a-cc0b-4be1-bbcd-20db6ac1a344",
+        "isResourceDiscoverable": false,
         "basePrice": 1,
         "minPrice": 0.1,
         "maxPrice": 10,
         "infraPerUnit": 1,
-        "infrastructureCostPerUnit": 1
+        "infrastructureCostPerUnit": 1,
+        "explorationBaseWeight": 1,
+        "explorationSmallVeinChancePct": 60,
+        "explorationMediumVeinChancePct": 30,
+        "explorationLargeVeinChancePct": 10,
+        "explorationSmallVeinMin": 10,
+        "explorationSmallVeinMax": 100,
+        "explorationMediumVeinMin": 100,
+        "explorationMediumVeinMax": 500,
+        "explorationLargeVeinMin": 500,
+        "explorationLargeVeinMax": 2000
       },
       {
         "id": "c13a61c3-cd6e-45a2-b3ae-3b90278ea7b7",
@@ -299,11 +321,22 @@
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "resourceCategoryId": "41f3488a-cc0b-4be1-bbcd-20db6ac1a344",
+        "isResourceDiscoverable": false,
         "basePrice": 10,
         "minPrice": 1,
         "maxPrice": 100,
         "infraPerUnit": 1,
-        "infrastructureCostPerUnit": 1
+        "infrastructureCostPerUnit": 1,
+        "explorationBaseWeight": 1,
+        "explorationSmallVeinChancePct": 60,
+        "explorationMediumVeinChancePct": 30,
+        "explorationLargeVeinChancePct": 10,
+        "explorationSmallVeinMin": 10,
+        "explorationSmallVeinMax": 100,
+        "explorationMediumVeinMin": 100,
+        "explorationMediumVeinMax": 500,
+        "explorationLargeVeinMin": 500,
+        "explorationLargeVeinMax": 2000
       }
     ],
     "companies": [
@@ -418,5 +451,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-03-07T08:26:06.862Z"
+  "updatedAt": "2026-03-08T14:45:42.930Z"
 }

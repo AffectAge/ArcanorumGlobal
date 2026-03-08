@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Briefcase, Building2, ChevronDown, ChevronRight, Factory, FileText, Flame, Package, Palette, Plus, ScrollText, Sticker, Trash2, Upload, UserRound, X } from "lucide-react";
+import { Briefcase, Building2, ChevronDown, ChevronRight, Factory, FileText, Flame, Package, Palette, Plus, ScrollText, Sticker, Telescope, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
@@ -109,6 +109,7 @@ const CONTENT_UI_SCHEMA = {
       sections: [
         { id: "general", label: "Основная информация", icon: FileText },
         { id: "economy", label: "Экономика товара", icon: Factory },
+        { id: "exploration", label: "Георазведка", icon: Telescope },
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
@@ -135,7 +136,7 @@ const CONTENT_UI_SCHEMA = {
   ] as const,
 } as const;
 type PanelCategory = ContentEntryKind;
-type PanelSection = "general" | "economy" | "criteria" | "branding";
+type PanelSection = "general" | "economy" | "exploration" | "criteria" | "branding";
 type GoodFlowDraft = { goodId: string; amount: string };
 type WorkforceRequirementDraft = { professionId: string; workers: string };
 type CountryBuildLimitDraft = { countryId: string; limit: string };
@@ -338,6 +339,17 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftMaxPrice, setDraftMaxPrice] = useState("10");
   const [draftInfraPerUnit, setDraftInfraPerUnit] = useState("1");
   const [draftResourceCategoryId, setDraftResourceCategoryId] = useState("");
+  const [draftIsResourceDiscoverable, setDraftIsResourceDiscoverable] = useState(false);
+  const [draftExplorationBaseWeight, setDraftExplorationBaseWeight] = useState("1");
+  const [draftExplorationSmallChance, setDraftExplorationSmallChance] = useState("60");
+  const [draftExplorationMediumChance, setDraftExplorationMediumChance] = useState("30");
+  const [draftExplorationLargeChance, setDraftExplorationLargeChance] = useState("10");
+  const [draftExplorationSmallMin, setDraftExplorationSmallMin] = useState("10");
+  const [draftExplorationSmallMax, setDraftExplorationSmallMax] = useState("100");
+  const [draftExplorationMediumMin, setDraftExplorationMediumMin] = useState("100");
+  const [draftExplorationMediumMax, setDraftExplorationMediumMax] = useState("500");
+  const [draftExplorationLargeMin, setDraftExplorationLargeMin] = useState("500");
+  const [draftExplorationLargeMax, setDraftExplorationLargeMax] = useState("2000");
   const [draftBaseWage, setDraftBaseWage] = useState("1");
   const [draftCostConstruction, setDraftCostConstruction] = useState("100");
   const [draftCostDucats, setDraftCostDucats] = useState("10");
@@ -356,6 +368,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [criteriaCountriesOpen, setCriteriaCountriesOpen] = useState(false);
   const [criteriaLimitsOpen, setCriteriaLimitsOpen] = useState(false);
   const [goodsEconomyOpen, setGoodsEconomyOpen] = useState(false);
+  const [goodsExplorationOpen, setGoodsExplorationOpen] = useState(false);
   const [buildingCostOpen, setBuildingCostOpen] = useState(false);
   const [buildingInputsOpen, setBuildingInputsOpen] = useState(false);
   const [buildingOutputsOpen, setBuildingOutputsOpen] = useState(false);
@@ -385,6 +398,17 @@ export function ContentPanel({ open, token, onClose }: Props) {
       infraPerUnit: entry.infraPerUnit ?? null,
       infrastructureCostPerUnit: entry.infrastructureCostPerUnit ?? null,
       resourceCategoryId: entry.resourceCategoryId ?? null,
+      isResourceDiscoverable: Boolean(entry.isResourceDiscoverable),
+      explorationBaseWeight: entry.explorationBaseWeight ?? null,
+      explorationSmallVeinChancePct: entry.explorationSmallVeinChancePct ?? null,
+      explorationMediumVeinChancePct: entry.explorationMediumVeinChancePct ?? null,
+      explorationLargeVeinChancePct: entry.explorationLargeVeinChancePct ?? null,
+      explorationSmallVeinMin: entry.explorationSmallVeinMin ?? null,
+      explorationSmallVeinMax: entry.explorationSmallVeinMax ?? null,
+      explorationMediumVeinMin: entry.explorationMediumVeinMin ?? null,
+      explorationMediumVeinMax: entry.explorationMediumVeinMax ?? null,
+      explorationLargeVeinMin: entry.explorationLargeVeinMin ?? null,
+      explorationLargeVeinMax: entry.explorationLargeVeinMax ?? null,
       baseWage: entry.baseWage ?? null,
       costConstruction: entry.costConstruction ?? null,
       costDucats: entry.costDucats ?? null,
@@ -452,6 +476,67 @@ export function ContentPanel({ open, token, onClose }: Props) {
             : null
           : null,
       resourceCategoryId: activeCategory === "goods" ? draftResourceCategoryId.trim() || null : null,
+      isResourceDiscoverable: activeCategory === "goods" ? Boolean(draftIsResourceDiscoverable) : null,
+      explorationBaseWeight:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationBaseWeight))
+            ? Number(Math.max(0, Number(draftExplorationBaseWeight)).toFixed(3))
+            : null
+          : null,
+      explorationSmallVeinChancePct:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationSmallChance))
+            ? Number(Math.max(0, Number(draftExplorationSmallChance)).toFixed(3))
+            : null
+          : null,
+      explorationMediumVeinChancePct:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationMediumChance))
+            ? Number(Math.max(0, Number(draftExplorationMediumChance)).toFixed(3))
+            : null
+          : null,
+      explorationLargeVeinChancePct:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationLargeChance))
+            ? Number(Math.max(0, Number(draftExplorationLargeChance)).toFixed(3))
+            : null
+          : null,
+      explorationSmallVeinMin:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationSmallMin))
+            ? Number(Math.max(0, Number(draftExplorationSmallMin)).toFixed(3))
+            : null
+          : null,
+      explorationSmallVeinMax:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationSmallMax))
+            ? Number(Math.max(0, Number(draftExplorationSmallMax)).toFixed(3))
+            : null
+          : null,
+      explorationMediumVeinMin:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationMediumMin))
+            ? Number(Math.max(0, Number(draftExplorationMediumMin)).toFixed(3))
+            : null
+          : null,
+      explorationMediumVeinMax:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationMediumMax))
+            ? Number(Math.max(0, Number(draftExplorationMediumMax)).toFixed(3))
+            : null
+          : null,
+      explorationLargeVeinMin:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationLargeMin))
+            ? Number(Math.max(0, Number(draftExplorationLargeMin)).toFixed(3))
+            : null
+          : null,
+      explorationLargeVeinMax:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationLargeMax))
+            ? Number(Math.max(0, Number(draftExplorationLargeMax)).toFixed(3))
+            : null
+          : null,
       baseWage:
         activeCategory === "professions"
           ? Number.isFinite(Number(draftBaseWage))
@@ -670,6 +755,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftMaxPrice("10");
       setDraftInfraPerUnit("1");
       setDraftResourceCategoryId("");
+      setDraftExplorationBaseWeight("1");
+      setDraftExplorationSmallChance("60");
+      setDraftExplorationMediumChance("30");
+      setDraftExplorationLargeChance("10");
+      setDraftExplorationSmallMin("10");
+      setDraftExplorationSmallMax("100");
+      setDraftExplorationMediumMin("100");
+      setDraftExplorationMediumMax("500");
+      setDraftExplorationLargeMin("500");
+      setDraftExplorationLargeMax("2000");
       setDraftBaseWage("1");
       setDraftCostConstruction("100");
       setDraftCostDucats("10");
@@ -716,6 +811,62 @@ export function ContentPanel({ open, token, onClose }: Props) {
     );
     setDraftResourceCategoryId(
       typeof selectedEntry.resourceCategoryId === "string" ? selectedEntry.resourceCategoryId : "",
+    );
+    setDraftIsResourceDiscoverable(Boolean(selectedEntry.isResourceDiscoverable));
+    setDraftExplorationBaseWeight(
+      typeof selectedEntry.explorationBaseWeight === "number" && Number.isFinite(selectedEntry.explorationBaseWeight)
+        ? String(Math.max(0, selectedEntry.explorationBaseWeight))
+        : "1",
+    );
+    setDraftExplorationSmallChance(
+      typeof selectedEntry.explorationSmallVeinChancePct === "number" &&
+        Number.isFinite(selectedEntry.explorationSmallVeinChancePct)
+        ? String(Math.max(0, selectedEntry.explorationSmallVeinChancePct))
+        : "60",
+    );
+    setDraftExplorationMediumChance(
+      typeof selectedEntry.explorationMediumVeinChancePct === "number" &&
+        Number.isFinite(selectedEntry.explorationMediumVeinChancePct)
+        ? String(Math.max(0, selectedEntry.explorationMediumVeinChancePct))
+        : "30",
+    );
+    setDraftExplorationLargeChance(
+      typeof selectedEntry.explorationLargeVeinChancePct === "number" &&
+        Number.isFinite(selectedEntry.explorationLargeVeinChancePct)
+        ? String(Math.max(0, selectedEntry.explorationLargeVeinChancePct))
+        : "10",
+    );
+    setDraftExplorationSmallMin(
+      typeof selectedEntry.explorationSmallVeinMin === "number" && Number.isFinite(selectedEntry.explorationSmallVeinMin)
+        ? String(Math.max(0, selectedEntry.explorationSmallVeinMin))
+        : "10",
+    );
+    setDraftExplorationSmallMax(
+      typeof selectedEntry.explorationSmallVeinMax === "number" && Number.isFinite(selectedEntry.explorationSmallVeinMax)
+        ? String(Math.max(0, selectedEntry.explorationSmallVeinMax))
+        : "100",
+    );
+    setDraftExplorationMediumMin(
+      typeof selectedEntry.explorationMediumVeinMin === "number" &&
+        Number.isFinite(selectedEntry.explorationMediumVeinMin)
+        ? String(Math.max(0, selectedEntry.explorationMediumVeinMin))
+        : "100",
+    );
+    setDraftExplorationMediumMax(
+      typeof selectedEntry.explorationMediumVeinMax === "number" &&
+        Number.isFinite(selectedEntry.explorationMediumVeinMax)
+        ? String(Math.max(0, selectedEntry.explorationMediumVeinMax))
+        : "500",
+    );
+    setDraftExplorationLargeMin(
+      typeof selectedEntry.explorationLargeVeinMin === "number" && Number.isFinite(selectedEntry.explorationLargeVeinMin)
+        ? String(Math.max(0, selectedEntry.explorationLargeVeinMin))
+        : "500",
+    );
+    setDraftExplorationLargeMax(
+      typeof selectedEntry.explorationLargeVeinMax === "number" && Number.isFinite(selectedEntry.explorationLargeVeinMax)
+        ? String(Math.max(0, selectedEntry.explorationLargeVeinMax))
+        : "2000",
     );
     setDraftBaseWage(
       typeof selectedEntry.baseWage === "number" && Number.isFinite(selectedEntry.baseWage)
@@ -792,6 +943,17 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftMaxPrice,
     draftInfraPerUnit,
     draftResourceCategoryId,
+    draftIsResourceDiscoverable,
+    draftExplorationBaseWeight,
+    draftExplorationSmallChance,
+    draftExplorationMediumChance,
+    draftExplorationLargeChance,
+    draftExplorationSmallMin,
+    draftExplorationSmallMax,
+    draftExplorationMediumMin,
+    draftExplorationMediumMax,
+    draftExplorationLargeMin,
+    draftExplorationLargeMax,
     draftBaseWage,
     draftCostConstruction,
     draftCostDucats,
@@ -844,6 +1006,17 @@ export function ContentPanel({ open, token, onClose }: Props) {
         infraPerUnit: activeCategory === "goods" ? 1 : undefined,
         infrastructureCostPerUnit: activeCategory === "goods" ? 1 : undefined,
         resourceCategoryId: activeCategory === "goods" ? null : undefined,
+        isResourceDiscoverable: activeCategory === "goods" ? false : undefined,
+        explorationBaseWeight: activeCategory === "goods" ? 1 : undefined,
+        explorationSmallVeinChancePct: activeCategory === "goods" ? 60 : undefined,
+        explorationMediumVeinChancePct: activeCategory === "goods" ? 30 : undefined,
+        explorationLargeVeinChancePct: activeCategory === "goods" ? 10 : undefined,
+        explorationSmallVeinMin: activeCategory === "goods" ? 10 : undefined,
+        explorationSmallVeinMax: activeCategory === "goods" ? 100 : undefined,
+        explorationMediumVeinMin: activeCategory === "goods" ? 100 : undefined,
+        explorationMediumVeinMax: activeCategory === "goods" ? 500 : undefined,
+        explorationLargeVeinMin: activeCategory === "goods" ? 500 : undefined,
+        explorationLargeVeinMax: activeCategory === "goods" ? 2000 : undefined,
         baseWage: activeCategory === "professions" ? 1 : undefined,
         costConstruction: activeCategory === "buildings" ? 100 : undefined,
         costDucats: activeCategory === "buildings" ? 10 : undefined,
@@ -901,6 +1074,22 @@ export function ContentPanel({ open, token, onClose }: Props) {
       infraPerUnit: activeCategory === "goods" ? Math.max(0, Number(draftInfraPerUnit || "0")) : undefined,
       infrastructureCostPerUnit: activeCategory === "goods" ? Math.max(0.01, Number(draftInfraPerUnit || "0.01")) : undefined,
       resourceCategoryId: activeCategory === "goods" ? (draftResourceCategoryId.trim() || null) : undefined,
+      isResourceDiscoverable: activeCategory === "goods" ? Boolean(draftIsResourceDiscoverable) : undefined,
+      explorationBaseWeight: activeCategory === "goods" ? Math.max(0, Number(draftExplorationBaseWeight || "1")) : undefined,
+      explorationSmallVeinChancePct:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationSmallChance || "0")) : undefined,
+      explorationMediumVeinChancePct:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationMediumChance || "0")) : undefined,
+      explorationLargeVeinChancePct:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationLargeChance || "0")) : undefined,
+      explorationSmallVeinMin: activeCategory === "goods" ? Math.max(0, Number(draftExplorationSmallMin || "0")) : undefined,
+      explorationSmallVeinMax: activeCategory === "goods" ? Math.max(0, Number(draftExplorationSmallMax || "0")) : undefined,
+      explorationMediumVeinMin:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationMediumMin || "0")) : undefined,
+      explorationMediumVeinMax:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationMediumMax || "0")) : undefined,
+      explorationLargeVeinMin: activeCategory === "goods" ? Math.max(0, Number(draftExplorationLargeMin || "0")) : undefined,
+      explorationLargeVeinMax: activeCategory === "goods" ? Math.max(0, Number(draftExplorationLargeMax || "0")) : undefined,
       baseWage: activeCategory === "professions" ? Math.max(0, Number(draftBaseWage || "0")) : undefined,
       costConstruction: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftCostConstruction || "100"))) : undefined,
       costDucats: activeCategory === "buildings" ? Math.max(0, Number(draftCostDucats || "10")) : undefined,
@@ -928,13 +1117,32 @@ export function ContentPanel({ open, token, onClose }: Props) {
         !Number.isFinite(payload.minPrice ?? Number.NaN) ||
         !Number.isFinite(payload.maxPrice ?? Number.NaN) ||
         !Number.isFinite(payload.infraPerUnit ?? Number.NaN) ||
-        !Number.isFinite(payload.infrastructureCostPerUnit ?? Number.NaN))
+        !Number.isFinite(payload.infrastructureCostPerUnit ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationBaseWeight ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationSmallVeinChancePct ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationMediumVeinChancePct ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationLargeVeinChancePct ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationSmallVeinMin ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationSmallVeinMax ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationMediumVeinMin ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationMediumVeinMax ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationLargeVeinMin ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationLargeVeinMax ?? Number.NaN))
     ) {
       toast.error("Параметры экономики товара должны быть числами");
       return;
     }
     if (activeCategory === "goods" && (payload.maxPrice ?? 0) < (payload.minPrice ?? 0)) {
       toast.error("Максимальная цена не может быть меньше минимальной");
+      return;
+    }
+    if (
+      activeCategory === "goods" &&
+      ((payload.explorationSmallVeinMax ?? 0) < (payload.explorationSmallVeinMin ?? 0) ||
+        (payload.explorationMediumVeinMax ?? 0) < (payload.explorationMediumVeinMin ?? 0) ||
+        (payload.explorationLargeVeinMax ?? 0) < (payload.explorationLargeVeinMin ?? 0))
+    ) {
+      toast.error("Макс. количество жилы не может быть меньше мин. значения");
       return;
     }
     if (activeCategory === "professions" && !Number.isFinite(payload.baseWage ?? Number.NaN)) {
@@ -2047,6 +2255,163 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               <Tooltip content="После внедрения рынка это значение будет стартовой/референсной ценой.">
                                 <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
                               </Tooltip>
+                            </motion.div>
+                          ) : null}
+                          </AnimatePresence>
+                        </div>
+                      </section>
+                    )}
+
+                    {contentSection === "exploration" && activeCategory === "goods" && (
+                      <section className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <button
+                            type="button"
+                            onClick={() => setGoodsExplorationOpen((v) => !v)}
+                            className="mb-2 flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                          >
+                            <Tooltip content="Параметры генерации залежей этого товара при георазведке.">
+                              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Георазведка товара</div>
+                            </Tooltip>
+                            {goodsExplorationOpen ? (
+                              <ChevronDown size={14} className="text-white/60" />
+                            ) : (
+                              <ChevronRight size={14} className="text-white/60" />
+                            )}
+                          </button>
+                          <AnimatePresence initial={false}>
+                          {goodsExplorationOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                              <label className="mb-3 flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                                <input
+                                  type="checkbox"
+                                  checked={draftIsResourceDiscoverable}
+                                  onChange={(e) => setDraftIsResourceDiscoverable(e.target.checked)}
+                                  className="h-4 w-4 rounded border-white/20 bg-black/60 accent-emerald-400"
+                                />
+                                <span className="text-xs text-white/80">Можно найти в провинции как ресурс</span>
+                              </label>
+                              <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                                <label className="block">
+                                  <Tooltip content="Базовый вес товара при розыгрыше найденного ресурса. Чем выше, тем чаще выпадает.">
+                                    <span className="mb-1 block text-xs text-white/60">Базовый вес</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationBaseWeight}
+                                    onChange={(e) => setDraftExplorationBaseWeight(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Шанс маленькой жилы (в %). Нормализуется вместе с другими шансами.">
+                                    <span className="mb-1 block text-xs text-white/60">Малая жила, %</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationSmallChance}
+                                    onChange={(e) => setDraftExplorationSmallChance(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="60"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Шанс средней жилы (в %). Нормализуется вместе с другими шансами.">
+                                    <span className="mb-1 block text-xs text-white/60">Средняя жила, %</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationMediumChance}
+                                    onChange={(e) => setDraftExplorationMediumChance(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="30"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Шанс крупной жилы (в %). Нормализуется вместе с другими шансами.">
+                                    <span className="mb-1 block text-xs text-white/60">Крупная жила, %</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationLargeChance}
+                                    onChange={(e) => setDraftExplorationLargeChance(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="10"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                                <label className="block">
+                                  <Tooltip content="Диапазон количества для маленькой жилы.">
+                                    <span className="mb-1 block text-xs text-white/60">Малая: мин / макс</span>
+                                  </Tooltip>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                      value={draftExplorationSmallMin}
+                                      onChange={(e) => setDraftExplorationSmallMin(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="10"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                    <input
+                                      value={draftExplorationSmallMax}
+                                      onChange={(e) => setDraftExplorationSmallMax(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="100"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                  </div>
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Диапазон количества для средней жилы.">
+                                    <span className="mb-1 block text-xs text-white/60">Средняя: мин / макс</span>
+                                  </Tooltip>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                      value={draftExplorationMediumMin}
+                                      onChange={(e) => setDraftExplorationMediumMin(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="100"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                    <input
+                                      value={draftExplorationMediumMax}
+                                      onChange={(e) => setDraftExplorationMediumMax(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="500"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                  </div>
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Диапазон количества для крупной жилы.">
+                                    <span className="mb-1 block text-xs text-white/60">Крупная: мин / макс</span>
+                                  </Tooltip>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                      value={draftExplorationLargeMin}
+                                      onChange={(e) => setDraftExplorationLargeMin(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="500"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                    <input
+                                      value={draftExplorationLargeMax}
+                                      onChange={(e) => setDraftExplorationLargeMax(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="2000"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                  </div>
+                                </label>
+                              </div>
                             </motion.div>
                           ) : null}
                           </AnimatePresence>

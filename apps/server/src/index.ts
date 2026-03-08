@@ -25,6 +25,8 @@ import {
   type OrderDelta,
   type ProvincePopulation,
   type ProvinceConstructionProject,
+  type ProvinceResourceDeposit,
+  type ProvinceResourceExplorationProject,
   type BuildingInstance,
   type BuildingOwner,
   type ResourceTotals,
@@ -311,6 +313,10 @@ const MARKET_PRICE_SMOOTHING = 0.3;
 const MARKET_PRICE_HISTORY_LENGTH = 10;
 const MARKET_PRICE_EPSILON = 0.0001;
 const DEFAULT_MARKET_PRICE_SMOOTHING = MARKET_PRICE_SMOOTHING;
+const DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT = 50;
+const DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT = 7.5;
+const DEFAULT_EXPLORATION_DURATION_TURNS = 3;
+const DEFAULT_EXPLORATION_ROLLS_PER_EXPEDITION = 3;
 type PriceScopeState = Record<string, Record<string, number>>;
 let countryGoodPrices: PriceScopeState = {};
 let globalGoodPrices: Record<string, number> = {};
@@ -654,11 +660,22 @@ type GameContentEntry = {
 
 type GoodContentEntry = GameContentEntry & {
   resourceCategoryId?: string | null;
+  isResourceDiscoverable?: boolean | null;
   basePrice?: number | null;
   minPrice?: number | null;
   maxPrice?: number | null;
   infraPerUnit?: number | null;
   infrastructureCostPerUnit?: number | null;
+  explorationBaseWeight?: number | null;
+  explorationSmallVeinChancePct?: number | null;
+  explorationMediumVeinChancePct?: number | null;
+  explorationLargeVeinChancePct?: number | null;
+  explorationSmallVeinMin?: number | null;
+  explorationSmallVeinMax?: number | null;
+  explorationMediumVeinMin?: number | null;
+  explorationMediumVeinMax?: number | null;
+  explorationLargeVeinMin?: number | null;
+  explorationLargeVeinMax?: number | null;
 };
 
 type BuildingContentEntry = GameContentEntry & {
@@ -748,6 +765,10 @@ type GameSettings = {
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
     marketPriceSmoothing: number;
+    explorationBaseEmptyChancePct: number;
+    explorationDepletionPerAttemptPct: number;
+    explorationDurationTurns: number;
+    explorationRollsPerExpedition: number;
   };
   markets: {
     countryMarketByCountryId: Record<string, string>;
@@ -1262,11 +1283,22 @@ function normalizeContentGoods(input: unknown): GameSettings["content"]["goods"]
   return base.map((entry, index) => {
     const raw = sourceRows[index] as Partial<{
       resourceCategoryId?: unknown;
+      isResourceDiscoverable?: unknown;
       basePrice?: unknown;
       minPrice?: unknown;
       maxPrice?: unknown;
       infraPerUnit?: unknown;
       infrastructureCostPerUnit?: unknown;
+      explorationBaseWeight?: unknown;
+      explorationSmallVeinChancePct?: unknown;
+      explorationMediumVeinChancePct?: unknown;
+      explorationLargeVeinChancePct?: unknown;
+      explorationSmallVeinMin?: unknown;
+      explorationSmallVeinMax?: unknown;
+      explorationMediumVeinMin?: unknown;
+      explorationMediumVeinMax?: unknown;
+      explorationLargeVeinMin?: unknown;
+      explorationLargeVeinMax?: unknown;
     }> | undefined;
     const basePrice =
       typeof raw?.basePrice === "number" && Number.isFinite(raw.basePrice)
@@ -1289,14 +1321,71 @@ function normalizeContentGoods(input: unknown): GameSettings["content"]["goods"]
       typeof raw?.resourceCategoryId === "string" && raw.resourceCategoryId.trim().length > 0
         ? raw.resourceCategoryId.trim()
         : null;
+    const isResourceDiscoverable = typeof raw?.isResourceDiscoverable === "boolean" ? raw.isResourceDiscoverable : false;
+    const explorationBaseWeight =
+      typeof raw?.explorationBaseWeight === "number" && Number.isFinite(raw.explorationBaseWeight)
+        ? Math.max(0, Number(raw.explorationBaseWeight))
+        : 1;
+    const smallChanceRaw =
+      typeof raw?.explorationSmallVeinChancePct === "number" && Number.isFinite(raw.explorationSmallVeinChancePct)
+        ? Math.max(0, Number(raw.explorationSmallVeinChancePct))
+        : 60;
+    const mediumChanceRaw =
+      typeof raw?.explorationMediumVeinChancePct === "number" && Number.isFinite(raw.explorationMediumVeinChancePct)
+        ? Math.max(0, Number(raw.explorationMediumVeinChancePct))
+        : 30;
+    const largeChanceRaw =
+      typeof raw?.explorationLargeVeinChancePct === "number" && Number.isFinite(raw.explorationLargeVeinChancePct)
+        ? Math.max(0, Number(raw.explorationLargeVeinChancePct))
+        : 10;
+    const chanceSum = smallChanceRaw + mediumChanceRaw + largeChanceRaw;
+    const chanceNormDiv = chanceSum > 0 ? chanceSum / 100 : 1;
+    const smallChance = chanceSum > 0 ? smallChanceRaw / chanceNormDiv : 60;
+    const mediumChance = chanceSum > 0 ? mediumChanceRaw / chanceNormDiv : 30;
+    const largeChance = chanceSum > 0 ? largeChanceRaw / chanceNormDiv : 10;
+    const smallMin =
+      typeof raw?.explorationSmallVeinMin === "number" && Number.isFinite(raw.explorationSmallVeinMin)
+        ? Math.max(0, Number(raw.explorationSmallVeinMin))
+        : 10;
+    const smallMax =
+      typeof raw?.explorationSmallVeinMax === "number" && Number.isFinite(raw.explorationSmallVeinMax)
+        ? Math.max(smallMin, Number(raw.explorationSmallVeinMax))
+        : 100;
+    const mediumMin =
+      typeof raw?.explorationMediumVeinMin === "number" && Number.isFinite(raw.explorationMediumVeinMin)
+        ? Math.max(0, Number(raw.explorationMediumVeinMin))
+        : 100;
+    const mediumMax =
+      typeof raw?.explorationMediumVeinMax === "number" && Number.isFinite(raw.explorationMediumVeinMax)
+        ? Math.max(mediumMin, Number(raw.explorationMediumVeinMax))
+        : 500;
+    const largeMin =
+      typeof raw?.explorationLargeVeinMin === "number" && Number.isFinite(raw.explorationLargeVeinMin)
+        ? Math.max(0, Number(raw.explorationLargeVeinMin))
+        : 500;
+    const largeMax =
+      typeof raw?.explorationLargeVeinMax === "number" && Number.isFinite(raw.explorationLargeVeinMax)
+        ? Math.max(largeMin, Number(raw.explorationLargeVeinMax))
+        : 2_000;
     return {
       ...entry,
       resourceCategoryId,
+      isResourceDiscoverable,
       basePrice: Number(basePrice.toFixed(3)),
       minPrice: Number(minPriceRaw.toFixed(3)),
       maxPrice: Number(maxPriceRaw.toFixed(3)),
       infraPerUnit: Number(infraPerUnit.toFixed(3)),
       infrastructureCostPerUnit: Number(infraPerUnit.toFixed(3)),
+      explorationBaseWeight: Number(explorationBaseWeight.toFixed(3)),
+      explorationSmallVeinChancePct: Number(smallChance.toFixed(3)),
+      explorationMediumVeinChancePct: Number(mediumChance.toFixed(3)),
+      explorationLargeVeinChancePct: Number(largeChance.toFixed(3)),
+      explorationSmallVeinMin: Number(smallMin.toFixed(3)),
+      explorationSmallVeinMax: Number(smallMax.toFixed(3)),
+      explorationMediumVeinMin: Number(mediumMin.toFixed(3)),
+      explorationMediumVeinMax: Number(mediumMax.toFixed(3)),
+      explorationLargeVeinMin: Number(largeMin.toFixed(3)),
+      explorationLargeVeinMax: Number(largeMax.toFixed(3)),
     };
   });
 }
@@ -1903,6 +1992,99 @@ function normalizeProvinceConstructionQueueMap(input: unknown): Record<string, P
     if (!normalized[province.id]) {
       normalized[province.id] = [];
     }
+  }
+  return normalized;
+}
+
+function normalizeProvinceResourceDepositsMap(input: unknown): Record<string, ProvinceResourceDeposit[]> {
+  const normalized: Record<string, ProvinceResourceDeposit[]> = {};
+  if (input && typeof input === "object") {
+    const source = input as Record<string, unknown>;
+    for (const [provinceId, rawRows] of Object.entries(source)) {
+      if (!provinceId || !Array.isArray(rawRows)) continue;
+      const rows: ProvinceResourceDeposit[] = [];
+      for (const rawRow of rawRows) {
+        if (!rawRow || typeof rawRow !== "object") continue;
+        const row = rawRow as Partial<ProvinceResourceDeposit>;
+        const goodId = typeof row.goodId === "string" ? row.goodId.trim() : "";
+        if (!goodId) continue;
+        const amount =
+          typeof row.amount === "number" && Number.isFinite(row.amount) ? round3(Math.max(0, Number(row.amount))) : 0;
+        if (amount <= 0) continue;
+        const discoveredTurnId =
+          typeof row.discoveredTurnId === "number" && Number.isFinite(row.discoveredTurnId)
+            ? Math.max(1, Math.floor(row.discoveredTurnId))
+            : turnId;
+        const veinSize =
+          row.veinSize === "small" || row.veinSize === "medium" || row.veinSize === "large"
+            ? row.veinSize
+            : "small";
+        const existing = rows.find((entry) => entry.goodId === goodId);
+        if (existing) {
+          existing.amount = round3(existing.amount + amount);
+          continue;
+        }
+        rows.push({ goodId, amount, discoveredTurnId, veinSize });
+      }
+      normalized[provinceId] = rows.sort((a, b) => a.goodId.localeCompare(b.goodId));
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (!normalized[province.id]) normalized[province.id] = [];
+  }
+  return normalized;
+}
+
+function normalizeProvinceResourceExplorationQueueMap(
+  input: unknown,
+): Record<string, ProvinceResourceExplorationProject[]> {
+  const normalized: Record<string, ProvinceResourceExplorationProject[]> = {};
+  if (input && typeof input === "object") {
+    const source = input as Record<string, unknown>;
+    for (const [provinceId, rawRows] of Object.entries(source)) {
+      if (!provinceId || !Array.isArray(rawRows)) continue;
+      const rows: ProvinceResourceExplorationProject[] = [];
+      for (const rawRow of rawRows) {
+        if (!rawRow || typeof rawRow !== "object") continue;
+        const row = rawRow as Partial<ProvinceResourceExplorationProject>;
+        const requestedByCountryId =
+          typeof row.requestedByCountryId === "string" && row.requestedByCountryId.trim()
+            ? row.requestedByCountryId.trim()
+            : "";
+        if (!requestedByCountryId) continue;
+        const queueId = typeof row.queueId === "string" && row.queueId.trim() ? row.queueId.trim() : randomUUID();
+        const startedTurnId =
+          typeof row.startedTurnId === "number" && Number.isFinite(row.startedTurnId)
+            ? Math.max(1, Math.floor(row.startedTurnId))
+            : turnId;
+        const turnsRemaining =
+          typeof row.turnsRemaining === "number" && Number.isFinite(row.turnsRemaining)
+            ? Math.max(0, Math.floor(row.turnsRemaining))
+            : 0;
+        rows.push({ queueId, requestedByCountryId, startedTurnId, turnsRemaining });
+      }
+      normalized[provinceId] = rows;
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (!normalized[province.id]) normalized[province.id] = [];
+  }
+  return normalized;
+}
+
+function normalizeProvinceResourceExplorationCountMap(input: unknown): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  if (input && typeof input === "object") {
+    const source = input as Record<string, unknown>;
+    for (const [provinceId, rawValue] of Object.entries(source)) {
+      if (!provinceId) continue;
+      const value =
+        typeof rawValue === "number" && Number.isFinite(rawValue) ? Math.max(0, Math.floor(rawValue)) : 0;
+      normalized[provinceId] = value;
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (normalized[province.id] == null) normalized[province.id] = 0;
   }
   return normalized;
 }
@@ -3245,6 +3427,10 @@ const defaultGameSettings = (): GameSettings => {
       baseGoldPerTurn: 10,
       demolitionCostConstructionPercent: 20,
       marketPriceSmoothing: 0.2,
+      explorationBaseEmptyChancePct: DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT,
+      explorationDepletionPerAttemptPct: DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT,
+      explorationDurationTurns: DEFAULT_EXPLORATION_DURATION_TURNS,
+      explorationRollsPerExpedition: DEFAULT_EXPLORATION_ROLLS_PER_EXPEDITION,
     },
     markets: {
       countryMarketByCountryId: {},
@@ -3395,6 +3581,9 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number>> = {};
   const provincePopulationTreasuryByProvince: Record<string, number> = {};
   const provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[]> = {};
+  const provinceResourceDepositsByProvince: Record<string, ProvinceResourceDeposit[]> = {};
+  const provinceResourceExplorationQueueByProvince: Record<string, ProvinceResourceExplorationProject[]> = {};
+  const provinceResourceExplorationCountByProvince: Record<string, number> = {};
   for (const province of adm1ProvinceIndex) {
     provincePopulationByProvince[province.id] = buildDefaultProvincePopulation(province.id, domains);
     provinceInfrastructureByProvince[province.id] = DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY;
@@ -3402,6 +3591,9 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     provinceBuildingDucatsByProvince[province.id] = {};
     provincePopulationTreasuryByProvince[province.id] = 0;
     provinceConstructionQueueByProvince[province.id] = [];
+    provinceResourceDepositsByProvince[province.id] = [];
+    provinceResourceExplorationQueueByProvince[province.id] = [];
+    provinceResourceExplorationCountByProvince[province.id] = 0;
   }
   return {
     turnId: currentTurnId,
@@ -3416,6 +3608,9 @@ function defaultWorldBase(currentTurnId: number): WorldBase {
     provinceBuildingDucatsByProvince,
     provincePopulationTreasuryByProvince,
     provinceConstructionQueueByProvince,
+    provinceResourceDepositsByProvince,
+    provinceResourceExplorationQueueByProvince,
+    provinceResourceExplorationCountByProvince,
   };
 }
 
@@ -3506,6 +3701,26 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.economy?.marketPriceSmoothing === "number" && Number.isFinite(next.economy.marketPriceSmoothing)
             ? Math.max(0, Math.min(1, Number(next.economy.marketPriceSmoothing)))
             : defaults.economy.marketPriceSmoothing,
+        explorationBaseEmptyChancePct:
+          typeof next.economy?.explorationBaseEmptyChancePct === "number" &&
+          Number.isFinite(next.economy.explorationBaseEmptyChancePct)
+            ? Math.max(0, Math.min(100, Number(next.economy.explorationBaseEmptyChancePct)))
+            : defaults.economy.explorationBaseEmptyChancePct,
+        explorationDepletionPerAttemptPct:
+          typeof next.economy?.explorationDepletionPerAttemptPct === "number" &&
+          Number.isFinite(next.economy.explorationDepletionPerAttemptPct)
+            ? Math.max(0, Math.min(100, Number(next.economy.explorationDepletionPerAttemptPct)))
+            : defaults.economy.explorationDepletionPerAttemptPct,
+        explorationDurationTurns:
+          typeof next.economy?.explorationDurationTurns === "number" &&
+          Number.isFinite(next.economy.explorationDurationTurns)
+            ? Math.max(1, Math.floor(next.economy.explorationDurationTurns))
+            : defaults.economy.explorationDurationTurns,
+        explorationRollsPerExpedition:
+          typeof next.economy?.explorationRollsPerExpedition === "number" &&
+          Number.isFinite(next.economy.explorationRollsPerExpedition)
+            ? Math.max(1, Math.floor(next.economy.explorationRollsPerExpedition))
+            : defaults.economy.explorationRollsPerExpedition,
       },
       markets: {
         countryMarketByCountryId:
@@ -3731,6 +3946,18 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         ),
         provinceConstructionQueueByProvince: normalizeProvinceConstructionQueueMap(
           (candidate as Partial<WorldBase> & { provinceConstructionQueueByProvince?: unknown }).provinceConstructionQueueByProvince,
+        ),
+        provinceResourceDepositsByProvince: normalizeProvinceResourceDepositsMap(
+          (candidate as Partial<WorldBase> & { provinceResourceDepositsByProvince?: unknown })
+            .provinceResourceDepositsByProvince,
+        ),
+        provinceResourceExplorationQueueByProvince: normalizeProvinceResourceExplorationQueueMap(
+          (candidate as Partial<WorldBase> & { provinceResourceExplorationQueueByProvince?: unknown })
+            .provinceResourceExplorationQueueByProvince,
+        ),
+        provinceResourceExplorationCountByProvince: normalizeProvinceResourceExplorationCountMap(
+          (candidate as Partial<WorldBase> & { provinceResourceExplorationCountByProvince?: unknown })
+            .provinceResourceExplorationCountByProvince,
         ),
       };
     } else {
@@ -4581,6 +4808,9 @@ type WorldBaseSectionSnapshot = {
   provinceBuildingDucatsByProvince?: WorldBase["provinceBuildingDucatsByProvince"];
   provincePopulationTreasuryByProvince?: WorldBase["provincePopulationTreasuryByProvince"];
   provinceConstructionQueueByProvince?: WorldBase["provinceConstructionQueueByProvince"];
+  provinceResourceDepositsByProvince?: WorldBase["provinceResourceDepositsByProvince"];
+  provinceResourceExplorationQueueByProvince?: WorldBase["provinceResourceExplorationQueueByProvince"];
+  provinceResourceExplorationCountByProvince?: WorldBase["provinceResourceExplorationCountByProvince"];
 };
 
 function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
@@ -4621,6 +4851,19 @@ function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
   }
   if ((mask & WORLD_DELTA_MASK.provinceConstructionQueueByProvince) !== 0) {
     snapshot.provinceConstructionQueueByProvince = structuredClone(worldBase.provinceConstructionQueueByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceResourceDepositsByProvince) !== 0) {
+    snapshot.provinceResourceDepositsByProvince = structuredClone(worldBase.provinceResourceDepositsByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince) !== 0) {
+    snapshot.provinceResourceExplorationQueueByProvince = structuredClone(
+      worldBase.provinceResourceExplorationQueueByProvince,
+    );
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince) !== 0) {
+    snapshot.provinceResourceExplorationCountByProvince = structuredClone(
+      worldBase.provinceResourceExplorationCountByProvince,
+    );
   }
 
   return snapshot;
@@ -4733,6 +4976,50 @@ function isEqualConstructionQueue(
   return true;
 }
 
+function isEqualResourceDeposits(
+  prevValue: ProvinceResourceDeposit[] | undefined,
+  nextValue: ProvinceResourceDeposit[],
+): boolean {
+  if (!prevValue) return false;
+  if (prevValue.length !== nextValue.length) return false;
+  for (let i = 0; i < nextValue.length; i += 1) {
+    const prev = prevValue[i];
+    const next = nextValue[i];
+    if (!prev || !next) return false;
+    if (
+      prev.goodId !== next.goodId ||
+      Number(prev.amount) !== Number(next.amount) ||
+      prev.discoveredTurnId !== next.discoveredTurnId ||
+      prev.veinSize !== next.veinSize
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isEqualResourceExplorationQueue(
+  prevValue: ProvinceResourceExplorationProject[] | undefined,
+  nextValue: ProvinceResourceExplorationProject[],
+): boolean {
+  if (!prevValue) return false;
+  if (prevValue.length !== nextValue.length) return false;
+  for (let i = 0; i < nextValue.length; i += 1) {
+    const prev = prevValue[i];
+    const next = nextValue[i];
+    if (!prev || !next) return false;
+    if (
+      prev.queueId !== next.queueId ||
+      prev.requestedByCountryId !== next.requestedByCountryId ||
+      prev.startedTurnId !== next.startedTurnId ||
+      prev.turnsRemaining !== next.turnsRemaining
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isEqualBuildingInstances(
   prevValue: BuildingInstance[] | undefined,
   nextValue: BuildingInstance[],
@@ -4797,6 +5084,9 @@ function buildCompactWorldDelta(
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number> | null> = {};
   const provincePopulationTreasuryByProvince: Record<string, number | null> = {};
   const provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[] | null> = {};
+  const provinceResourceDepositsByProvince: Record<string, ProvinceResourceDeposit[] | null> = {};
+  const provinceResourceExplorationQueueByProvince: Record<string, ProvinceResourceExplorationProject[] | null> = {};
+  const provinceResourceExplorationCountByProvince: Record<string, number | null> = {};
 
   for (const key of new Set([...Object.keys(prev.resourcesByCountry), ...Object.keys(next.resourcesByCountry)])) {
     const prevValue = prev.resourcesByCountry[key];
@@ -4944,6 +5234,52 @@ function buildCompactWorldDelta(
     }
   }
 
+  for (const key of new Set([...Object.keys(prev.provinceResourceDepositsByProvince), ...Object.keys(next.provinceResourceDepositsByProvince)])) {
+    const prevValue = prev.provinceResourceDepositsByProvince[key];
+    const nextValue = next.provinceResourceDepositsByProvince[key];
+    if (!nextValue) {
+      provinceResourceDepositsByProvince[key] = null;
+      continue;
+    }
+    if (!isEqualResourceDeposits(prevValue, nextValue)) {
+      provinceResourceDepositsByProvince[key] = nextValue;
+    }
+  }
+
+  for (
+    const key of new Set([
+      ...Object.keys(prev.provinceResourceExplorationQueueByProvince),
+      ...Object.keys(next.provinceResourceExplorationQueueByProvince),
+    ])
+  ) {
+    const prevValue = prev.provinceResourceExplorationQueueByProvince[key];
+    const nextValue = next.provinceResourceExplorationQueueByProvince[key];
+    if (!nextValue) {
+      provinceResourceExplorationQueueByProvince[key] = null;
+      continue;
+    }
+    if (!isEqualResourceExplorationQueue(prevValue, nextValue)) {
+      provinceResourceExplorationQueueByProvince[key] = nextValue;
+    }
+  }
+
+  for (
+    const key of new Set([
+      ...Object.keys(prev.provinceResourceExplorationCountByProvince),
+      ...Object.keys(next.provinceResourceExplorationCountByProvince),
+    ])
+  ) {
+    const prevValue = prev.provinceResourceExplorationCountByProvince[key];
+    const nextValue = next.provinceResourceExplorationCountByProvince[key];
+    if (nextValue == null) {
+      provinceResourceExplorationCountByProvince[key] = null;
+      continue;
+    }
+    if (prevValue !== nextValue) {
+      provinceResourceExplorationCountByProvince[key] = nextValue;
+    }
+  }
+
   let mask = 0;
   const compact: Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> = { mask: 0 };
   if (Object.keys(resourcesByCountry).length > 0) {
@@ -4989,6 +5325,18 @@ function buildCompactWorldDelta(
   if (Object.keys(provinceConstructionQueueByProvince).length > 0) {
     mask |= WORLD_DELTA_MASK.provinceConstructionQueueByProvince;
     compact.r = provinceConstructionQueueByProvince;
+  }
+  if (Object.keys(provinceResourceDepositsByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceResourceDepositsByProvince;
+    compact.t = provinceResourceDepositsByProvince;
+  }
+  if (Object.keys(provinceResourceExplorationQueueByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince;
+    compact.e = provinceResourceExplorationQueueByProvince;
+  }
+  if (Object.keys(provinceResourceExplorationCountByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince;
+    compact.k = provinceResourceExplorationCountByProvince;
   }
   compact.mask = mask;
   return compact;
@@ -5041,6 +5389,21 @@ function toWorldBaseForDeltaDiff(previous: WorldBaseSectionSnapshot, next: World
       (previous.mask & WORLD_DELTA_MASK.provinceConstructionQueueByProvince) !== 0 && previous.provinceConstructionQueueByProvince
         ? previous.provinceConstructionQueueByProvince
         : next.provinceConstructionQueueByProvince,
+    provinceResourceDepositsByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceResourceDepositsByProvince) !== 0 &&
+      previous.provinceResourceDepositsByProvince
+        ? previous.provinceResourceDepositsByProvince
+        : next.provinceResourceDepositsByProvince,
+    provinceResourceExplorationQueueByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince) !== 0 &&
+      previous.provinceResourceExplorationQueueByProvince
+        ? previous.provinceResourceExplorationQueueByProvince
+        : next.provinceResourceExplorationQueueByProvince,
+    provinceResourceExplorationCountByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince) !== 0 &&
+      previous.provinceResourceExplorationCountByProvince
+        ? previous.provinceResourceExplorationCountByProvince
+        : next.provinceResourceExplorationCountByProvince,
   };
 }
 
@@ -5075,6 +5438,9 @@ function broadcastWorldDeltaFromSectionSnapshot(
     q: compact.q,
     y: compact.y,
     r: compact.r,
+    t: compact.t,
+    e: compact.e,
+    k: compact.k,
     rejectedOrders,
   };
   const baselinePayload = {
@@ -5093,6 +5459,9 @@ function broadcastWorldDeltaFromSectionSnapshot(
       provinceBuildingDucatsByProvince: compact.q,
       provincePopulationTreasuryByProvince: compact.y,
       provinceConstructionQueueByProvince: compact.r,
+      provinceResourceDepositsByProvince: compact.t,
+      provinceResourceExplorationQueueByProvince: compact.e,
+      provinceResourceExplorationCountByProvince: compact.k,
     },
     rejectedOrders,
   };
@@ -5582,6 +5951,132 @@ function resolveBuildingConstructionQueuesTurn(): void {
   }
 }
 
+function rollIntInRange(minValue: number, maxValue: number): number {
+  const min = Math.max(0, Number.isFinite(minValue) ? minValue : 0);
+  const max = Math.max(min, Number.isFinite(maxValue) ? maxValue : min);
+  const value = min + Math.random() * (max - min);
+  return round3(value);
+}
+
+function rollWeightedChoice<T>(items: Array<{ weight: number; value: T }>): T | null {
+  const prepared = items
+    .map((item) => ({ ...item, weight: Math.max(0, Number(item.weight)) }))
+    .filter((item) => item.weight > 0);
+  if (prepared.length === 0) return null;
+  const total = prepared.reduce((sum, item) => sum + item.weight, 0);
+  if (total <= 0) return null;
+  let pivot = Math.random() * total;
+  for (const item of prepared) {
+    pivot -= item.weight;
+    if (pivot <= 0) return item.value;
+  }
+  return prepared[prepared.length - 1].value;
+}
+
+function resolveResourceExplorationTurn(): void {
+  const goods = gameSettings.content.goods.filter((good) => Boolean(good.isResourceDiscoverable));
+  if (goods.length === 0) return;
+  const duration = Math.max(1, Math.floor(Number(gameSettings.economy.explorationDurationTurns ?? 1)));
+  const rollsPerExpedition = Math.max(
+    1,
+    Math.floor(Number(gameSettings.economy.explorationRollsPerExpedition ?? DEFAULT_EXPLORATION_ROLLS_PER_EXPEDITION)),
+  );
+  const baseEmptyChancePct = Math.max(
+    0,
+    Math.min(100, Number(gameSettings.economy.explorationBaseEmptyChancePct ?? DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT)),
+  );
+  const depletionPerAttemptPct = Math.max(
+    0,
+    Math.min(
+      100,
+      Number(gameSettings.economy.explorationDepletionPerAttemptPct ?? DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT),
+    ),
+  );
+
+  for (const province of adm1ProvinceIndex) {
+    const provinceId = province.id;
+    const ownerCountryId = worldBase.provinceOwner[provinceId] ?? null;
+    const queue = [...(worldBase.provinceResourceExplorationQueueByProvince[provinceId] ?? [])];
+    if (queue.length === 0) continue;
+    const nextQueue: ProvinceResourceExplorationProject[] = [];
+    let explorationCount = Math.max(0, Math.floor(worldBase.provinceResourceExplorationCountByProvince[provinceId] ?? 0));
+    const deposits = [...(worldBase.provinceResourceDepositsByProvince[provinceId] ?? [])];
+    for (const project of queue) {
+      if (!ownerCountryId || project.requestedByCountryId !== ownerCountryId) {
+        continue;
+      }
+      const nextTurnsRemaining = Math.max(0, Math.floor(project.turnsRemaining) - 1);
+      if (nextTurnsRemaining > 0) {
+        nextQueue.push({ ...project, turnsRemaining: nextTurnsRemaining });
+        continue;
+      }
+      const emptyChancePct = Math.max(0, Math.min(99.9, baseEmptyChancePct + explorationCount * depletionPerAttemptPct));
+      const areaKm2 = getProvinceAreaKm2(provinceId);
+      const areaFactor = Math.max(0.001, areaKm2 / 1000);
+      const foundByGoodId = new Map<string, { amount: number; veinSize: "small" | "medium" | "large" }>();
+
+      for (let roll = 0; roll < rollsPerExpedition; roll += 1) {
+        if (Math.random() * 100 < emptyChancePct) continue;
+        const chosenGoodId = rollWeightedChoice(
+          goods.map((good) => ({
+            weight: Math.max(0, Number(good.explorationBaseWeight ?? 0)) * areaFactor,
+            value: good.id,
+          })),
+        );
+        if (!chosenGoodId) continue;
+        const good = goods.find((entry) => entry.id === chosenGoodId);
+        if (!good) continue;
+        const smallChance = Math.max(0, Number(good.explorationSmallVeinChancePct ?? 60));
+        const mediumChance = Math.max(0, Number(good.explorationMediumVeinChancePct ?? 30));
+        const largeChance = Math.max(0, Number(good.explorationLargeVeinChancePct ?? 10));
+        const chosenVeinSize =
+          rollWeightedChoice<"small" | "medium" | "large">([
+            { weight: smallChance, value: "small" },
+            { weight: mediumChance, value: "medium" },
+            { weight: largeChance, value: "large" },
+          ]) ?? "small";
+        const amount =
+          chosenVeinSize === "small"
+            ? rollIntInRange(Number(good.explorationSmallVeinMin ?? 10), Number(good.explorationSmallVeinMax ?? 100))
+            : chosenVeinSize === "medium"
+              ? rollIntInRange(
+                  Number(good.explorationMediumVeinMin ?? 100),
+                  Number(good.explorationMediumVeinMax ?? 500),
+                )
+              : rollIntInRange(Number(good.explorationLargeVeinMin ?? 500), Number(good.explorationLargeVeinMax ?? 2000));
+        if (amount <= 0) continue;
+        const prev = foundByGoodId.get(chosenGoodId);
+        foundByGoodId.set(chosenGoodId, {
+          amount: round3((prev?.amount ?? 0) + amount),
+          veinSize: prev?.veinSize ?? chosenVeinSize,
+        });
+      }
+
+      for (const [goodId, found] of foundByGoodId.entries()) {
+        const existing = deposits.find((row) => row.goodId === goodId);
+        if (existing) {
+          existing.amount = round3(existing.amount + found.amount);
+          continue;
+        }
+        deposits.push({
+          goodId,
+          amount: round3(found.amount),
+          discoveredTurnId: turnId,
+          veinSize: found.veinSize,
+        });
+      }
+      explorationCount += 1;
+    }
+    worldBase.provinceResourceExplorationQueueByProvince[provinceId] = nextQueue;
+    worldBase.provinceResourceExplorationCountByProvince[provinceId] = explorationCount;
+    worldBase.provinceResourceDepositsByProvince[provinceId] = deposits.sort((a, b) => a.goodId.localeCompare(b.goodId));
+    if (worldBase.provinceResourceExplorationQueueByProvince[provinceId].length === 0 && duration > 0) {
+      // Keep array shape stable for delta and UI.
+      worldBase.provinceResourceExplorationQueueByProvince[provinceId] = [];
+    }
+  }
+}
+
 function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: EventLogEntry[]; previousWorldBase: WorldBaseSectionSnapshot } {
   const previousWorldBase = cloneWorldBaseSectionSnapshot(
     WORLD_DELTA_MASK.resourcesByCountry |
@@ -5591,7 +6086,10 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
       WORLD_DELTA_MASK.provinceBuildingsByProvince |
       WORLD_DELTA_MASK.provinceBuildingDucatsByProvince |
       WORLD_DELTA_MASK.provincePopulationTreasuryByProvince |
-      WORLD_DELTA_MASK.provinceConstructionQueueByProvince,
+      WORLD_DELTA_MASK.provinceConstructionQueueByProvince |
+      WORLD_DELTA_MASK.provinceResourceDepositsByProvince |
+      WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince |
+      WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince,
   );
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldDelta["rejectedOrders"] = [];
@@ -5727,6 +6225,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
   }
 
   resolveBuildingConstructionQueuesTurn();
+  resolveResourceExplorationTurn();
 
   for (const provinceId of touchedProvinceIds) {
     const progressByCountry = worldBase.colonyProgressByProvince[provinceId];
@@ -6837,6 +7336,10 @@ const gameSettingsSchema = z.object({
       baseGoldPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       demolitionCostConstructionPercent: z.coerce.number().int().min(0).max(100).optional(),
       marketPriceSmoothing: z.coerce.number().min(0).max(1).optional(),
+      explorationBaseEmptyChancePct: z.coerce.number().min(0).max(100).optional(),
+      explorationDepletionPerAttemptPct: z.coerce.number().min(0).max(100).optional(),
+      explorationDurationTurns: z.coerce.number().int().min(1).max(3650).optional(),
+      explorationRollsPerExpedition: z.coerce.number().int().min(1).max(100).optional(),
     })
     .optional(),
   markets: z
@@ -7136,11 +7639,22 @@ const culturePayloadSchema = z.object({
   description: z.string().trim().max(5000).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
   resourceCategoryId: z.string().trim().min(1).max(120).nullable().optional(),
+  isResourceDiscoverable: z.boolean().optional(),
   basePrice: z.number().finite().min(0).optional(),
   minPrice: z.number().finite().min(0).optional(),
   maxPrice: z.number().finite().min(0).optional(),
   infraPerUnit: z.number().finite().min(0).optional(),
   infrastructureCostPerUnit: z.number().finite().min(0).optional(),
+  explorationBaseWeight: z.number().finite().min(0).optional(),
+  explorationSmallVeinChancePct: z.number().finite().min(0).optional(),
+  explorationMediumVeinChancePct: z.number().finite().min(0).optional(),
+  explorationLargeVeinChancePct: z.number().finite().min(0).optional(),
+  explorationSmallVeinMin: z.number().finite().min(0).optional(),
+  explorationSmallVeinMax: z.number().finite().min(0).optional(),
+  explorationMediumVeinMin: z.number().finite().min(0).optional(),
+  explorationMediumVeinMax: z.number().finite().min(0).optional(),
+  explorationLargeVeinMin: z.number().finite().min(0).optional(),
+  explorationLargeVeinMax: z.number().finite().min(0).optional(),
   baseWage: z.number().finite().min(0).optional(),
   costConstruction: z.number().int().min(1).optional(),
   costDucats: z.number().finite().min(0).optional(),
@@ -7223,13 +7737,46 @@ function sanitizeContentEntryByKind(
         : typeof payload.resourceCategoryId === "string" && payload.resourceCategoryId.trim().length > 0
           ? payload.resourceCategoryId.trim()
           : null;
+    const isResourceDiscoverable = payload.isResourceDiscoverable ?? false;
+    const explorationBaseWeight = Number(Math.max(0, payload.explorationBaseWeight ?? 1).toFixed(3));
+    const smallChanceRaw = Math.max(0, Number(payload.explorationSmallVeinChancePct ?? 60));
+    const mediumChanceRaw = Math.max(0, Number(payload.explorationMediumVeinChancePct ?? 30));
+    const largeChanceRaw = Math.max(0, Number(payload.explorationLargeVeinChancePct ?? 10));
+    const chanceSum = smallChanceRaw + mediumChanceRaw + largeChanceRaw;
+    const chanceDiv = chanceSum > 0 ? chanceSum / 100 : 1;
+    const explorationSmallVeinChancePct = Number((chanceSum > 0 ? smallChanceRaw / chanceDiv : 60).toFixed(3));
+    const explorationMediumVeinChancePct = Number((chanceSum > 0 ? mediumChanceRaw / chanceDiv : 30).toFixed(3));
+    const explorationLargeVeinChancePct = Number((chanceSum > 0 ? largeChanceRaw / chanceDiv : 10).toFixed(3));
+    const explorationSmallVeinMin = Number(Math.max(0, payload.explorationSmallVeinMin ?? 10).toFixed(3));
+    const explorationSmallVeinMax = Number(
+      Math.max(explorationSmallVeinMin, payload.explorationSmallVeinMax ?? 100).toFixed(3),
+    );
+    const explorationMediumVeinMin = Number(Math.max(0, payload.explorationMediumVeinMin ?? 100).toFixed(3));
+    const explorationMediumVeinMax = Number(
+      Math.max(explorationMediumVeinMin, payload.explorationMediumVeinMax ?? 500).toFixed(3),
+    );
+    const explorationLargeVeinMin = Number(Math.max(0, payload.explorationLargeVeinMin ?? 500).toFixed(3));
+    const explorationLargeVeinMax = Number(
+      Math.max(explorationLargeVeinMin, payload.explorationLargeVeinMax ?? 2000).toFixed(3),
+    );
     return {
       resourceCategoryId,
+      isResourceDiscoverable,
       basePrice,
       minPrice,
       maxPrice,
       infraPerUnit,
       infrastructureCostPerUnit: infraPerUnit,
+      explorationBaseWeight,
+      explorationSmallVeinChancePct,
+      explorationMediumVeinChancePct,
+      explorationLargeVeinChancePct,
+      explorationSmallVeinMin,
+      explorationSmallVeinMax,
+      explorationMediumVeinMin,
+      explorationMediumVeinMax,
+      explorationLargeVeinMin,
+      explorationLargeVeinMax,
     };
   }
   if (kind === "professions") {
@@ -7704,6 +8251,18 @@ app.patch("/admin/game-settings", async (req, res) => {
     if (typeof nextEconomy.marketPriceSmoothing === "number") {
       gameSettings.economy.marketPriceSmoothing = nextEconomy.marketPriceSmoothing;
     }
+    if (typeof nextEconomy.explorationBaseEmptyChancePct === "number") {
+      gameSettings.economy.explorationBaseEmptyChancePct = nextEconomy.explorationBaseEmptyChancePct;
+    }
+    if (typeof nextEconomy.explorationDepletionPerAttemptPct === "number") {
+      gameSettings.economy.explorationDepletionPerAttemptPct = nextEconomy.explorationDepletionPerAttemptPct;
+    }
+    if (typeof nextEconomy.explorationDurationTurns === "number") {
+      gameSettings.economy.explorationDurationTurns = nextEconomy.explorationDurationTurns;
+    }
+    if (typeof nextEconomy.explorationRollsPerExpedition === "number") {
+      gameSettings.economy.explorationRollsPerExpedition = nextEconomy.explorationRollsPerExpedition;
+    }
   }
   const nextMarkets = parsed.data.markets;
   if (nextMarkets?.countryMarketByCountryId && typeof nextMarkets.countryMarketByCountryId === "object") {
@@ -7880,6 +8439,9 @@ const provinceRenameSchema = z.object({
   provinceId: z.string().min(1),
   provinceName: z.string().trim().min(1).max(64),
 });
+const explorationActionSchema = z.object({
+  provinceId: z.string().min(1),
+});
 
 app.post("/country/colonization/start", async (req, res) => {
   const auth = parseAuthHeader(req);
@@ -8023,6 +8585,40 @@ app.post("/country/colonization/cancel", async (req, res) => {
   });
 
   return res.json({ ok: true, worldBase, turnId });
+});
+
+app.post("/country/exploration/start", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const parsed = explorationActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const { provinceId } = parsed.data;
+  if ((worldBase.provinceOwner[provinceId] ?? null) !== auth.countryId) {
+    return res.status(403).json({ error: "PROVINCE_NOT_OWNED" });
+  }
+  const queue = [...(worldBase.provinceResourceExplorationQueueByProvince[provinceId] ?? [])];
+  if (queue.some((project) => project.requestedByCountryId === auth.countryId)) {
+    return res.status(409).json({ error: "EXPLORATION_ALREADY_QUEUED" });
+  }
+  const durationTurns = Math.max(
+    1,
+    Math.floor(Number(gameSettings.economy.explorationDurationTurns ?? DEFAULT_EXPLORATION_DURATION_TURNS)),
+  );
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince);
+  queue.push({
+    queueId: randomUUID(),
+    requestedByCountryId: auth.countryId,
+    startedTurnId: turnId,
+    turnsRemaining: durationTurns,
+  });
+  worldBase.provinceResourceExplorationQueueByProvince[provinceId] = queue;
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+  return res.json({ ok: true, provinceId, queue: worldBase.provinceResourceExplorationQueueByProvince[provinceId] });
 });
 
 app.post("/country/build/cancel", async (req, res) => {
