@@ -1364,7 +1364,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                           style={{ boxShadow: `0 0 0 1px ${entry.color}33 inset` }}
                         >
                           {entry.logoUrl ? (
-                            <img src={entry.logoUrl} alt="" className="h-full w-full object-cover" />
+                            <img src={entry.logoUrl} alt="" className="h-full w-full object-contain p-1" />
                           ) : (
                             <span className="text-xs font-semibold" style={{ color: entry.color }}>
                               {entry.name.slice(0, 1).toUpperCase()}
@@ -2451,7 +2451,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                         <div className="flex flex-wrap items-start gap-4">
                           <div className="flex h-[88px] w-[88px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-[#131a22]">
                             {draftLogoUrl ? (
-                              <img src={draftLogoUrl} alt="Логотип записи" className="h-full w-full object-cover" />
+                              <img src={draftLogoUrl} alt="Логотип записи" className="h-full w-full object-contain p-1" />
                             ) : (
                               <span className="text-xs font-semibold" style={{ color: draftColor }}>
                                 {draftName.trim().slice(0, 1).toUpperCase() || "К"}
@@ -2567,7 +2567,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             style={{ backgroundColor: `${draftColor}22` }}
                           >
                             {draftLogoUrl ? (
-                              <img src={draftLogoUrl} alt="" className="h-full w-full object-cover" />
+                              <img src={draftLogoUrl} alt="" className="h-full w-full object-contain p-1" />
                             ) : (
                               <span className="text-xs font-semibold" style={{ color: draftColor }}>
                                 {draftName.trim().slice(0, 1).toUpperCase() || "К"}
@@ -2607,7 +2607,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               style={{ backgroundColor: `${draftColor}22` }}
                             >
                               {draftLogoUrl ? (
-                                <img src={draftLogoUrl} alt="" className="h-full w-full object-cover" />
+                                <img src={draftLogoUrl} alt="" className="h-full w-full object-contain p-1" />
                               ) : (
                                 <span className="text-xs font-semibold" style={{ color: draftColor }}>
                                   {draftName.trim().slice(0, 1).toUpperCase() || "К"}

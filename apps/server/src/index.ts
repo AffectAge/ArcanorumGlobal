@@ -66,6 +66,7 @@ const uiBackgroundsDir = resolve(uploadsRoot, "ui-backgrounds");
 const civilopediaImagesDir = resolve(uploadsRoot, "civilopedia");
 const contentUploadDirs = {
   cultures: resolve(uploadsRoot, "cultures"),
+  resourceCategories: resolve(uploadsRoot, "resource-categories"),
   religions: resolve(uploadsRoot, "religions"),
   professions: resolve(uploadsRoot, "professions"),
   ideologies: resolve(uploadsRoot, "ideologies"),
@@ -91,6 +92,7 @@ for (const dir of Object.values(contentUploadDirs)) {
 function resolveContentUploadDir(kind?: string): string {
   if (!kind) return contentUploadDirs.cultures;
   if (kind === "cultures") return contentUploadDirs.cultures;
+  if (kind === "resourceCategories") return contentUploadDirs.resourceCategories;
   if (kind === "religions") return contentUploadDirs.religions;
   if (kind === "professions") return contentUploadDirs.professions;
   if (kind === "ideologies") return contentUploadDirs.ideologies;
@@ -101,6 +103,20 @@ function resolveContentUploadDir(kind?: string): string {
   if (kind === "industries") return contentUploadDirs.industries;
   if (kind === "technologies") return contentUploadDirs.technologies;
   return contentUploadDirs.cultures;
+}
+
+function resolveContentUploadUrlSegment(kind?: string): string {
+  if (!kind) return "cultures";
+  if (kind === "resourceCategories") return "resource-categories";
+  return kind;
+}
+
+function normalizeLegacyContentLogoUrl(kind: ContentEntryKind, logoUrl: string | null): string | null {
+  if (!logoUrl) return logoUrl;
+  if (kind === "resourceCategories") {
+    return logoUrl.replace("/uploads/resourceCategories/", "/uploads/resource-categories/");
+  }
+  return logoUrl;
 }
 
 const resourceIconFields = new Set(["culture", "science", "religion", "colonization", "construction", "ducats", "gold"]);
@@ -3489,7 +3505,10 @@ const defaultGameSettings = (): GameSettings => {
       races: normalizeContentRaces((library.content as { races?: unknown } | undefined)?.races),
       resourceCategories: normalizeContentCultures(
         (library.content as { resourceCategories?: unknown } | undefined)?.resourceCategories,
-      ),
+      ).map((entry) => ({
+        ...entry,
+        logoUrl: normalizeLegacyContentLogoUrl("resourceCategories", entry.logoUrl),
+      })),
       professions: normalizeContentCultures((library.content as { professions?: unknown } | undefined)?.professions),
       ideologies: normalizeContentCultures((library.content as { ideologies?: unknown } | undefined)?.ideologies),
       religions: normalizeContentCultures((library.content as { religions?: unknown } | undefined)?.religions),
@@ -3665,7 +3684,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     gameSettings = {
         content: {
           races: normalizeContentRaces((next as Partial<{ content?: { races?: unknown } }>).content?.races),
-          resourceCategories: normalizeContentCultures((next as Partial<{ content?: { resourceCategories?: unknown } }>).content?.resourceCategories),
+          resourceCategories: normalizeContentCultures((next as Partial<{ content?: { resourceCategories?: unknown } }>).content?.resourceCategories).map((entry) => ({
+            ...entry,
+            logoUrl: normalizeLegacyContentLogoUrl("resourceCategories", entry.logoUrl),
+          })),
           professions: normalizeContentCultures((next as Partial<{ content?: { professions?: unknown } }>).content?.professions),
           ideologies: normalizeContentCultures((next as Partial<{ content?: { ideologies?: unknown } }>).content?.ideologies),
           religions: normalizeContentCultures((next as Partial<{ content?: { religions?: unknown } }>).content?.religions),
@@ -7934,9 +7956,10 @@ app.patch("/admin/content/entries/:kind/:entryId/logo", upload.single("cultureLo
     return res.status(400).json({ error: "IMAGE_INVALID" });
   }
   const previousUrl = items[index].logoUrl;
+  const uploadUrlSegment = resolveContentUploadUrlSegment(kind);
   items[index] = {
     ...items[index],
-    logoUrl: makeVersionedUploadUrl(`${kind}/${file.filename}`),
+    logoUrl: makeVersionedUploadUrl(`${uploadUrlSegment}/${file.filename}`),
   };
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
