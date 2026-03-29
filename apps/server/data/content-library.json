@@ -8,6 +8,27 @@
     "technologies": [],
     "buildings": [
       {
+        "id": "d8887f26-c0a2-4059-93dc-a741c781ba5c",
+        "name": "Термоядерная электростанция",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null,
+        "costConstruction": 100,
+        "costDucats": 10,
+        "startingDucats": 0,
+        "inputs": [],
+        "outputs": [],
+        "workforceRequirements": [],
+        "infrastructureUse": 0,
+        "marketInfrastructureByCategory": {},
+        "allowedCountryIds": [],
+        "deniedCountryIds": [],
+        "countryBuildLimits": [],
+        "globalBuildLimit": 1
+      },
+      {
         "id": "77908049-71b1-4f28-bc08-223913a5ee0c",
         "name": "Атомная электростанция",
         "description": "",
@@ -639,17 +660,7 @@
         "femalePortraitUrl": null
       }
     ],
-    "industries": [
-      {
-        "id": "b7171edf-aaa5-4276-a622-256726c561b3",
-        "name": "Нефтяная промышленность",
-        "description": "",
-        "color": "#000000",
-        "logoUrl": null,
-        "malePortraitUrl": null,
-        "femalePortraitUrl": null
-      }
-    ],
+    "industries": [],
     "cultures": []
   },
   "civilopedia": {
@@ -703,5 +714,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-03-14T17:29:21.072Z"
+  "updatedAt": "2026-03-14T17:32:10.212Z"
 }
