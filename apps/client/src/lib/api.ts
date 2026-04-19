@@ -33,6 +33,9 @@ export type ContentCulture = {
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
+  extractionGoodId?: string | null;
+  extractionAmountPerTurn?: number | null;
+  extractionRequiresDeposit?: boolean | null;
   infrastructureUse?: number | null;
   marketInfrastructureByCategory?: Record<string, number> | null;
   inputs?: Array<{ goodId: string; amount: number }> | null;
@@ -40,7 +43,7 @@ export type ContentCulture = {
   workforceRequirements?: Array<{ professionId: string; workers: number }> | null;
   allowedCountryIds?: string[] | null;
   deniedCountryIds?: string[] | null;
-  countryBuildLimits?: Array<{ countryId: string; limit: number }> | null;
+  countryBuildLimits?: Array<{ countryId: string; limit: number | null }> | null;
   globalBuildLimit?: number | null;
 };
 export type ContentEntry = ContentCulture;
@@ -81,6 +84,9 @@ type ContentEntryUpsertPayload = {
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
+  extractionGoodId?: string | null;
+  extractionAmountPerTurn?: number | null;
+  extractionRequiresDeposit?: boolean | null;
   infrastructureUse?: number | null;
   marketInfrastructureByCategory?: Record<string, number>;
   inputs?: Array<{ goodId: string; amount: number }>;
@@ -88,7 +94,7 @@ type ContentEntryUpsertPayload = {
   workforceRequirements?: Array<{ professionId: string; workers: number }>;
   allowedCountryIds?: string[];
   deniedCountryIds?: string[];
-  countryBuildLimits?: Array<{ countryId: string; limit: number }>;
+  countryBuildLimits?: Array<{ countryId: string; limit: number | null }>;
   globalBuildLimit?: number | null;
 };
 

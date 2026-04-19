@@ -660,7 +660,7 @@ type WorkforceRequirement = {
 
 type BuildingCountryLimit = {
   countryId: string;
-  limit: number;
+  limit: number | null;
 };
 
 type GameContentEntry = {
@@ -698,6 +698,9 @@ type BuildingContentEntry = GameContentEntry & {
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
+  extractionGoodId?: string | null;
+  extractionAmountPerTurn?: number | null;
+  extractionRequiresDeposit?: boolean | null;
   inputs?: GoodFlow[];
   outputs?: GoodFlow[];
   workforceRequirements?: WorkforceRequirement[];
@@ -982,13 +985,18 @@ function normalizeCountryIdList(input: unknown): string[] {
 
 function normalizeBuildingCountryLimits(input: unknown): BuildingCountryLimit[] {
   if (!Array.isArray(input)) return [];
-  const byCountry = new Map<string, number>();
+  const byCountry = new Map<string, number | null>();
   for (const raw of input) {
     if (!raw || typeof raw !== "object") continue;
     const row = raw as Partial<{ countryId: unknown; limit: unknown }>;
     const countryId = typeof row.countryId === "string" ? row.countryId.trim() : "";
+    if (!countryId) continue;
+    if (row.limit === null) {
+      byCountry.set(countryId, null);
+      continue;
+    }
     const limit = typeof row.limit === "number" && Number.isFinite(row.limit) ? Math.max(1, Math.floor(row.limit)) : 0;
-    if (!countryId || limit <= 0) continue;
+    if (limit <= 0) continue;
     byCountry.set(countryId, limit);
   }
   return [...byCountry.entries()].slice(0, 256).map(([countryId, limit]) => ({ countryId, limit }));
@@ -1414,6 +1422,9 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       costConstruction?: unknown;
       costDucats?: unknown;
       startingDucats?: unknown;
+      extractionGoodId?: unknown;
+      extractionAmountPerTurn?: unknown;
+      extractionRequiresDeposit?: unknown;
       inputs?: unknown;
       outputs?: unknown;
       workforceRequirements?: unknown;
@@ -1437,14 +1448,27 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
         ? Math.max(0, Number(raw.startingDucats))
         : 0;
     const globalBuildLimit =
-      typeof raw?.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit)
+      typeof raw?.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit) && raw.globalBuildLimit > 0
         ? Math.max(1, Math.floor(raw.globalBuildLimit))
         : null;
+    const extractionGoodId =
+      typeof raw?.extractionGoodId === "string" && raw.extractionGoodId.trim().length > 0
+        ? raw.extractionGoodId.trim()
+        : null;
+    const extractionAmountPerTurn =
+      typeof raw?.extractionAmountPerTurn === "number" && Number.isFinite(raw.extractionAmountPerTurn)
+        ? Number(Math.max(0, raw.extractionAmountPerTurn).toFixed(3))
+        : 0;
+    const extractionRequiresDeposit =
+      typeof raw?.extractionRequiresDeposit === "boolean" ? raw.extractionRequiresDeposit : true;
     return {
       ...entry,
       costConstruction,
       costDucats: Number(costDucats.toFixed(3)),
       startingDucats: Number(startingDucats.toFixed(3)),
+      extractionGoodId,
+      extractionAmountPerTurn,
+      extractionRequiresDeposit,
       inputs: normalizeGoodFlows(raw?.inputs),
       outputs: normalizeGoodFlows(raw?.outputs),
       workforceRequirements: normalizeWorkforceRequirements(raw?.workforceRequirements),
@@ -1725,6 +1749,10 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             typeof source.createdTurnId === "number" && Number.isFinite(source.createdTurnId)
               ? Math.max(1, Math.floor(source.createdTurnId))
               : turnId;
+          const level =
+            typeof source.level === "number" && Number.isFinite(source.level)
+              ? Math.max(1, Math.floor(source.level))
+              : 1;
           instances.push({
             instanceId:
               typeof source.instanceId === "string" && source.instanceId.trim()
@@ -1733,6 +1761,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             buildingId,
             owner: normalizeBuildingOwner(source.owner ?? { type: "state", countryId: fallbackCountryId }),
             createdTurnId,
+            level,
             ducats:
               typeof source.ducats === "number" && Number.isFinite(source.ducats)
                 ? Number(Math.max(0, source.ducats).toFixed(3))
@@ -1838,6 +1867,19 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
                     ]),
                   )
                 : {},
+            lastExtractionByGoodId:
+              source.lastExtractionByGoodId && typeof source.lastExtractionByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastExtractionByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
             lastRevenueDucats:
               typeof source.lastRevenueDucats === "number" && Number.isFinite(source.lastRevenueDucats)
                 ? Number(source.lastRevenueDucats.toFixed(3))
@@ -1862,38 +1904,38 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
           });
         }
       } else if (raw && typeof raw === "object") {
-        // Legacy migration: { [buildingId]: level } -> instance array.
+        // Legacy migration: { [buildingId]: level } -> single instance with level.
         for (const [buildingId, levelRaw] of Object.entries(raw as Record<string, unknown>)) {
           const level =
             typeof levelRaw === "number" && Number.isFinite(levelRaw) ? Math.max(0, Math.floor(levelRaw)) : 0;
           if (!buildingId || level <= 0) continue;
-          for (let i = 0; i < level; i += 1) {
-            instances.push({
-              instanceId: randomUUID(),
-              buildingId,
-              owner: { type: "state", countryId: fallbackCountryId },
-              createdTurnId: turnId,
-              ducats: 0,
-              warehouseByGoodId: {},
-              lastLaborCoverage: 0,
-              lastInfraCoverage: 0,
-              lastInputCoverage: 0,
-              lastFinanceCoverage: 0,
-              lastProductivity: 0,
-              lastPurchaseByGoodId: {},
-              lastPurchaseCostByGoodId: {},
-              lastSalesByGoodId: {},
-              lastSalesRevenueByGoodId: {},
-              lastConsumptionByGoodId: {},
-              lastProductionByGoodId: {},
-              lastRevenueDucats: 0,
-              lastInputCostDucats: 0,
-              lastWagesDucats: 0,
-              lastNetDucats: 0,
-              isInactive: false,
-              inactiveReason: null,
-            });
-          }
+          instances.push({
+            instanceId: randomUUID(),
+            buildingId,
+            owner: { type: "state", countryId: fallbackCountryId },
+            createdTurnId: turnId,
+            level,
+            ducats: 0,
+            warehouseByGoodId: {},
+            lastLaborCoverage: 0,
+            lastInfraCoverage: 0,
+            lastInputCoverage: 0,
+            lastFinanceCoverage: 0,
+            lastProductivity: 0,
+            lastPurchaseByGoodId: {},
+            lastPurchaseCostByGoodId: {},
+            lastSalesByGoodId: {},
+            lastSalesRevenueByGoodId: {},
+            lastConsumptionByGoodId: {},
+            lastProductionByGoodId: {},
+            lastExtractionByGoodId: {},
+            lastRevenueDucats: 0,
+            lastInputCostDucats: 0,
+            lastWagesDucats: 0,
+            lastNetDucats: 0,
+            isInactive: false,
+            inactiveReason: null,
+          });
         }
       }
       normalized[provinceId] = instances;
@@ -2418,8 +2460,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     for (const instance of instances ?? []) {
       const building = buildingById.get(instance.buildingId);
       if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
       for (const [categoryId, amountRaw] of Object.entries(building.marketInfrastructureByCategory ?? {})) {
-        const amount = round3(Math.max(0, Number(amountRaw)));
+        const amount = round3(Math.max(0, Number(amountRaw)) * instanceLevel);
         if (amount <= 0) continue;
         addCategoryAmount(remainingSharedInfrastructureByMarketIdAndCategory, marketId, categoryId, amount);
       }
@@ -2440,6 +2483,8 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     for (const instance of buildingInstances) {
       const building = buildingById.get(instance.buildingId);
       if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      instance.level = instanceLevel;
       const sellableGoodIds = new Set((building.outputs ?? []).map((row) => row.goodId).filter(Boolean));
       instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0)));
       instance.warehouseByGoodId = { ...(instance.warehouseByGoodId ?? {}) };
@@ -2449,6 +2494,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       instance.lastSalesRevenueByGoodId = {};
       instance.lastConsumptionByGoodId = {};
       instance.lastProductionByGoodId = {};
+      instance.lastExtractionByGoodId = {};
       instance.lastLaborCoverage = 0;
       instance.lastInfraCoverage = 0;
       instance.lastInputCoverage = 0;
@@ -2503,6 +2549,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     const marketId = getMarketIdByCountry(ownerCountryId);
     const buildingInstances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])]
       .sort((a, b) => a.instanceId.localeCompare(b.instanceId));
+    const provinceDeposits = [...(worldBase.provinceResourceDepositsByProvince[provinceId] ?? [])];
     if (buildingInstances.length === 0) continue;
 
     const demandByProfession: Record<string, number> = {};
@@ -2510,8 +2557,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     for (const instance of buildingInstances) {
       const building = buildingById.get(instance.buildingId);
       if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
       for (const requirement of building.workforceRequirements ?? []) {
-        const workersDemand = Math.max(0, requirement.workers);
+        const workersDemand = Math.max(0, requirement.workers) * instanceLevel;
         if (workersDemand <= 0) continue;
         demandByProfession[requirement.professionId] = (demandByProfession[requirement.professionId] ?? 0) + workersDemand;
         totalWorkforceDemand += workersDemand;
@@ -2546,13 +2594,14 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     for (const instance of buildingInstances) {
       const building = buildingById.get(instance.buildingId);
       if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
       const warehouse = instance.warehouseByGoodId ?? {};
       let wagesEstimate = 0;
       let workersDemand = 0;
       for (const requirement of building.workforceRequirements ?? []) {
         const baseWage = Math.max(0, Number(professionById.get(requirement.professionId)?.baseWage ?? BUILDING_BASE_WAGE_PER_WORKER_GOLD));
         const multiplier = wageMultiplierByProfession[requirement.professionId] ?? 1;
-        const workers = Math.max(0, requirement.workers);
+        const workers = Math.max(0, requirement.workers) * instanceLevel;
         wagesEstimate += workers * baseWage * multiplier;
         workersDemand += workers;
       }
@@ -2560,14 +2609,14 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       const employedWorkers = workersDemand * laborCoverage;
       totalEmployed += employedWorkers;
       for (const requirement of building.workforceRequirements ?? []) {
-        const workers = Math.max(0, requirement.workers) * laborCoverage;
+        const workers = Math.max(0, requirement.workers) * instanceLevel * laborCoverage;
         employedByProfession[requirement.professionId] = round3((employedByProfession[requirement.professionId] ?? 0) + workers);
       }
       const infraCoverage = 1;
 
       let requiredInputValueEstimate = 0;
       for (const input of building.inputs ?? []) {
-        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
         const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
         const deficit = Math.max(0, required - available);
         const price = getCountryGoodPrice(ownerCountryId, input.goodId);
@@ -2584,7 +2633,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       const purchasedByGood: Record<string, number> = {};
       const purchasedCostByGood: Record<string, number> = {};
       for (const input of building.inputs ?? []) {
-        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
         const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
         let deficit = Math.max(0, required - available);
         if (deficit <= 0) continue;
@@ -2805,7 +2854,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       let inputCoverage = 1;
       const missingInputGoods: string[] = [];
       for (const input of building.inputs ?? []) {
-        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
         if (required <= 0) continue;
         const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
         inputCoverage = Math.min(inputCoverage, available / required);
@@ -2827,7 +2876,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
 
       const consumedByGood: Record<string, number> = {};
       for (const input of building.inputs ?? []) {
-        const required = Math.max(0, input.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
         const consumed = round3(required * productivity);
         if (consumed <= 0) continue;
         const before = Math.max(0, Number(warehouse[input.goodId] ?? 0));
@@ -2839,19 +2888,52 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
 
       const producedByGood: Record<string, number> = {};
       for (const output of building.outputs ?? []) {
-        const producedMax = round3(Math.max(0, output.amount) * laborCoverage * BUILDING_BASE_THROUGHPUT);
+        const producedMax = round3(Math.max(0, output.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT);
         if (producedMax > 0) {
           addCountryGood(productionMaxByCountry, marketId, output.goodId, producedMax);
           addGlobalGood(productionMaxGlobal, output.goodId, producedMax);
         }
-        const produced = round3(Math.max(0, output.amount) * productivity * BUILDING_BASE_THROUGHPUT);
+        const produced = round3(Math.max(0, output.amount) * instanceLevel * productivity * BUILDING_BASE_THROUGHPUT);
         if (produced <= 0) continue;
         warehouse[output.goodId] = round3(Math.max(0, Number(warehouse[output.goodId] ?? 0)) + produced);
         producedByGood[output.goodId] = produced;
         addCountryGood(productionByCountry, marketId, output.goodId, produced);
         addGlobalGood(productionGlobal, output.goodId, produced);
       }
+      const extractedByGood: Record<string, number> = {};
+      const extractionGoodId =
+        typeof building.extractionGoodId === "string" && building.extractionGoodId.trim().length > 0
+          ? building.extractionGoodId.trim()
+          : "";
+      const extractionAmountPerTurn = Math.max(0, Number(building.extractionAmountPerTurn ?? 0));
+      const extractionRequiresDeposit = building.extractionRequiresDeposit !== false;
+      if (extractionGoodId && extractionAmountPerTurn > 0) {
+        const deposit = provinceDeposits.find((row) => row.goodId === extractionGoodId);
+        const availableDeposit = Math.max(0, Number(deposit?.amount ?? 0));
+        const extractionMax = round3(extractionAmountPerTurn * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT);
+        if (extractionMax > 0) {
+          addCountryGood(productionMaxByCountry, marketId, extractionGoodId, Math.min(extractionMax, availableDeposit));
+          addGlobalGood(productionMaxGlobal, extractionGoodId, Math.min(extractionMax, availableDeposit));
+        }
+        if (!extractionRequiresDeposit || availableDeposit > 0) {
+          const extractionRaw = round3(extractionAmountPerTurn * instanceLevel * productivity * BUILDING_BASE_THROUGHPUT);
+          const extracted = extractionRequiresDeposit
+            ? Math.min(extractionRaw, availableDeposit)
+            : extractionRaw;
+          if (extracted > 0) {
+            warehouse[extractionGoodId] = round3(Math.max(0, Number(warehouse[extractionGoodId] ?? 0)) + extracted);
+            extractedByGood[extractionGoodId] = extracted;
+            producedByGood[extractionGoodId] = round3((producedByGood[extractionGoodId] ?? 0) + extracted);
+            addCountryGood(productionByCountry, marketId, extractionGoodId, extracted);
+            addGlobalGood(productionGlobal, extractionGoodId, extracted);
+            if (extractionRequiresDeposit && deposit) {
+              deposit.amount = round3(Math.max(0, availableDeposit - extracted));
+            }
+          }
+        }
+      }
       instance.lastProductionByGoodId = producedByGood;
+      instance.lastExtractionByGoodId = extractedByGood;
       const realizedRevenue = round3(Math.max(0, Number(instance.lastRevenueDucats ?? 0)));
       instance.lastRevenueDucats = realizedRevenue;
       instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - purchaseCost));
@@ -2943,6 +3025,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     }
     worldBase.provinceBuildingDucatsByProvince[provinceId] = byBuildingDucats;
     worldBase.provinceBuildingsByProvince[provinceId] = buildingInstances;
+    worldBase.provinceResourceDepositsByProvince[provinceId] = provinceDeposits
+      .filter((row) => Number(row.amount) > 0)
+      .sort((a, b) => a.goodId.localeCompare(b.goodId));
   }
 
   const marketIds = new Set<string>([
@@ -5056,6 +5141,7 @@ function isEqualBuildingInstances(
       prev.instanceId !== next.instanceId ||
       prev.buildingId !== next.buildingId ||
       prev.createdTurnId !== next.createdTurnId ||
+      Math.max(1, Math.floor(Number(prev.level ?? 1))) !== Math.max(1, Math.floor(Number(next.level ?? 1))) ||
       prev.owner.type !== next.owner.type ||
       (prev.owner.type === "state" && next.owner.type === "state" && prev.owner.countryId !== next.owner.countryId) ||
       (prev.owner.type === "company" &&
@@ -5087,6 +5173,7 @@ function isEqualBuildingInstances(
     if (!isEqualCountryProgressMap(prev.lastSalesRevenueByGoodId, next.lastSalesRevenueByGoodId ?? {})) return false;
     if (!isEqualCountryProgressMap(prev.lastConsumptionByGoodId, next.lastConsumptionByGoodId ?? {})) return false;
     if (!isEqualCountryProgressMap(prev.lastProductionByGoodId, next.lastProductionByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastExtractionByGoodId, next.lastExtractionByGoodId ?? {})) return false;
   }
   return true;
 }
@@ -5796,7 +5883,9 @@ function countBuildingOccurrences(
   let global = 0;
 
   for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince)) {
-    const amount = (instances ?? []).filter((instance) => instance.buildingId === buildingId).length;
+    const amount = (instances ?? [])
+      .filter((instance) => instance.buildingId === buildingId)
+      .reduce((sum, instance) => sum + Math.max(1, Math.floor(Number(instance.level ?? 1))), 0);
     if (amount <= 0) continue;
     global += amount;
     if ((worldBase.provinceOwner[provinceId] ?? null) === countryId) {
@@ -5834,10 +5923,10 @@ function countBuildingOccurrences(
   return { byCountry, global };
 }
 
-function getCountryBuildLimit(building: BuildingContentEntry, countryId: string): number | null {
+function getCountryBuildLimit(building: BuildingContentEntry, countryId: string): number | null | undefined {
   const limits = normalizeBuildingCountryLimits(building.countryBuildLimits);
   const row = limits.find((item) => item.countryId === countryId);
-  return row ? row.limit : null;
+  return row ? row.limit : undefined;
 }
 
 function resolveBuildingOwnerFromPayload(payload: Record<string, unknown>, requestedByCountryId: string): BuildingOwner | null {
@@ -5957,13 +6046,30 @@ function resolveBuildingConstructionQueuesTurn(): void {
       if (project.progressConstruction + 1e-9 >= project.costConstruction) {
         const building = buildingById.get(project.buildingId);
         const startingDucats = Math.max(0, Number(building?.startingDucats ?? 0));
-        buildingInstances.push({
-          instanceId: randomUUID(),
-          buildingId: project.buildingId,
-          owner: project.owner,
-          createdTurnId: turnId,
-          ducats: Number(startingDucats.toFixed(3)),
+        const existingInstance = buildingInstances.find((instance) => {
+          if (instance.buildingId !== project.buildingId) return false;
+          if (instance.owner.type !== project.owner.type) return false;
+          if (instance.owner.type === "state" && project.owner.type === "state") {
+            return instance.owner.countryId === project.owner.countryId;
+          }
+          if (instance.owner.type === "company" && project.owner.type === "company") {
+            return instance.owner.companyId === project.owner.companyId;
+          }
+          return false;
         });
+        if (existingInstance) {
+          existingInstance.level = Math.max(1, Math.floor(Number(existingInstance.level ?? 1))) + 1;
+          existingInstance.ducats = round3(Math.max(0, Number(existingInstance.ducats ?? 0)) + startingDucats);
+        } else {
+          buildingInstances.push({
+            instanceId: randomUUID(),
+            buildingId: project.buildingId,
+            owner: project.owner,
+            createdTurnId: turnId,
+            level: 1,
+            ducats: Number(startingDucats.toFixed(3)),
+          });
+        }
         continue;
       }
       nextQueue.push(project);
@@ -6149,15 +6255,16 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
         }
         const counts = countBuildingOccurrences(buildingId, order.countryId, { includePendingOrders: false });
         const countryLimit = getCountryBuildLimit(building, order.countryId);
+        const hasCountryLimitOverride = countryLimit !== undefined;
         const globalLimit =
           typeof building.globalBuildLimit === "number" && Number.isFinite(building.globalBuildLimit)
             ? Math.max(1, Math.floor(building.globalBuildLimit))
             : null;
-        if (countryLimit != null && counts.byCountry >= countryLimit) {
+        if (typeof countryLimit === "number" && counts.byCountry >= countryLimit) {
           rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
           continue;
         }
-        if (globalLimit != null && counts.global >= globalLimit) {
+        if (!hasCountryLimitOverride && globalLimit != null && counts.global >= globalLimit) {
           rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
           continue;
         }
@@ -7681,6 +7788,9 @@ const culturePayloadSchema = z.object({
   costConstruction: z.number().int().min(1).optional(),
   costDucats: z.number().finite().min(0).optional(),
   startingDucats: z.number().finite().min(0).optional(),
+  extractionGoodId: z.string().trim().min(1).max(120).nullable().optional(),
+  extractionAmountPerTurn: z.number().finite().min(0).optional(),
+  extractionRequiresDeposit: z.boolean().optional(),
   inputs: z
     .array(
       z.object({
@@ -7713,11 +7823,11 @@ const culturePayloadSchema = z.object({
     .array(
       z.object({
         countryId: z.string().trim().min(1).max(120),
-        limit: z.number().int().min(1),
+        limit: z.number().int().min(1).nullable(),
       }),
     )
     .optional(),
-  globalBuildLimit: z.number().int().min(1).nullable().optional(),
+  globalBuildLimit: z.number().int().min(0).nullable().optional(),
 });
 const contentEntryKindSchema = z.enum([
   "cultures",
@@ -7811,6 +7921,14 @@ function sanitizeContentEntryByKind(
       costConstruction: Math.max(1, Math.floor(payload.costConstruction ?? 100)),
       costDucats: Number(Math.max(0, payload.costDucats ?? 10).toFixed(3)),
       startingDucats: Number(Math.max(0, payload.startingDucats ?? 0).toFixed(3)),
+      extractionGoodId:
+        payload.extractionGoodId === undefined
+          ? undefined
+          : typeof payload.extractionGoodId === "string" && payload.extractionGoodId.trim().length > 0
+            ? payload.extractionGoodId.trim()
+            : null,
+      extractionAmountPerTurn: Number(Math.max(0, payload.extractionAmountPerTurn ?? 0).toFixed(3)),
+      extractionRequiresDeposit: payload.extractionRequiresDeposit ?? true,
       inputs: normalizeGoodFlows(payload.inputs),
       outputs: normalizeGoodFlows(payload.outputs),
       workforceRequirements: normalizeWorkforceRequirements(payload.workforceRequirements),
@@ -7820,7 +7938,7 @@ function sanitizeContentEntryByKind(
       deniedCountryIds: normalizeCountryIdList(payload.deniedCountryIds),
       countryBuildLimits: normalizeBuildingCountryLimits(payload.countryBuildLimits),
       globalBuildLimit:
-        payload.globalBuildLimit == null
+        payload.globalBuildLimit == null || Number(payload.globalBuildLimit) <= 0
           ? null
           : Math.max(1, Math.floor(Number(payload.globalBuildLimit))),
     };
@@ -8779,7 +8897,19 @@ app.post("/country/build/demolish", async (req, res) => {
       WORLD_DELTA_MASK.provinceBuildingDucatsByProvince,
   );
   countryResource.construction = Math.max(0, countryResource.construction - demolitionCostConstruction);
-  const nextInstances = instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
+  const previousTotalLevel = matchingInstances.reduce(
+    (sum, instance) => sum + Math.max(1, Math.floor(Number(instance.level ?? 1))),
+    0,
+  );
+  const targetLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
+  const nextInstances =
+    targetLevel > 1
+      ? instances.map((instance) =>
+          instance.instanceId === targetInstance.instanceId
+            ? { ...instance, level: targetLevel - 1 }
+            : instance,
+        )
+      : instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
   worldBase.provinceBuildingsByProvince[provinceId] = nextInstances;
   const buildingDucats = worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {};
   const remainingByType = nextInstances.some((instance) => instance.buildingId === buildingId);
@@ -8796,8 +8926,8 @@ app.post("/country/build/demolish", async (req, res) => {
     provinceId,
     buildingId,
     removedInstanceId: targetInstance.instanceId,
-    previousCount: matchingInstances.length,
-    newCount: Math.max(0, matchingInstances.length - 1),
+    previousCount: previousTotalLevel,
+    newCount: Math.max(0, previousTotalLevel - 1),
     demolitionCostConstruction,
     demolitionPercent,
     constructionLeft: countryResource.construction,
@@ -10266,11 +10396,12 @@ wss.on("connection", (socket) => {
         }
         const counts = countBuildingOccurrences(buildingId, delta.order.countryId, { includePendingOrders: true });
         const countryLimit = getCountryBuildLimit(building, delta.order.countryId);
+        const hasCountryLimitOverride = countryLimit !== undefined;
         const globalLimit =
           typeof building.globalBuildLimit === "number" && Number.isFinite(building.globalBuildLimit)
             ? Math.max(1, Math.floor(building.globalBuildLimit))
             : null;
-        if (countryLimit != null && counts.byCountry >= countryLimit) {
+        if (typeof countryLimit === "number" && counts.byCountry >= countryLimit) {
           send({
             type: "ERROR",
             code: "BUILD_LIMIT_COUNTRY",
@@ -10278,7 +10409,7 @@ wss.on("connection", (socket) => {
           });
           return;
         }
-        if (globalLimit != null && counts.global >= globalLimit) {
+        if (!hasCountryLimitOverride && globalLimit != null && counts.global >= globalLimit) {
           send({
             type: "ERROR",
             code: "BUILD_LIMIT_GLOBAL",

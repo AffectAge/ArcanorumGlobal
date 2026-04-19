@@ -296,12 +296,21 @@ function normalizeCountryIdsDraft(rows: string[]): string[] {
 
 function normalizeCountryBuildLimitsDraft(
   rows: CountryBuildLimitDraft[],
-): Array<{ countryId: string; limit: number }> {
-  const dedup = new Map<string, number>();
+): Array<{ countryId: string; limit: number | null }> {
+  const dedup = new Map<string, number | null>();
   for (const row of rows) {
     const countryId = row.countryId.trim();
-    const limit = Number(row.limit);
-    if (!countryId || !Number.isFinite(limit) || limit <= 0) continue;
+    if (!countryId) continue;
+    const rawLimit = row.limit.trim();
+    if (rawLimit.length === 0) {
+      dedup.set(countryId, null);
+      continue;
+    }
+    const limit = Number(rawLimit);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      dedup.set(countryId, null);
+      continue;
+    }
     dedup.set(countryId, Math.max(1, Math.floor(limit)));
   }
   return [...dedup.entries()].map(([countryId, limit]) => ({ countryId, limit }));
@@ -354,6 +363,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftCostConstruction, setDraftCostConstruction] = useState("100");
   const [draftCostDucats, setDraftCostDucats] = useState("10");
   const [draftStartingDucats, setDraftStartingDucats] = useState("0");
+  const [draftExtractionGoodId, setDraftExtractionGoodId] = useState("");
+  const [draftExtractionAmountPerTurn, setDraftExtractionAmountPerTurn] = useState("0");
+  const [draftExtractionRequiresDeposit, setDraftExtractionRequiresDeposit] = useState(true);
   const [draftInfrastructureUse, setDraftInfrastructureUse] = useState("0");
   const [draftInputs, setDraftInputs] = useState<GoodFlowDraft[]>([]);
   const [draftOutputs, setDraftOutputs] = useState<GoodFlowDraft[]>([]);
@@ -370,6 +382,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [goodsEconomyOpen, setGoodsEconomyOpen] = useState(false);
   const [goodsExplorationOpen, setGoodsExplorationOpen] = useState(false);
   const [buildingCostOpen, setBuildingCostOpen] = useState(false);
+  const [buildingExtractionOpen, setBuildingExtractionOpen] = useState(false);
   const [buildingInputsOpen, setBuildingInputsOpen] = useState(false);
   const [buildingOutputsOpen, setBuildingOutputsOpen] = useState(false);
   const [buildingWorkforceOpen, setBuildingWorkforceOpen] = useState(false);
@@ -413,6 +426,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
       costConstruction: entry.costConstruction ?? null,
       costDucats: entry.costDucats ?? null,
       startingDucats: entry.startingDucats ?? null,
+      extractionGoodId: entry.extractionGoodId ?? null,
+      extractionAmountPerTurn: entry.extractionAmountPerTurn ?? null,
+      extractionRequiresDeposit:
+        typeof entry.extractionRequiresDeposit === "boolean" ? entry.extractionRequiresDeposit : true,
       infrastructureUse: entry.infrastructureUse ?? null,
       inputs: (entry.inputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
       outputs: (entry.outputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
@@ -429,10 +446,15 @@ export function ContentPanel({ open, token, onClose }: Props) {
       allowedCountryIds: normalizeCountryIdsDraft(entry.allowedCountryIds ?? []),
       deniedCountryIds: normalizeCountryIdsDraft(entry.deniedCountryIds ?? []),
       countryBuildLimits: normalizeCountryBuildLimitsDraft(
-        (entry.countryBuildLimits ?? []).map((row) => ({ countryId: row.countryId, limit: String(row.limit) })),
+        (entry.countryBuildLimits ?? []).map((row) => ({
+          countryId: row.countryId,
+          limit: row.limit == null ? "" : String(row.limit),
+        })),
       ),
       globalBuildLimit:
-        typeof entry.globalBuildLimit === "number" && Number.isFinite(entry.globalBuildLimit)
+        typeof entry.globalBuildLimit === "number" &&
+        Number.isFinite(entry.globalBuildLimit) &&
+        entry.globalBuildLimit > 0
           ? Math.max(1, Math.floor(entry.globalBuildLimit))
           : null,
     });
@@ -561,6 +583,14 @@ export function ContentPanel({ open, token, onClose }: Props) {
             ? Number(Math.max(0, Number(draftStartingDucats)).toFixed(3))
             : null
           : null,
+      extractionGoodId: activeCategory === "buildings" ? draftExtractionGoodId.trim() || null : null,
+      extractionAmountPerTurn:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftExtractionAmountPerTurn))
+            ? Number(Math.max(0, Number(draftExtractionAmountPerTurn)).toFixed(3))
+            : null
+          : null,
+      extractionRequiresDeposit: activeCategory === "buildings" ? Boolean(draftExtractionRequiresDeposit) : null,
       infrastructureUse:
         activeCategory === "buildings"
           ? Number.isFinite(Number(draftInfrastructureUse))
@@ -577,7 +607,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       countryBuildLimits: activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : [],
       globalBuildLimit:
         activeCategory === "buildings"
-          ? Number.isFinite(Number(draftGlobalBuildLimit))
+          ? draftGlobalBuildLimit.trim().length > 0 &&
+            Number.isFinite(Number(draftGlobalBuildLimit)) &&
+            Number(draftGlobalBuildLimit) > 0
             ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
             : null
           : null,
@@ -888,6 +920,19 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(Math.max(0, selectedEntry.startingDucats))
         : "0",
     );
+    setDraftExtractionGoodId(
+      typeof selectedEntry.extractionGoodId === "string" && selectedEntry.extractionGoodId.trim().length > 0
+        ? selectedEntry.extractionGoodId.trim()
+        : "",
+    );
+    setDraftExtractionAmountPerTurn(
+      typeof selectedEntry.extractionAmountPerTurn === "number" && Number.isFinite(selectedEntry.extractionAmountPerTurn)
+        ? String(Math.max(0, selectedEntry.extractionAmountPerTurn))
+        : "0",
+    );
+    setDraftExtractionRequiresDeposit(
+      typeof selectedEntry.extractionRequiresDeposit === "boolean" ? selectedEntry.extractionRequiresDeposit : true,
+    );
     setDraftInfrastructureUse(
       typeof selectedEntry.infrastructureUse === "number" && Number.isFinite(selectedEntry.infrastructureUse)
         ? String(Math.max(0, selectedEntry.infrastructureUse))
@@ -912,11 +957,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
     setDraftCountryBuildLimits(
       (selectedEntry.countryBuildLimits ?? []).map((row) => ({
         countryId: row.countryId,
-        limit: String(Math.max(1, Math.floor(row.limit))),
+        limit:
+          typeof row.limit === "number" && Number.isFinite(row.limit) && row.limit > 0
+            ? String(Math.max(1, Math.floor(row.limit)))
+            : "",
       })),
     );
     setDraftGlobalBuildLimit(
-      typeof selectedEntry.globalBuildLimit === "number" && Number.isFinite(selectedEntry.globalBuildLimit)
+      typeof selectedEntry.globalBuildLimit === "number" &&
+        Number.isFinite(selectedEntry.globalBuildLimit) &&
+        selectedEntry.globalBuildLimit > 0
         ? String(Math.max(1, Math.floor(selectedEntry.globalBuildLimit)))
         : "",
     );
@@ -924,6 +974,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     setCriteriaLimitsOpen(false);
     setGoodsEconomyOpen(false);
     setBuildingCostOpen(false);
+    setBuildingExtractionOpen(false);
     setBuildingInputsOpen(false);
     setBuildingOutputsOpen(false);
     setBuildingWorkforceOpen(false);
@@ -958,6 +1009,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftCostConstruction,
     draftCostDucats,
     draftStartingDucats,
+    draftExtractionGoodId,
+    draftExtractionAmountPerTurn,
+    draftExtractionRequiresDeposit,
     draftInfrastructureUse,
     draftMarketInfrastructureByCategory,
     draftColor,
@@ -1021,6 +1075,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
         costConstruction: activeCategory === "buildings" ? 100 : undefined,
         costDucats: activeCategory === "buildings" ? 10 : undefined,
         startingDucats: activeCategory === "buildings" ? 0 : undefined,
+        extractionGoodId: activeCategory === "buildings" ? null : undefined,
+        extractionAmountPerTurn: activeCategory === "buildings" ? 0 : undefined,
+        extractionRequiresDeposit: activeCategory === "buildings" ? true : undefined,
         infrastructureUse: activeCategory === "buildings" ? 0 : undefined,
         inputs: activeCategory === "buildings" ? [] : undefined,
         outputs: activeCategory === "buildings" ? [] : undefined,
@@ -1094,6 +1151,10 @@ export function ContentPanel({ open, token, onClose }: Props) {
       costConstruction: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftCostConstruction || "100"))) : undefined,
       costDucats: activeCategory === "buildings" ? Math.max(0, Number(draftCostDucats || "10")) : undefined,
       startingDucats: activeCategory === "buildings" ? Math.max(0, Number(draftStartingDucats || "0")) : undefined,
+      extractionGoodId: activeCategory === "buildings" ? (draftExtractionGoodId.trim() || null) : undefined,
+      extractionAmountPerTurn:
+        activeCategory === "buildings" ? Math.max(0, Number(draftExtractionAmountPerTurn || "0")) : undefined,
+      extractionRequiresDeposit: activeCategory === "buildings" ? Boolean(draftExtractionRequiresDeposit) : undefined,
       infrastructureUse: activeCategory === "buildings" ? Math.max(0, Number(draftInfrastructureUse || "0")) : undefined,
       inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : undefined,
       outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : undefined,
@@ -1106,7 +1167,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
         activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : undefined,
       globalBuildLimit:
         activeCategory === "buildings"
-          ? Number.isFinite(Number(draftGlobalBuildLimit))
+          ? draftGlobalBuildLimit.trim().length > 0 &&
+            Number.isFinite(Number(draftGlobalBuildLimit)) &&
+            Number(draftGlobalBuildLimit) > 0
             ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
             : null
           : undefined,
@@ -1154,6 +1217,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       (!Number.isFinite(payload.costConstruction ?? Number.NaN) ||
         !Number.isFinite(payload.costDucats ?? Number.NaN) ||
         !Number.isFinite(payload.startingDucats ?? Number.NaN) ||
+        !Number.isFinite(payload.extractionAmountPerTurn ?? Number.NaN) ||
         !Number.isFinite(payload.infrastructureUse ?? Number.NaN))
     ) {
       toast.error("Параметры строительства должны быть числами");
@@ -1526,7 +1590,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-4">
                               <label className="block">
@@ -1587,6 +1651,81 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             <div className="mb-2 flex items-center justify-between gap-2">
                               <button
                                 type="button"
+                                onClick={() => setBuildingExtractionOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Параметры добычи ресурсов провинции. Если задан ресурс, здание будет пытаться добывать его каждый ход.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Добыча из залежей</div>
+                                </Tooltip>
+                                {buildingExtractionOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                            </div>
+                            <AnimatePresence initial={false}>
+                            {buildingExtractionOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-visible"
+                            >
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-3">
+                              <label className="block">
+                                <Tooltip content="Какой товар добывает здание напрямую из провинциальных залежей.">
+                                  <span className="mb-1 block text-xs text-white/60">Добываемый товар</span>
+                                </Tooltip>
+                                <CustomSelect
+                                  value={draftExtractionGoodId}
+                                  onChange={setDraftExtractionGoodId}
+                                  options={[
+                                    { value: "", label: "Не добывает" },
+                                    ...goodsOptions.map((option) => ({ value: option.id, label: option.name })),
+                                  ]}
+                                  buttonClassName="h-[42px]"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Сколько единиц добывается за ход при 100% продуктивности.">
+                                  <span className="mb-1 block text-xs text-white/60">Объем/ход</span>
+                                </Tooltip>
+                                <input
+                                  value={draftExtractionAmountPerTurn}
+                                  onChange={(e) => setDraftExtractionAmountPerTurn(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="0"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Если включено, добыча ограничена только существующими залежами в провинции.">
+                                  <span className="mb-1 block text-xs text-white/60">Требует залежь</span>
+                                </Tooltip>
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftExtractionRequiresDeposit((v) => !v)}
+                                  className={`h-[42px] w-full rounded-lg border px-3 text-sm font-semibold transition ${
+                                    draftExtractionRequiresDeposit
+                                      ? "border-emerald-400/35 bg-emerald-500/15 text-emerald-200"
+                                      : "border-white/15 bg-black/35 text-white/70"
+                                  }`}
+                                >
+                                  {draftExtractionRequiresDeposit ? "Да" : "Нет"}
+                                </button>
+                              </label>
+                            </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
                                 onClick={() => setBuildingInputsOpen((v) => !v)}
                                 className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
                               >
@@ -1618,7 +1757,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="space-y-2 pt-1">
                               {draftInputs.map((row, index) => (
@@ -1694,7 +1833,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="space-y-2 pt-1">
                               {draftOutputs.map((row, index) => (
@@ -1775,7 +1914,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="space-y-2 pt-1">
                               {draftWorkforceRequirements.map((row, index) => (
@@ -1860,7 +1999,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="space-y-2 pt-1">
                               {draftMarketInfrastructureByCategory.map((row, index) => (
@@ -1938,7 +2077,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="grid gap-3 md:grid-cols-2 pt-1">
                               <div>
@@ -2065,7 +2204,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="mb-3">
                               <label className="block">
@@ -2074,7 +2213,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                     Глобальный лимит (для всего мира):{" "}
                                     <span className="text-amber-300/90">
                                       {selectedBuildingGlobalUsage}/
-                                      {Number.isFinite(Number(draftGlobalBuildLimit))
+                                      {draftGlobalBuildLimit.trim().length > 0 &&
+                                      Number.isFinite(Number(draftGlobalBuildLimit)) &&
+                                      Number(draftGlobalBuildLimit) > 0
                                         ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
                                         : "∞"}
                                     </span>
@@ -2095,7 +2236,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               </Tooltip>
                               <button
                                 type="button"
-                                onClick={() => setDraftCountryBuildLimits((prev) => [...prev, { countryId: "", limit: "1" }])}
+                                onClick={() => setDraftCountryBuildLimits((prev) => [...prev, { countryId: "", limit: "" }])}
                                 className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
                               >
                                 Добавить лимит
@@ -2125,7 +2266,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                       )
                                     }
                                     inputMode="numeric"
-                                    placeholder="1"
+                                    placeholder="Пусто или 0 = без лимита"
                                     className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
                                   />
                                   <button
@@ -2139,9 +2280,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               ))}
                               {draftCountryBuildLimits.map((row, index) => {
                                 const used = row.countryId ? Math.max(0, Math.floor(selectedBuildingUsageByCountry[row.countryId] ?? 0)) : 0;
-                                const limit = Number.isFinite(Number(row.limit))
-                                  ? Math.max(1, Math.floor(Number(row.limit)))
-                                  : null;
+                                const parsedLimit = Number(row.limit);
+                                const limit =
+                                  row.limit.trim().length > 0 && Number.isFinite(parsedLimit) && parsedLimit > 0
+                                    ? Math.max(1, Math.floor(parsedLimit))
+                                    : null;
                                 return (
                                   <div key={`country-limit-usage-${index}`} className="text-[11px] text-white/50">
                                     {(countryOptions.find((country) => country.id === row.countryId)?.name ?? row.countryId ?? "Страна")}:
@@ -2186,7 +2329,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                               <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
                                 <label className="block">
@@ -2286,7 +2429,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                               <label className="mb-3 flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
                                 <input

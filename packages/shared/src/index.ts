@@ -80,6 +80,7 @@ export type BuildingInstance = {
   buildingId: string;
   owner: BuildingOwner;
   createdTurnId: number;
+  level?: number;
   ducats?: number;
   warehouseByGoodId?: Record<string, number>;
   lastLaborCoverage?: number;
@@ -93,6 +94,7 @@ export type BuildingInstance = {
   lastSalesRevenueByGoodId?: Record<string, number>;
   lastConsumptionByGoodId?: Record<string, number>;
   lastProductionByGoodId?: Record<string, number>;
+  lastExtractionByGoodId?: Record<string, number>;
   lastRevenueDucats?: number;
   lastInputCostDucats?: number;
   lastWagesDucats?: number;

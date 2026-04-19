@@ -298,7 +298,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       const pop = Math.max(0, worldBase.provincePopulationByProvince[pid]?.populationTotal ?? 0);
       const instances = worldBase.provinceBuildingsByProvince[pid] ?? [];
       const countsByBuildingId = instances.reduce<Record<string, number>>((acc, instance) => {
-        acc[instance.buildingId] = (acc[instance.buildingId] ?? 0) + 1;
+        const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+        acc[instance.buildingId] = (acc[instance.buildingId] ?? 0) + instanceLevel;
         return acc;
       }, {});
       const workersDemandByBuildingId = Object.entries(countsByBuildingId).reduce<Record<string, number>>(
@@ -314,15 +315,16 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       const totalWorkersDemand = Object.values(workersDemandByBuildingId).reduce((sum, value) => sum + value, 0);
       const employmentRatio = totalWorkersDemand > 0 ? Math.max(0, Math.min(1, pop / totalWorkersDemand)) : 0;
 
-      const builtByBuildingId = new Map<string, number>();
       for (const instance of instances) {
         const bid = instance.buildingId;
         const b = buildingById.get(bid);
         if (!b) continue;
-        const workersDemandPerLevel = (b.workforceRequirements ?? []).reduce(
+        const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+        const workersDemandBase = (b.workforceRequirements ?? []).reduce(
           (s, r) => s + Math.max(0, r.workers),
           0,
         );
+        const workersDemandPerLevel = workersDemandBase * instanceLevel;
         const laborCoverage = Math.max(
           0,
           Math.min(1, typeof instance.lastLaborCoverage === "number" ? instance.lastLaborCoverage : employmentRatio),
@@ -344,8 +346,6 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           instance.owner.type === "company"
             ? companyById.get(instance.owner.companyId)?.logoUrl ?? null
             : countryById.get(instance.owner.countryId)?.flagUrl ?? null;
-        const level = (builtByBuildingId.get(bid) ?? 0) + 1;
-        builtByBuildingId.set(bid, level);
         res.push({
           key: `${pid}-${instance.instanceId}-built`,
           kind: "built",
@@ -364,7 +364,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           ownerCompanyId: instance.owner.type === "company" ? instance.owner.companyId : undefined,
           isActive: !(instance.isInactive ?? false) && inactiveReasons.length === 0,
           inactiveReasons,
-          level,
+          level: instanceLevel,
           progressPercent: 100,
           costConstruction: Math.max(1, Math.floor(Number(b.costConstruction ?? 100))),
           workersEmployed,
@@ -530,6 +530,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         storageAmount: 0,
         inputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; cost: number }>,
         outputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; income: number }>,
+        extractions: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number }>,
         stockRows: [] as Array<{ goodName: string; goodLogoUrl: string | null; available: number; incoming: number; outgoing: number; remainder: number }>,
         trade: [] as Array<{ kind: "buy" | "sell"; goodName: string; goodLogoUrl: string | null; amount: number; total: number }>,
       };
@@ -537,14 +538,16 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     const ratio = Math.max(0, Math.min(1, productivity / 100));
     const lastConsumption = instance?.lastConsumptionByGoodId ?? {};
     const lastProduction = instance?.lastProductionByGoodId ?? {};
+    const lastExtraction = instance?.lastExtractionByGoodId ?? {};
     const lastPurchase = instance?.lastPurchaseByGoodId ?? {};
     const lastPurchaseCost = instance?.lastPurchaseCostByGoodId ?? {};
     const lastSales = instance?.lastSalesByGoodId ?? {};
     const lastSalesRevenue = instance?.lastSalesRevenueByGoodId ?? {};
+    const instanceLevel = Math.max(1, Math.floor(Number(instance?.level ?? card.level ?? 1)));
     const inputs = (building.inputs ?? []).map((entry) => {
       const good = goodById.get(entry.goodId);
       const price = Math.max(0, Number(good?.basePrice ?? 1));
-      const max = Math.max(0, Number(entry.amount ?? 0));
+      const max = Math.max(0, Number(entry.amount ?? 0) * instanceLevel);
       const factual = Math.max(0, Number(lastConsumption[entry.goodId] ?? max * ratio));
       const cost =
         typeof instance?.lastInputCostDucats === "number"
@@ -555,7 +558,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     const outputs = (building.outputs ?? []).map((entry) => {
       const good = goodById.get(entry.goodId);
       const price = Math.max(0, Number(good?.basePrice ?? 1));
-      const max = Math.max(0, Number(entry.amount ?? 0));
+      const max = Math.max(0, Number(entry.amount ?? 0) * instanceLevel);
       const factual = Math.max(0, Number(lastProduction[entry.goodId] ?? max * ratio));
       const soldForGood = Math.max(0, Number(lastSales[entry.goodId] ?? 0));
       const revenue =
@@ -564,6 +567,29 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           : factual * price;
       return { goodName: good?.name ?? entry.goodId, goodLogoUrl: good?.logoUrl ?? null, factual, max, income: revenue };
     });
+    const extractionGoodId =
+      typeof building.extractionGoodId === "string" && building.extractionGoodId.trim().length > 0
+        ? building.extractionGoodId.trim()
+        : "";
+    const extractionAmountPerTurn = Math.max(0, Number(building.extractionAmountPerTurn ?? 0));
+    const extractions = Object.entries(lastExtraction)
+      .filter(([, amount]) => Number(amount) > 0)
+      .map(([goodId, amount]) => {
+        const good = goodById.get(goodId);
+        const factual = Math.max(0, Number(amount));
+        const max =
+          extractionGoodId === goodId
+            ? Math.max(0, extractionAmountPerTurn * instanceLevel)
+            : ratio > 0
+              ? Math.max(factual, Number((factual / ratio).toFixed(3)))
+              : factual;
+        return {
+          goodName: good?.name ?? goodId,
+          goodLogoUrl: good?.logoUrl ?? null,
+          factual,
+          max,
+        };
+      });
     const inputCost =
       typeof instance?.lastInputCostDucats === "number"
         ? Math.max(0, Number(instance.lastInputCostDucats))
@@ -678,7 +704,19 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       remainder: row.available + row.incoming - row.outgoing,
     }));
 
-    return { productivity, inputCost, outputRevenue, wagesCost, netPerTurn, storageAmount, inputs, outputs, stockRows, trade };
+    return {
+      productivity,
+      inputCost,
+      outputRevenue,
+      wagesCost,
+      netPerTurn,
+      storageAmount,
+      inputs,
+      outputs,
+      extractions,
+      stockRows,
+      trade,
+    };
   };
 
   const filteredCards = useMemo(() => {
@@ -749,7 +787,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const selectedProvinceBuildings = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const instance of worldBase?.provinceBuildingsByProvince?.[provinceId] ?? []) {
-      counts[instance.buildingId] = (counts[instance.buildingId] ?? 0) + 1;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      counts[instance.buildingId] = (counts[instance.buildingId] ?? 0) + instanceLevel;
     }
     return counts;
   }, [provinceId, worldBase?.provinceBuildingsByProvince]);
@@ -780,7 +819,10 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
 
     const countBuiltAndQueued = Object.entries(worldBase?.provinceBuildingsByProvince ?? {}).reduce(
       (sum, [, instances]) =>
-        sum + (instances ?? []).filter((instance) => instance.buildingId === building.id).length,
+        sum +
+        (instances ?? [])
+          .filter((instance) => instance.buildingId === building.id)
+          .reduce((acc, instance) => acc + Math.max(1, Math.floor(Number(instance.level ?? 1))), 0),
       0,
     ) +
       Object.values(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce(
@@ -790,7 +832,12 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     const countBuiltAndQueuedByCountry =
       Object.entries(worldBase?.provinceBuildingsByProvince ?? {}).reduce((sum, [pid, instances]) => {
         if ((worldBase?.provinceOwner?.[pid] ?? "") !== countryId) return sum;
-        return sum + (instances ?? []).filter((instance) => instance.buildingId === building.id).length;
+        return (
+          sum +
+          (instances ?? [])
+            .filter((instance) => instance.buildingId === building.id)
+            .reduce((acc, instance) => acc + Math.max(1, Math.floor(Number(instance.level ?? 1))), 0)
+        );
       }, 0) +
       Object.entries(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce((sum, [pid, queue]) => {
         if ((worldBase?.provinceOwner?.[pid] ?? "") !== countryId) return sum;
@@ -1372,6 +1419,44 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                     <Tooltip content="Доход от продажи выходного товара за ход">
                                       <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
                                         Доход: {formatCompact(output.income)} дукат
+                                      </span>
+                                    </Tooltip>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="space-y-1 rounded-md border border-white/15 bg-black/25 p-2">
+                            <div className="inline-flex items-center gap-1.5 font-semibold text-white/50">
+                              <Package size={12} className="shrink-0" />
+                              <span>Добыча</span>
+                            </div>
+                            {econData.extractions.length === 0 && <div className="text-white/50">нет добычи</div>}
+                            {econData.extractions.map((row, idx) => (
+                              <div
+                                key={`${c.key}-extraction-${idx}`}
+                                className="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-white/70"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <Tooltip content="Ресурс, добытый зданием из залежей провинции за ход">
+                                    <div className="inline-flex items-center gap-1.5 font-semibold text-emerald-300">
+                                      {row.goodLogoUrl ? (
+                                        <img src={row.goodLogoUrl} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" />
+                                      ) : (
+                                        <Package size={12} className="shrink-0 text-emerald-300" />
+                                      )}
+                                      <span>{row.goodName}</span>
+                                    </div>
+                                  </Tooltip>
+                                  <div className="ml-auto flex items-center justify-end gap-1.5">
+                                    <Tooltip content="Фактический объем добычи за ход">
+                                      <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
+                                        Фактически: {formatCompact(row.factual)}
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip content="Максимально возможный объем добычи за ход">
+                                      <span className="inline-flex items-center rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200">
+                                        Максимально: {formatCompact(row.max)}
                                       </span>
                                     </Tooltip>
                                   </div>
