@@ -324,6 +324,7 @@ const BUILDING_BASE_THROUGHPUT = 1;
 const BUILDING_BASE_WAGE_PER_WORKER_GOLD = 0.2;
 const DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY = 100;
 const DEFAULT_LOCAL_INFRA_CATEGORY_CAPACITY = 100;
+const DEFAULT_TRANSPORT_CORRIDOR_CAPACITY = 100;
 const DEFAULT_RESOURCE_BASE_PRICE = 1;
 const MARKET_PRICE_SMOOTHING = 0.3;
 const MARKET_PRICE_HISTORY_LENGTH = 10;
@@ -388,7 +389,13 @@ function normalizeMarketVisibility(value: unknown): "public" | "private" {
 
 function ensureMarketsStateShape(): void {
   if (!gameSettings.markets) {
-    gameSettings.markets = { countryMarketByCountryId: {}, marketById: {}, marketInvitesById: {}, sanctionsById: {} };
+    gameSettings.markets = {
+      countryMarketByCountryId: {},
+      marketById: {},
+      transportCorridorsById: {},
+      marketInvitesById: {},
+      sanctionsById: {},
+    };
     return;
   }
   if (!gameSettings.markets.countryMarketByCountryId || typeof gameSettings.markets.countryMarketByCountryId !== "object") {
@@ -396,6 +403,9 @@ function ensureMarketsStateShape(): void {
   }
   if (!gameSettings.markets.marketById || typeof gameSettings.markets.marketById !== "object") {
     gameSettings.markets.marketById = {};
+  }
+  if (!gameSettings.markets.transportCorridorsById || typeof gameSettings.markets.transportCorridorsById !== "object") {
+    gameSettings.markets.transportCorridorsById = {};
   }
   if (!gameSettings.markets.marketInvitesById || typeof gameSettings.markets.marketInvitesById !== "object") {
     gameSettings.markets.marketInvitesById = {};
@@ -410,6 +420,7 @@ function createDefaultMarketRecord(marketId: string, ownerCountryId: string): {
   name: string;
   logoUrl: string | null;
   ownerCountryId: string;
+  capitalProvinceId: string | null;
   memberCountryIds: string[];
   visibility: "public" | "private";
   createdAt: string;
@@ -430,6 +441,7 @@ function createDefaultMarketRecord(marketId: string, ownerCountryId: string): {
     name: `Рынок ${marketId}`,
     logoUrl: null,
     ownerCountryId,
+    capitalProvinceId: null,
     memberCountryIds: [ownerCountryId],
     visibility: "public",
     createdAt: new Date().toISOString(),
@@ -509,6 +521,12 @@ function upsertMarketMembership(countryId: string, targetMarketIdRaw: string | n
   return targetMarketId;
 }
 
+function getOwnedProvinceIds(countryId: string): string[] {
+  return adm1ProvinceIndex
+    .filter((province) => worldBase.provinceOwner[province.id] === countryId)
+    .map((province) => province.id);
+}
+
 function rebuildCountryMarketIndexFromMembers(): void {
   ensureMarketsStateShape();
   const assignment: Record<string, string> = {};
@@ -520,6 +538,13 @@ function rebuildCountryMarketIndexFromMembers(): void {
       typeof market.createdAt === "string" && market.createdAt.trim() ? market.createdAt : new Date().toISOString();
     if (!market.ownerCountryId || !market.memberCountryIds.includes(market.ownerCountryId)) {
       market.ownerCountryId = market.memberCountryIds[0] ?? market.ownerCountryId ?? marketId;
+    }
+    const ownerProvinceIds = getOwnedProvinceIds(market.ownerCountryId);
+    if (
+      typeof market.capitalProvinceId !== "string" ||
+      !ownerProvinceIds.includes(market.capitalProvinceId)
+    ) {
+      market.capitalProvinceId = ownerProvinceIds[0] ?? null;
     }
     for (const countryId of market.memberCountryIds) {
       if (!assignment[countryId]) {
@@ -541,6 +566,38 @@ function ensureMarketModelReady(): void {
     upsertMarketMembership(countryId, preferred);
   }
   rebuildCountryMarketIndexFromMembers();
+  const marketsById = gameSettings.markets.marketById;
+  const corridorsById = gameSettings.markets.transportCorridorsById;
+  const validProvinceIds = new Set<string>(adm1ProvinceIndex.map((province) => province.id));
+  for (const [corridorId, corridor] of Object.entries(corridorsById)) {
+    const market = marketsById[corridor.marketId];
+    if (!market) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    if (!validProvinceIds.has(corridor.fromProvinceId) || !validProvinceIds.has(corridor.toProvinceId)) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    if (corridor.fromProvinceId === corridor.toProvinceId) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    const fromOwner = worldBase.provinceOwner[corridor.fromProvinceId] ?? null;
+    const toOwner = worldBase.provinceOwner[corridor.toProvinceId] ?? null;
+    const memberSet = new Set(market.memberCountryIds);
+    if (!fromOwner || !toOwner || !memberSet.has(fromOwner) || !memberSet.has(toOwner)) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    corridor.categories = [...new Set((corridor.categories ?? []).map((id) => id.trim()).filter(Boolean))];
+    corridor.capacityByCategory = normalizeCategoryAmountMap(corridor.capacityByCategory);
+    corridor.categories = corridor.categories.filter((categoryId) => (corridor.capacityByCategory[categoryId] ?? 0) > 0);
+    if (corridor.categories.length === 0) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+  }
 }
 
 function getCountryMarketId(countryId: string): string {
@@ -574,9 +631,73 @@ function getCountryMarketRecord(countryId: string): (typeof gameSettings.markets
   return fallback;
 }
 
+function getMarketTransportCorridors(marketId: string, options?: { includeDisabled?: boolean }): TransportCorridorEntry[] {
+  ensureMarketModelReady();
+  const includeDisabled = options?.includeDisabled === true;
+  return Object.values(gameSettings.markets.transportCorridorsById ?? {})
+    .filter((corridor) => corridor.marketId === marketId)
+    .filter((corridor) => includeDisabled || corridor.enabled !== false)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function buildTransportConnectedCategoriesByProvince(categoryIds: string[]): Record<string, Set<string>> {
+  ensureMarketModelReady();
+  const connectedByProvince: Record<string, Set<string>> = {};
+  const wantedCategories = [...new Set(categoryIds.map((id) => id.trim()).filter(Boolean))];
+  if (wantedCategories.length === 0) return connectedByProvince;
+
+  for (const market of Object.values(gameSettings.markets.marketById)) {
+    const capitalProvinceId = typeof market.capitalProvinceId === "string" ? market.capitalProvinceId.trim() : "";
+    if (!capitalProvinceId) continue;
+    const capitalOwnerId = worldBase.provinceOwner[capitalProvinceId] ?? null;
+    if (!capitalOwnerId || !market.memberCountryIds.includes(capitalOwnerId)) continue;
+    const marketMemberSet = new Set(market.memberCountryIds);
+    const corridors = getMarketTransportCorridors(market.id).filter((corridor) => {
+      const fromOwnerId = worldBase.provinceOwner[corridor.fromProvinceId] ?? null;
+      const toOwnerId = worldBase.provinceOwner[corridor.toProvinceId] ?? null;
+      return Boolean(fromOwnerId && toOwnerId && marketMemberSet.has(fromOwnerId) && marketMemberSet.has(toOwnerId));
+    });
+    if (!connectedByProvince[capitalProvinceId]) connectedByProvince[capitalProvinceId] = new Set<string>();
+
+    for (const categoryId of wantedCategories) {
+      const adjacency = new Map<string, string[]>();
+      for (const corridor of corridors) {
+        if (!corridor.categories.includes(categoryId)) continue;
+        if ((corridor.capacityByCategory[categoryId] ?? 0) <= 0) continue;
+        const from = corridor.fromProvinceId;
+        const to = corridor.toProvinceId;
+        const fromEdges = adjacency.get(from) ?? [];
+        fromEdges.push(to);
+        adjacency.set(from, fromEdges);
+        const toEdges = adjacency.get(to) ?? [];
+        toEdges.push(from);
+        adjacency.set(to, toEdges);
+      }
+      const visited = new Set<string>([capitalProvinceId]);
+      const queue = [capitalProvinceId];
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current) break;
+        for (const next of adjacency.get(current) ?? []) {
+          if (visited.has(next)) continue;
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+      for (const provinceId of visited) {
+        if (!connectedByProvince[provinceId]) connectedByProvince[provinceId] = new Set<string>();
+        connectedByProvince[provinceId].add(categoryId);
+      }
+    }
+  }
+
+  return connectedByProvince;
+}
+
 function cleanupMarketsAfterCountryRemoval(removedCountryId: string): void {
   ensureMarketsStateShape();
   const validCountryIds = new Set<string>(Object.keys(worldBase.resourcesByCountry ?? {}));
+  const validProvinceIds = new Set<string>(adm1ProvinceIndex.map((province) => province.id));
   const marketById = gameSettings.markets.marketById;
   for (const [marketId, market] of Object.entries(marketById)) {
     const members = [...new Set((market.memberCountryIds ?? []).filter((countryId) => validCountryIds.has(countryId)))];
@@ -587,6 +708,28 @@ function cleanupMarketsAfterCountryRemoval(removedCountryId: string): void {
     if (members.length === 0) {
       if (market.logoUrl) removeUploadedByUrl(market.logoUrl);
       delete marketById[marketId];
+      continue;
+    }
+    const ownerProvinces = adm1ProvinceIndex
+      .filter((province) => worldBase.provinceOwner[province.id] === market.ownerCountryId)
+      .map((province) => province.id);
+    if (market.capitalProvinceId && !ownerProvinces.includes(market.capitalProvinceId)) {
+      market.capitalProvinceId = ownerProvinces[0] ?? null;
+    }
+  }
+
+  for (const [corridorId, corridor] of Object.entries(gameSettings.markets.transportCorridorsById ?? {})) {
+    if (!marketById[corridor.marketId]) {
+      delete gameSettings.markets.transportCorridorsById[corridorId];
+      continue;
+    }
+    if (!validProvinceIds.has(corridor.fromProvinceId) || !validProvinceIds.has(corridor.toProvinceId)) {
+      delete gameSettings.markets.transportCorridorsById[corridorId];
+      continue;
+    }
+    if (corridor.fromProvinceId === corridor.toProvinceId) {
+      delete gameSettings.markets.transportCorridorsById[corridorId];
+      continue;
     }
   }
 
@@ -751,6 +894,17 @@ type MarketSanctionEntry = {
   enabled?: boolean;
 };
 
+type TransportCorridorEntry = {
+  id: string;
+  marketId: string;
+  fromProvinceId: string;
+  toProvinceId: string;
+  categories: string[];
+  capacityByCategory: Record<string, number>;
+  enabled: boolean;
+  createdAt: string;
+};
+
 type GameSettings = {
   content: {
     races: GameContentEntry[];
@@ -798,6 +952,7 @@ type GameSettings = {
         name: string;
         logoUrl: string | null;
         ownerCountryId: string;
+        capitalProvinceId?: string | null;
         memberCountryIds: string[];
         visibility: "public" | "private";
         createdAt: string;
@@ -814,6 +969,7 @@ type GameSettings = {
         lastSharedInfrastructureCapacityByCategory?: Record<string, number>;
       }
     >;
+    transportCorridorsById: Record<string, TransportCorridorEntry>;
     marketInvitesById: Record<
       string,
       {
@@ -2193,6 +2349,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
   const marketVolumeGlobal: Record<string, number> = {};
   const infraRemainingByProvinceAndCategory: Record<string, Record<string, number>> = {};
   const infraConsumedByProvinceAndCategory: Record<string, Record<string, number>> = {};
+  const localInfrastructureProvidedByProvinceAndCategory: Record<string, Record<string, number>> = {};
   const remainingSharedInfrastructureByMarketIdAndCategory: Record<string, Record<string, number>> = {};
   const consumedSharedInfrastructureByMarketIdAndCategory: Record<string, Record<string, number>> = {};
   const worldTradeUsedAmountByScope: Record<string, number> = {};
@@ -2273,17 +2430,35 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     map[goodId] = round3((map[goodId] ?? 0) + value);
   };
   const getMarketIdByCountry = (countryId: string): string => getCountryMarketId(countryId);
+  const infrastructureCategoryIds = [
+    ...new Set(
+      [
+        ...gameSettings.content.goods
+          .map((entry) => (typeof entry.resourceCategoryId === "string" ? entry.resourceCategoryId.trim() : ""))
+          .filter(Boolean),
+        ...gameSettings.content.buildings.flatMap((entry) => Object.keys(entry.marketInfrastructureByCategory ?? {})),
+        ...Object.values(gameSettings.markets.transportCorridorsById ?? {}).flatMap((corridor) => corridor.categories ?? []),
+      ].map((id) => id.trim()).filter(Boolean),
+    ),
+  ];
+  const transportConnectedCategoriesByProvince = buildTransportConnectedCategoriesByProvince(infrastructureCategoryIds);
+  const isProvinceConnectedByCategory = (provinceId: string, categoryId: string): boolean =>
+    Boolean(transportConnectedCategoriesByProvince[provinceId]?.has(categoryId));
   const getProvinceInfrastructureFallbackCapacity = (provinceId: string): number =>
     round3(Math.max(0, Number(worldBase.provinceInfrastructureByProvince[provinceId] ?? DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY)));
   const getProvinceCategoryCapacity = (provinceId: string, categoryId: string): number => {
+    if (!isProvinceConnectedByCategory(provinceId, categoryId)) {
+      return 0;
+    }
     const anyWorldBase = worldBase as WorldBase & {
       provinceLogisticsPointsByCategoryByProvince?: Record<string, Record<string, number>>;
     };
     const explicit = anyWorldBase.provinceLogisticsPointsByCategoryByProvince?.[provinceId]?.[categoryId];
+    const providedFromBuildings = Number(localInfrastructureProvidedByProvinceAndCategory[provinceId]?.[categoryId] ?? 0);
     if (typeof explicit === "number" && Number.isFinite(explicit)) {
-      return round3(Math.max(0, explicit));
+      return round3(Math.max(0, explicit) + Math.max(0, providedFromBuildings));
     }
-    return DEFAULT_LOCAL_INFRA_CATEGORY_CAPACITY;
+    return round3(DEFAULT_LOCAL_INFRA_CATEGORY_CAPACITY + Math.max(0, providedFromBuildings));
   };
   const getProvinceInfraRemaining = (provinceId: string, categoryId: string): number => {
     if (!infraRemainingByProvinceAndCategory[provinceId]) infraRemainingByProvinceAndCategory[provinceId] = {};
@@ -2464,6 +2639,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       for (const [categoryId, amountRaw] of Object.entries(building.marketInfrastructureByCategory ?? {})) {
         const amount = round3(Math.max(0, Number(amountRaw)) * instanceLevel);
         if (amount <= 0) continue;
+        addCategoryAmount(localInfrastructureProvidedByProvinceAndCategory, provinceId, categoryId, amount);
         addCategoryAmount(remainingSharedInfrastructureByMarketIdAndCategory, marketId, categoryId, amount);
       }
     }
@@ -2485,7 +2661,6 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       if (!building) continue;
       const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
       instance.level = instanceLevel;
-      const sellableGoodIds = new Set((building.outputs ?? []).map((row) => row.goodId).filter(Boolean));
       instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0)));
       instance.warehouseByGoodId = { ...(instance.warehouseByGoodId ?? {}) };
       instance.lastPurchaseByGoodId = {};
@@ -2507,7 +2682,6 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       instance.isInactive = false;
       instance.inactiveReason = null;
       for (const [goodId, amountRaw] of Object.entries(instance.warehouseByGoodId ?? {})) {
-        if (!sellableGoodIds.has(goodId)) continue;
         const amount = round3(Math.max(0, Number(amountRaw)));
         if (amount <= 0) continue;
         const slot: SellerSlot = {
@@ -3536,6 +3710,7 @@ const defaultGameSettings = (): GameSettings => {
     markets: {
       countryMarketByCountryId: {},
       marketById: {},
+      transportCorridorsById: {},
       marketInvitesById: {},
       sanctionsById: {},
     },
@@ -3855,6 +4030,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
                         typeof value.name === "string" && value.name.trim() ? value.name.trim() : `Рынок ${marketId}`,
                       logoUrl: typeof value.logoUrl === "string" || value.logoUrl === null ? (value.logoUrl ?? null) : null,
                       ownerCountryId,
+                      capitalProvinceId:
+                        typeof value.capitalProvinceId === "string" && value.capitalProvinceId.trim().length > 0
+                          ? value.capitalProvinceId.trim()
+                          : null,
                       memberCountryIds: Array.isArray(value.memberCountryIds)
                         ? [
                             ...new Set(
@@ -3889,6 +4068,57 @@ function parseAndApplyPersistentState(input: unknown): boolean {
                 }),
               )
             : { ...defaults.markets.marketById },
+        transportCorridorsById:
+          next.markets &&
+          typeof next.markets === "object" &&
+          next.markets.transportCorridorsById &&
+          typeof next.markets.transportCorridorsById === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.transportCorridorsById as Record<string, unknown>).flatMap(([corridorId, raw]) => {
+                  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+                  const marketId = typeof value.marketId === "string" ? value.marketId.trim() : "";
+                  const fromProvinceId = typeof value.fromProvinceId === "string" ? value.fromProvinceId.trim() : "";
+                  const toProvinceId = typeof value.toProvinceId === "string" ? value.toProvinceId.trim() : "";
+                  if (!marketId || !fromProvinceId || !toProvinceId || fromProvinceId === toProvinceId) {
+                    return [];
+                  }
+                  const categories = Array.isArray(value.categories)
+                    ? [...new Set(value.categories.filter((row): row is string => typeof row === "string" && row.trim().length > 0).map((row) => row.trim()))]
+                    : [];
+                  const capacityByCategoryRaw =
+                    value.capacityByCategory && typeof value.capacityByCategory === "object"
+                      ? (value.capacityByCategory as Record<string, unknown>)
+                      : {};
+                  const capacityByCategory: Record<string, number> = Object.fromEntries(
+                    Object.entries(capacityByCategoryRaw)
+                      .map(([categoryId, amountRaw]) => {
+                        const amount = typeof amountRaw === "number" && Number.isFinite(amountRaw)
+                          ? round3(Math.max(0, Number(amountRaw)))
+                          : 0;
+                        return [categoryId.trim(), amount] as const;
+                      })
+                      .filter(([categoryId, amount]) => categoryId.length > 0 && amount > 0),
+                  );
+                  const normalizedCategories = categories.filter((categoryId) => (capacityByCategory[categoryId] ?? 0) > 0);
+                  return [[
+                    corridorId,
+                    {
+                      id: corridorId,
+                      marketId,
+                      fromProvinceId,
+                      toProvinceId,
+                      categories: normalizedCategories,
+                      capacityByCategory,
+                      enabled: value.enabled !== false,
+                      createdAt:
+                        typeof value.createdAt === "string" && value.createdAt.trim().length > 0
+                          ? value.createdAt.trim()
+                          : new Date().toISOString(),
+                    } satisfies TransportCorridorEntry,
+                  ]];
+                }),
+              )
+            : { ...defaults.markets.transportCorridorsById },
         marketInvitesById:
           next.markets && typeof next.markets === "object" && next.markets.marketInvitesById && typeof next.markets.marketInvitesById === "object"
             ? Object.fromEntries(
@@ -6593,6 +6823,8 @@ app.get("/economy/market-overview", async (req, res) => {
     turnId,
     countryId,
     marketId,
+    marketCapitalProvinceId: marketRecord?.capitalProvinceId ?? null,
+    transportCorridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
     goods,
     tradeByGood,
     infraByProvince,
@@ -6617,6 +6849,21 @@ const marketTransferOwnerSchema = z.object({
 const marketPatchSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   visibility: z.enum(["public", "private"]).optional(),
+  capitalProvinceId: z.string().trim().min(1).max(120).nullable().optional(),
+});
+
+const marketTransportCorridorCreateSchema = z.object({
+  fromProvinceId: z.string().trim().min(1).max(120),
+  toProvinceId: z.string().trim().min(1).max(120),
+  categories: z.array(z.string().trim().min(1).max(120)).min(1).max(64),
+  capacityByCategory: z.record(z.string().trim().min(1).max(120), z.number().finite().min(0)).optional(),
+  enabled: z.boolean().optional(),
+});
+
+const marketTransportCorridorPatchSchema = z.object({
+  categories: z.array(z.string().trim().min(1).max(120)).min(1).max(64).optional(),
+  capacityByCategory: z.record(z.string().trim().min(1).max(120), z.number().finite().min(0)).optional(),
+  enabled: z.boolean().optional(),
 });
 
 const marketSanctionCreateSchema = z.object({
@@ -6643,6 +6890,37 @@ const marketSanctionPatchSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
+function getMarketMemberProvinceIds(market: { memberCountryIds: string[] }): string[] {
+  const members = new Set(market.memberCountryIds);
+  return adm1ProvinceIndex
+    .filter((province) => {
+      const ownerCountryId = worldBase.provinceOwner[province.id] ?? null;
+      return Boolean(ownerCountryId && members.has(ownerCountryId));
+    })
+    .map((province) => province.id);
+}
+
+function normalizeTransportCorridorShape(params: {
+  categories: string[];
+  capacityByCategory?: Record<string, number>;
+}): { categories: string[]; capacityByCategory: Record<string, number> } {
+  const categories = [...new Set(params.categories.map((categoryId) => categoryId.trim()).filter(Boolean))];
+  const rawCapacity = normalizeCategoryAmountMap(params.capacityByCategory ?? {});
+  const capacityByCategory: Record<string, number> = {};
+  for (const categoryId of categories) {
+    const next = Number(rawCapacity[categoryId] ?? DEFAULT_TRANSPORT_CORRIDOR_CAPACITY);
+    if (!Number.isFinite(next) || next <= 0) continue;
+    capacityByCategory[categoryId] = round3(Math.max(0, next));
+  }
+  const normalizedCategories = categories.filter((categoryId) => (capacityByCategory[categoryId] ?? 0) > 0);
+  return {
+    categories: normalizedCategories,
+    capacityByCategory: Object.fromEntries(
+      Object.entries(capacityByCategory).filter(([categoryId]) => normalizedCategories.includes(categoryId)),
+    ),
+  };
+}
+
 async function buildMarketDetailsResponse(marketId: string): Promise<{
   market: {
     id: string;
@@ -6650,10 +6928,12 @@ async function buildMarketDetailsResponse(marketId: string): Promise<{
     logoUrl: string | null;
     ownerCountryId: string;
     ownerCountryName: string;
+    capitalProvinceId: string | null;
     memberCountryIds: string[];
     visibility: "public" | "private";
     createdAt: string;
     members: Array<{ countryId: string; countryName: string; flagUrl: string | null; isOwner: boolean }>;
+    transportCorridors: TransportCorridorEntry[];
   };
 }> {
   const market = getMarketById(marketId);
@@ -6685,10 +6965,12 @@ async function buildMarketDetailsResponse(marketId: string): Promise<{
       logoUrl: market.logoUrl,
       ownerCountryId: market.ownerCountryId,
       ownerCountryName: byId.get(market.ownerCountryId)?.name ?? market.ownerCountryId,
+      capitalProvinceId: market.capitalProvinceId ?? null,
       memberCountryIds: [...market.memberCountryIds],
       visibility: market.visibility,
       createdAt: market.createdAt,
       members,
+      transportCorridors: getMarketTransportCorridors(market.id, { includeDisabled: true }),
     },
   };
 }
@@ -6879,6 +7161,22 @@ app.patch("/markets/:marketId", upload.single("marketLogo"), async (req, res) =>
   if (typeof parsed.data.visibility === "string") {
     market.visibility = normalizeMarketVisibility(parsed.data.visibility);
   }
+  if (parsed.data.capitalProvinceId !== undefined) {
+    const nextCapital =
+      typeof parsed.data.capitalProvinceId === "string" && parsed.data.capitalProvinceId.trim().length > 0
+        ? parsed.data.capitalProvinceId.trim()
+        : null;
+    if (nextCapital == null) {
+      market.capitalProvinceId = null;
+    } else {
+      const provinceOwnerId = worldBase.provinceOwner[nextCapital] ?? null;
+      if (!provinceOwnerId || provinceOwnerId !== market.ownerCountryId) {
+        removeUploadedFile(logoFile);
+        return res.status(400).json({ error: "INVALID_MARKET_CAPITAL_PROVINCE" });
+      }
+      market.capitalProvinceId = nextCapital;
+    }
+  }
   if (logoFile) {
     const previous = market.logoUrl;
     market.logoUrl = makeVersionedUploadUrl(`markets/${logoFile.filename}`);
@@ -6889,6 +7187,144 @@ app.patch("/markets/:marketId", upload.single("marketLogo"), async (req, res) =>
   market.id = marketId;
   savePersistentState();
   return res.json(await buildMarketDetailsResponse(marketId));
+});
+
+app.get("/markets/:marketId/corridors", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (!market.memberCountryIds.includes(auth.countryId)) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  return res.json({
+    marketId,
+    capitalProvinceId: market.capitalProvinceId ?? null,
+    corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
+  });
+});
+
+app.post("/markets/:marketId/corridors", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketTransportCorridorCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const fromProvinceId = parsed.data.fromProvinceId.trim();
+  const toProvinceId = parsed.data.toProvinceId.trim();
+  if (fromProvinceId === toProvinceId) {
+    return res.status(400).json({ error: "CORRIDOR_PROVINCES_MUST_DIFFER" });
+  }
+  const validMemberProvinceIds = new Set(getMarketMemberProvinceIds(market));
+  if (!validMemberProvinceIds.has(fromProvinceId) || !validMemberProvinceIds.has(toProvinceId)) {
+    return res.status(400).json({ error: "CORRIDOR_PROVINCE_OUTSIDE_MARKET" });
+  }
+  const normalized = normalizeTransportCorridorShape({
+    categories: parsed.data.categories,
+    capacityByCategory: parsed.data.capacityByCategory,
+  });
+  if (normalized.categories.length === 0) {
+    return res.status(400).json({ error: "CORRIDOR_NO_CATEGORIES" });
+  }
+  const corridorId = randomUUID();
+  const corridor: TransportCorridorEntry = {
+    id: corridorId,
+    marketId,
+    fromProvinceId,
+    toProvinceId,
+    categories: normalized.categories,
+    capacityByCategory: normalized.capacityByCategory,
+    enabled: parsed.data.enabled ?? true,
+    createdAt: new Date().toISOString(),
+  };
+  gameSettings.markets.transportCorridorsById[corridorId] = corridor;
+  savePersistentState();
+  return res.status(201).json({
+    corridor,
+    corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
+  });
+});
+
+app.patch("/markets/:marketId/corridors/:corridorId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const corridorId = String(req.params.corridorId || "").trim();
+  const corridor = gameSettings.markets.transportCorridorsById[corridorId];
+  if (!corridor || corridor.marketId !== marketId) {
+    return res.status(404).json({ error: "CORRIDOR_NOT_FOUND" });
+  }
+  const parsed = marketTransportCorridorPatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const nextCategories = parsed.data.categories ?? corridor.categories;
+  const nextCapacity = parsed.data.capacityByCategory ?? corridor.capacityByCategory;
+  const normalized = normalizeTransportCorridorShape({
+    categories: nextCategories,
+    capacityByCategory: nextCapacity,
+  });
+  if (normalized.categories.length === 0) {
+    return res.status(400).json({ error: "CORRIDOR_NO_CATEGORIES" });
+  }
+  corridor.categories = normalized.categories;
+  corridor.capacityByCategory = normalized.capacityByCategory;
+  if (typeof parsed.data.enabled === "boolean") {
+    corridor.enabled = parsed.data.enabled;
+  }
+  savePersistentState();
+  return res.json({
+    corridor,
+    corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
+  });
+});
+
+app.delete("/markets/:marketId/corridors/:corridorId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const corridorId = String(req.params.corridorId || "").trim();
+  const corridor = gameSettings.markets.transportCorridorsById[corridorId];
+  if (!corridor || corridor.marketId !== marketId) {
+    return res.status(404).json({ error: "CORRIDOR_NOT_FOUND" });
+  }
+  delete gameSettings.markets.transportCorridorsById[corridorId];
+  savePersistentState();
+  return res.json({ ok: true, corridorId, corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }) });
 });
 
 app.post("/markets/:marketId/invites", async (req, res) => {

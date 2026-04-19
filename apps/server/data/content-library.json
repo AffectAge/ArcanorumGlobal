@@ -1,7 +1,17 @@
 {
   "content": {
     "races": [],
-    "resourceCategories": [],
+    "resourceCategories": [
+      {
+        "id": "e9dc8ca5-0d4e-489e-b3b1-2255bae8b3c2",
+        "name": "Наземный транспорт",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": null,
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
     "professions": [
       {
         "id": "0b93b497-db9e-4788-83f4-9e7e12cf3a8e",
@@ -627,5 +637,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-04-18T21:31:32.555Z"
+  "updatedAt": "2026-04-19T15:06:15.550Z"
 }
