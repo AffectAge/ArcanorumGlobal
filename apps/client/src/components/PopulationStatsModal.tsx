@@ -16,7 +16,7 @@ type Props = {
 };
 
 type ViewMode = "country" | "world";
-type PanelSection = "general" | "religions" | "cultures" | "professions" | "ideologies" | "races" | "branding";
+type PanelSection = "general" | "finance" | "religions" | "cultures" | "professions" | "ideologies" | "races" | "branding";
 type PopulationDimensionKey = "culturePct" | "ideologyPct" | "religionPct" | "racePct" | "professionPct";
 
 type PopulationAggregate = {
@@ -43,6 +43,24 @@ type BreakdownRow = {
   imageUrl: string | null;
 };
 
+type FinanceFlowRow = {
+  id: string;
+  label: string;
+  value: number;
+  color: string;
+};
+
+type ProvinceFinanceRow = {
+  provinceId: string;
+  provinceName: string;
+  population: number;
+  treasury: number;
+  income: number;
+  expenses: number;
+  netBalance: number;
+  capitalPerCapita: number;
+};
+
 const DIMENSION_LABELS: Array<{ key: PopulationDimensionKey; label: string }> = [
   { key: "culturePct", label: "Культуры" },
   { key: "ideologyPct", label: "Идеологии" },
@@ -58,6 +76,7 @@ const STAT_TABS: Array<{
   dimension?: PopulationDimensionKey;
 }> = [
   { id: "general", label: "Основная информация", icon: FileText },
+  { id: "finance", label: "Финансы населения", icon: BarChart3 },
   { id: "religions", label: "Религии", icon: ScrollText, dimension: "religionPct" },
   { id: "cultures", label: "Культуры", icon: Palette, dimension: "culturePct" },
   { id: "professions", label: "Профессии", icon: Briefcase, dimension: "professionPct" },
@@ -91,12 +110,34 @@ const FALLBACK_COLORS = [
   "#60a5fa",
 ];
 
+const NEGATIVE_BALANCE_STREAK_TARGET = 3;
+const LOW_CAPITAL_PER_CAPITA_THRESHOLD = 0.1;
+
 function colorFromId(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i += 1) {
     hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
   }
   return FALLBACK_COLORS[hash % FALLBACK_COLORS.length] ?? "#9ca3af";
+}
+
+function round3(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Number(value.toFixed(3));
+}
+
+function formatSignedInt(value: number): string {
+  const rounded = Math.round(value);
+  if (rounded > 0) return `+${formatInt(rounded)}`;
+  if (rounded < 0) return `-${formatInt(Math.abs(rounded))}`;
+  return "0";
+}
+
+function resolveScopeProvinceIds(worldBase: WorldBase | null, scope: ViewMode, countryId: string): string[] {
+  if (!worldBase) return [];
+  const ownerByProvince = worldBase.provinceOwner ?? {};
+  const populationByProvince = worldBase.provincePopulationByProvince ?? {};
+  return Object.keys(populationByProvince).filter((provinceId) => scope === "world" || ownerByProvince[provinceId] === countryId);
 }
 
 function normalizeColor(value: string | null | undefined, id: string): string {
@@ -203,6 +244,12 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
   });
   const pieRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<EChartsType | null>(null);
+  const prevTreasuryByModeRef = useRef<Record<ViewMode, number | null>>({ country: null, world: null });
+  const treasuryTurnByModeRef = useRef<Record<ViewMode, number>>({ country: 0, world: 0 });
+  const negativeStreakByModeRef = useRef<Record<ViewMode, Record<string, number>>>({ country: {}, world: {} });
+  const negativeStreakTurnByModeRef = useRef<Record<ViewMode, number>>({ country: 0, world: 0 });
+  const [treasuryDeltaByMode, setTreasuryDeltaByMode] = useState<Record<ViewMode, number | null>>({ country: null, world: null });
+  const [negativeStreakTick, setNegativeStreakTick] = useState(0);
 
   const countryStats = useMemo(() => aggregatePopulation(worldBase, "country", countryId), [countryId, worldBase]);
   const worldStats = useMemo(() => aggregatePopulation(worldBase, "world", countryId), [countryId, worldBase]);
@@ -211,6 +258,153 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
   const subtitle = mode === "country" ? "Статистика по вашим провинциям" : "Сводная статистика по всем провинциям";
   const activeTab = STAT_TABS.find((tab) => tab.id === section) ?? STAT_TABS[0];
   const activeDimension = activeTab.dimension ?? null;
+  const scopedProvinceIds = useMemo(() => resolveScopeProvinceIds(worldBase, mode, countryId), [countryId, mode, worldBase]);
+
+  const financeStats = useMemo(() => {
+    if (!worldBase) {
+      return {
+        totalTreasury: 0,
+        totalPopulation: 0,
+        incomeRows: [
+          { id: "wages", label: "Зарплаты от зданий", value: 0, color: "#34d399" },
+          { id: "transfers", label: "Соцвыплаты/трансферты", value: 0, color: "#60a5fa" },
+          { id: "other-income", label: "Прочие источники", value: 0, color: "#f59e0b" },
+        ] satisfies FinanceFlowRow[],
+        expenseRows: [
+          { id: "goods", label: "Покупка товаров населением", value: 0, color: "#f87171" },
+          { id: "taxes", label: "Налоги/сборы", value: 0, color: "#fb7185" },
+          { id: "other-expense", label: "Прочие траты", value: 0, color: "#a78bfa" },
+        ] satisfies FinanceFlowRow[],
+        totalIncome: 0,
+        totalExpenses: 0,
+        netBalance: 0,
+        byProvince: [] as ProvinceFinanceRow[],
+      };
+    }
+
+    const treasuryByProvince = worldBase.provincePopulationTreasuryByProvince ?? {};
+    const populationByProvince = worldBase.provincePopulationByProvince ?? {};
+    const buildingsByProvince = worldBase.provinceBuildingsByProvince ?? {};
+    const provinceNameById = worldBase.provinceNameById ?? {};
+
+    let totalTreasury = 0;
+    let totalPopulation = 0;
+    let wagesIncome = 0;
+    let transferIncome = 0;
+    let otherIncome = 0;
+    let goodsExpense = 0;
+    let taxesExpense = 0;
+    let otherExpense = 0;
+
+    const byProvince: ProvinceFinanceRow[] = [];
+
+    for (const provinceId of scopedProvinceIds) {
+      const population = Math.max(0, Number(populationByProvince[provinceId]?.populationTotal ?? 0));
+      const treasury = Math.max(0, Number(treasuryByProvince[provinceId] ?? 0));
+      const buildingList = buildingsByProvince[provinceId] ?? [];
+      const wages = round3(
+        buildingList.reduce((sum, instance) => sum + Math.max(0, Number(instance?.lastWagesDucats ?? 0)), 0),
+      );
+      const income = round3(wages);
+      const expenses = round3(0);
+      const netBalance = round3(income - expenses);
+      const capitalPerCapita = population > 0 ? treasury / population : 0;
+
+      totalTreasury = round3(totalTreasury + treasury);
+      totalPopulation += population;
+      wagesIncome = round3(wagesIncome + wages);
+
+      byProvince.push({
+        provinceId,
+        provinceName: provinceNameById[provinceId] ?? provinceId,
+        population,
+        treasury,
+        income,
+        expenses,
+        netBalance,
+        capitalPerCapita,
+      });
+    }
+
+    const incomeRows: FinanceFlowRow[] = [
+      { id: "wages", label: "Зарплаты от зданий", value: wagesIncome, color: "#34d399" },
+      { id: "transfers", label: "Соцвыплаты/трансферты", value: transferIncome, color: "#60a5fa" },
+      { id: "other-income", label: "Прочие источники", value: otherIncome, color: "#f59e0b" },
+    ];
+    const expenseRows: FinanceFlowRow[] = [
+      { id: "goods", label: "Покупка товаров населением", value: goodsExpense, color: "#f87171" },
+      { id: "taxes", label: "Налоги/сборы", value: taxesExpense, color: "#fb7185" },
+      { id: "other-expense", label: "Прочие траты", value: otherExpense, color: "#a78bfa" },
+    ];
+    const totalIncome = round3(incomeRows.reduce((sum, row) => sum + row.value, 0));
+    const totalExpenses = round3(expenseRows.reduce((sum, row) => sum + row.value, 0));
+    const netBalance = round3(totalIncome - totalExpenses);
+
+    return {
+      totalTreasury,
+      totalPopulation,
+      incomeRows,
+      expenseRows,
+      totalIncome,
+      totalExpenses,
+      netBalance,
+      byProvince: byProvince.sort((a, b) => b.treasury - a.treasury),
+    };
+  }, [scopedProvinceIds, worldBase]);
+
+  useEffect(() => {
+    if (!open || !worldBase) return;
+    const currentTurn = Math.max(1, Number(worldBase.turnId ?? 1));
+    if (treasuryTurnByModeRef.current[mode] === currentTurn) return;
+    treasuryTurnByModeRef.current[mode] = currentTurn;
+    const previous = prevTreasuryByModeRef.current[mode];
+    const nextDelta = previous == null ? null : round3(financeStats.totalTreasury - previous);
+    prevTreasuryByModeRef.current[mode] = financeStats.totalTreasury;
+    setTreasuryDeltaByMode((prev) => ({ ...prev, [mode]: nextDelta }));
+  }, [financeStats.totalTreasury, mode, open, worldBase]);
+
+  useEffect(() => {
+    if (!open || !worldBase) return;
+    const currentTurn = Math.max(1, Number(worldBase.turnId ?? 1));
+    if (negativeStreakTurnByModeRef.current[mode] === currentTurn) return;
+    negativeStreakTurnByModeRef.current[mode] = currentTurn;
+    const prevStreak = negativeStreakByModeRef.current[mode] ?? {};
+    const nextStreak: Record<string, number> = { ...prevStreak };
+    const activeProvinceIds = new Set(financeStats.byProvince.map((row) => row.provinceId));
+    for (const provinceId of Object.keys(nextStreak)) {
+      if (!activeProvinceIds.has(provinceId)) {
+        delete nextStreak[provinceId];
+      }
+    }
+    for (const row of financeStats.byProvince) {
+      if (row.netBalance < 0) {
+        nextStreak[row.provinceId] = (nextStreak[row.provinceId] ?? 0) + 1;
+      } else {
+        nextStreak[row.provinceId] = 0;
+      }
+    }
+    negativeStreakByModeRef.current[mode] = nextStreak;
+    setNegativeStreakTick((prev) => prev + 1);
+  }, [financeStats.byProvince, mode, open, worldBase]);
+
+  const negativeBalanceAlerts = useMemo(() => {
+    const streakByProvince = negativeStreakByModeRef.current[mode] ?? {};
+    return financeStats.byProvince
+      .map((row) => ({
+        ...row,
+        streak: streakByProvince[row.provinceId] ?? 0,
+      }))
+      .filter((row) => row.streak >= NEGATIVE_BALANCE_STREAK_TARGET)
+      .sort((a, b) => b.streak - a.streak);
+  }, [financeStats.byProvince, mode, negativeStreakTick]);
+
+  const lowCapitalAlerts = useMemo(
+    () =>
+      financeStats.byProvince
+        .filter((row) => row.population > 0 && row.capitalPerCapita < LOW_CAPITAL_PER_CAPITA_THRESHOLD)
+        .sort((a, b) => a.capitalPerCapita - b.capitalPerCapita),
+    [financeStats.byProvince],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -510,6 +704,35 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
     );
   };
 
+  const renderFlowRows = (rows: FinanceFlowRow[]) => {
+    const total = rows.reduce((sum, row) => sum + row.value, 0);
+    return (
+      <div className="space-y-2.5">
+        {rows.map((row) => {
+          const pct = total > 0 ? Math.max(0, Math.min(100, (row.value / total) * 100)) : 0;
+          return (
+            <div key={row.id} className="rounded-lg border border-white/10 bg-black/25 p-2.5">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="truncate text-xs text-white/80">{row.label}</span>
+                <span className="shrink-0 text-xs tabular-nums text-white/90">{formatInt(row.value)} дукат</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${pct}%`,
+                    backgroundColor: row.color,
+                  }}
+                />
+              </div>
+              <div className="mt-1 text-[11px] tabular-nums text-white/55">{pct.toFixed(2)}%</div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[205]">
       <motion.div
@@ -653,6 +876,89 @@ export function PopulationStatsModal({ open, onClose, worldBase, countryId, coun
                         ))}
                       </div>
                     </>
+                  )}
+
+                  {section === "finance" && (
+                    <div className="space-y-4">
+                      <div>
+                        <div className="text-lg font-semibold text-white">Финансы населения</div>
+                        <div className="text-xs text-white/50">Казна населения, доходы/расходы за ход и сигналы по рискам</div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="text-[11px] uppercase tracking-wide text-white/50">Общий капитал населения</div>
+                          <div className="mt-1 text-lg font-semibold text-white">{formatInt(financeStats.totalTreasury)} дукат</div>
+                        </section>
+                        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="text-[11px] uppercase tracking-wide text-white/50">Изменение за последний ход</div>
+                          <div
+                            className={`mt-1 text-lg font-semibold ${
+                              (treasuryDeltaByMode[mode] ?? 0) > 0
+                                ? "text-emerald-300"
+                                : (treasuryDeltaByMode[mode] ?? 0) < 0
+                                  ? "text-rose-300"
+                                  : "text-white"
+                            }`}
+                          >
+                            {treasuryDeltaByMode[mode] == null ? "—" : `${formatSignedInt(treasuryDeltaByMode[mode] ?? 0)} дукат`}
+                          </div>
+                        </section>
+                        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="text-[11px] uppercase tracking-wide text-white/50">Доходы населения за ход</div>
+                          <div className="mt-1 text-lg font-semibold text-emerald-300">+{formatInt(financeStats.totalIncome)} дукат</div>
+                        </section>
+                        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="text-[11px] uppercase tracking-wide text-white/50">Расходы населения за ход</div>
+                          <div className="mt-1 text-lg font-semibold text-rose-300">-{formatInt(financeStats.totalExpenses)} дукат</div>
+                        </section>
+                        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="text-[11px] uppercase tracking-wide text-white/50">Чистый баланс</div>
+                          <div className={`mt-1 text-lg font-semibold ${financeStats.netBalance >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
+                            {formatSignedInt(financeStats.netBalance)} дукат
+                          </div>
+                        </section>
+                      </div>
+
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Структура доходов</div>
+                          {renderFlowRows(financeStats.incomeRows)}
+                        </section>
+                        <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Структура расходов</div>
+                          {renderFlowRows(financeStats.expenseRows)}
+                        </section>
+                      </div>
+
+                      <section className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Сигналы (алерты)</div>
+                        <div className="space-y-2">
+                          {negativeBalanceAlerts.length > 0 ? (
+                            negativeBalanceAlerts.map((row) => (
+                              <div key={`neg-${row.provinceId}`} className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                                {row.provinceName}: отрицательный баланс {row.streak} ход. подряд ({formatSignedInt(row.netBalance)} дукат/ход)
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/70">
+                              Нет провинций с отрицательным балансом {NEGATIVE_BALANCE_STREAK_TARGET} ход. подряд
+                            </div>
+                          )}
+                          {lowCapitalAlerts.length > 0 ? (
+                            lowCapitalAlerts.map((row) => (
+                              <div key={`low-${row.provinceId}`} className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                                {row.provinceName}: низкий капитал на душу ({row.capitalPerCapita.toFixed(3)} дукат/чел.)
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/70">
+                              Нет провинций с критично низким капиталом на душу
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    </div>
                   )}
 
                   {activeDimension && renderDimensionStats(activeDimension)}
