@@ -122,6 +122,17 @@ export const useGameStore = create<GameState>((set) => ({
         }
       }
 
+      if ((delta.mask & WORLD_DELTA_MASK.provinceInfrastructureByProvince) !== 0 && delta.s) {
+        nextWorldBase.provinceInfrastructureByProvince = { ...nextWorldBase.provinceInfrastructureByProvince };
+        for (const [provinceId, value] of Object.entries(delta.s)) {
+          if (value == null) {
+            delete nextWorldBase.provinceInfrastructureByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceInfrastructureByProvince[provinceId] = value;
+        }
+      }
+
       if ((delta.mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0 && delta.u) {
         nextWorldBase.provincePopulationByProvince = { ...nextWorldBase.provincePopulationByProvince };
         for (const [provinceId, value] of Object.entries(delta.u)) {
@@ -174,6 +185,43 @@ export const useGameStore = create<GameState>((set) => ({
             continue;
           }
           nextWorldBase.provinceConstructionQueueByProvince[provinceId] = value;
+        }
+      }
+
+      if ((delta.mask & WORLD_DELTA_MASK.provinceResourceDepositsByProvince) !== 0 && delta.t) {
+        nextWorldBase.provinceResourceDepositsByProvince = { ...nextWorldBase.provinceResourceDepositsByProvince };
+        for (const [provinceId, value] of Object.entries(delta.t)) {
+          if (!value) {
+            delete nextWorldBase.provinceResourceDepositsByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceResourceDepositsByProvince[provinceId] = value;
+        }
+      }
+
+      if ((delta.mask & WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince) !== 0 && delta.e) {
+        nextWorldBase.provinceResourceExplorationQueueByProvince = {
+          ...nextWorldBase.provinceResourceExplorationQueueByProvince,
+        };
+        for (const [provinceId, value] of Object.entries(delta.e)) {
+          if (!value) {
+            delete nextWorldBase.provinceResourceExplorationQueueByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceResourceExplorationQueueByProvince[provinceId] = value;
+        }
+      }
+
+      if ((delta.mask & WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince) !== 0 && delta.k) {
+        nextWorldBase.provinceResourceExplorationCountByProvince = {
+          ...nextWorldBase.provinceResourceExplorationCountByProvince,
+        };
+        for (const [provinceId, value] of Object.entries(delta.k)) {
+          if (value == null) {
+            delete nextWorldBase.provinceResourceExplorationCountByProvince[provinceId];
+            continue;
+          }
+          nextWorldBase.provinceResourceExplorationCountByProvince[provinceId] = value;
         }
       }
 

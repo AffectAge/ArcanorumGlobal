@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { Prisma, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import multer from "multer";
@@ -25,6 +25,8 @@ import {
   type OrderDelta,
   type ProvincePopulation,
   type ProvinceConstructionProject,
+  type ProvinceResourceDeposit,
+  type ProvinceResourceExplorationProject,
   type BuildingInstance,
   type BuildingOwner,
   type ResourceTotals,
@@ -52,16 +54,19 @@ const env = {
   jwtSecret: process.env.JWT_SECRET ?? "dev_secret_change_me",
   serverStatus: (process.env.SERVER_STATUS as ServerStatus) ?? "online",
   redisUrl: process.env.REDIS_URL,
+  autoCleanupUploadsOnStart: process.env.AUTO_CLEANUP_UPLOADS_ON_START !== "false",
 };
 
 const uploadsRoot = resolve(__dirname, "../uploads");
 const flagsDir = resolve(uploadsRoot, "flags");
 const crestsDir = resolve(uploadsRoot, "crests");
+const marketsDir = resolve(uploadsRoot, "markets");
 const resourceIconsDir = resolve(uploadsRoot, "resource-icons");
 const uiBackgroundsDir = resolve(uploadsRoot, "ui-backgrounds");
 const civilopediaImagesDir = resolve(uploadsRoot, "civilopedia");
 const contentUploadDirs = {
   cultures: resolve(uploadsRoot, "cultures"),
+  resourceCategories: resolve(uploadsRoot, "resource-categories"),
   religions: resolve(uploadsRoot, "religions"),
   professions: resolve(uploadsRoot, "professions"),
   ideologies: resolve(uploadsRoot, "ideologies"),
@@ -72,8 +77,11 @@ const contentUploadDirs = {
   industries: resolve(uploadsRoot, "industries"),
   technologies: resolve(uploadsRoot, "technologies"),
 } as const;
+const FLAG_IMAGE_RULE = { maxWidth: 192, maxHeight: 128, ratioWidth: 3, ratioHeight: 2 } as const;
+const CREST_IMAGE_RULE = { maxWidth: 128, maxHeight: 192, ratioWidth: 2, ratioHeight: 3 } as const;
 mkdirSync(flagsDir, { recursive: true });
 mkdirSync(crestsDir, { recursive: true });
+mkdirSync(marketsDir, { recursive: true });
 mkdirSync(resourceIconsDir, { recursive: true });
 mkdirSync(uiBackgroundsDir, { recursive: true });
 mkdirSync(civilopediaImagesDir, { recursive: true });
@@ -84,6 +92,7 @@ for (const dir of Object.values(contentUploadDirs)) {
 function resolveContentUploadDir(kind?: string): string {
   if (!kind) return contentUploadDirs.cultures;
   if (kind === "cultures") return contentUploadDirs.cultures;
+  if (kind === "resourceCategories") return contentUploadDirs.resourceCategories;
   if (kind === "religions") return contentUploadDirs.religions;
   if (kind === "professions") return contentUploadDirs.professions;
   if (kind === "ideologies") return contentUploadDirs.ideologies;
@@ -94,6 +103,20 @@ function resolveContentUploadDir(kind?: string): string {
   if (kind === "industries") return contentUploadDirs.industries;
   if (kind === "technologies") return contentUploadDirs.technologies;
   return contentUploadDirs.cultures;
+}
+
+function resolveContentUploadUrlSegment(kind?: string): string {
+  if (!kind) return "cultures";
+  if (kind === "resourceCategories") return "resource-categories";
+  return kind;
+}
+
+function normalizeLegacyContentLogoUrl(kind: ContentEntryKind, logoUrl: string | null): string | null {
+  if (!logoUrl) return logoUrl;
+  if (kind === "resourceCategories") {
+    return logoUrl.replace("/uploads/resourceCategories/", "/uploads/resource-categories/");
+  }
+  return logoUrl;
 }
 
 const resourceIconFields = new Set(["culture", "science", "religion", "colonization", "construction", "ducats", "gold"]);
@@ -110,6 +133,10 @@ const storage = multer.diskStorage({
     }
     if (file.fieldname === "uiBackground") {
       cb(null, uiBackgroundsDir);
+      return;
+    }
+    if (file.fieldname === "marketLogo") {
+      cb(null, marketsDir);
       return;
     }
     if (file.fieldname === "cultureLogo") {
@@ -295,6 +322,440 @@ const POPULATION_BIRTH_RATE = 0.012;
 const POPULATION_DEATH_RATE = 0.008;
 const BUILDING_BASE_THROUGHPUT = 1;
 const BUILDING_BASE_WAGE_PER_WORKER_GOLD = 0.2;
+const DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY = 100;
+const DEFAULT_LOCAL_INFRA_CATEGORY_CAPACITY = 100;
+const DEFAULT_TRANSPORT_CORRIDOR_CAPACITY = 100;
+const DEFAULT_RESOURCE_BASE_PRICE = 1;
+const MARKET_PRICE_SMOOTHING = 0.3;
+const MARKET_PRICE_HISTORY_LENGTH = 10;
+const MARKET_PRICE_EPSILON = 0.0001;
+const DEFAULT_MARKET_PRICE_SMOOTHING = MARKET_PRICE_SMOOTHING;
+const DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT = 50;
+const DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT = 7.5;
+const DEFAULT_EXPLORATION_DURATION_TURNS = 3;
+const DEFAULT_EXPLORATION_ROLLS_PER_EXPEDITION = 3;
+type PriceScopeState = Record<string, Record<string, number>>;
+let countryGoodPrices: PriceScopeState = {};
+let globalGoodPrices: Record<string, number> = {};
+let globalGoodPriceHistoryByResourceId: Record<string, number[]> = {};
+let globalGoodDemandHistoryByResourceId: Record<string, number[]> = {};
+let globalGoodOfferHistoryByResourceId: Record<string, number[]> = {};
+let globalGoodProductionFactHistoryByResourceId: Record<string, number[]> = {};
+let globalGoodProductionMaxHistoryByResourceId: Record<string, number[]> = {};
+let previousTradeInfraLoadByProvince: Record<string, number> = {};
+function createEmptyMarketOverviewState(nextTurnId: number): MarketOverviewState {
+  return {
+    turnId: Math.max(1, Math.floor(Number(nextTurnId) || 1)),
+    demandByCountry: {},
+    offerByCountry: {},
+    demandGlobal: {},
+    offerGlobal: {},
+    infraByProvince: {},
+    alertsByCountry: {},
+    importsByCountryByCountryAndGood: {},
+    exportsByCountryByCountryAndGood: {},
+    importsByMarketByMarketAndGood: {},
+    exportsByMarketByMarketAndGood: {},
+  };
+}
+let latestMarketOverview: MarketOverviewState = createEmptyMarketOverviewState(1);
+
+function round3(value: number): number {
+  return Number(value.toFixed(3));
+}
+
+function normalizeTradeInfraLoadMap(input: unknown): Record<string, number> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, number> = {};
+  for (const [provinceId, rawValue] of Object.entries(source)) {
+    if (!provinceId) continue;
+    if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) continue;
+    normalized[provinceId] = round3(Math.max(0, Number(rawValue)));
+  }
+  return normalized;
+}
+
+function normalizeMarketId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const next = value.trim();
+  if (!next) return null;
+  return next;
+}
+
+function normalizeMarketVisibility(value: unknown): "public" | "private" {
+  return value === "private" ? "private" : "public";
+}
+
+function ensureMarketsStateShape(): void {
+  if (!gameSettings.markets) {
+    gameSettings.markets = {
+      countryMarketByCountryId: {},
+      marketById: {},
+      transportCorridorsById: {},
+      marketInvitesById: {},
+      sanctionsById: {},
+    };
+    return;
+  }
+  if (!gameSettings.markets.countryMarketByCountryId || typeof gameSettings.markets.countryMarketByCountryId !== "object") {
+    gameSettings.markets.countryMarketByCountryId = {};
+  }
+  if (!gameSettings.markets.marketById || typeof gameSettings.markets.marketById !== "object") {
+    gameSettings.markets.marketById = {};
+  }
+  if (!gameSettings.markets.transportCorridorsById || typeof gameSettings.markets.transportCorridorsById !== "object") {
+    gameSettings.markets.transportCorridorsById = {};
+  }
+  if (!gameSettings.markets.marketInvitesById || typeof gameSettings.markets.marketInvitesById !== "object") {
+    gameSettings.markets.marketInvitesById = {};
+  }
+  if (!gameSettings.markets.sanctionsById || typeof gameSettings.markets.sanctionsById !== "object") {
+    gameSettings.markets.sanctionsById = {};
+  }
+}
+
+function createDefaultMarketRecord(marketId: string, ownerCountryId: string): {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+  ownerCountryId: string;
+  capitalProvinceId: string | null;
+  memberCountryIds: string[];
+  visibility: "public" | "private";
+  createdAt: string;
+  warehouseByResourceId: Record<string, number>;
+  priceByResourceId: Record<string, number>;
+  priceHistoryByResourceId: Record<string, number[]>;
+  demandHistoryByResourceId: Record<string, number[]>;
+  offerHistoryByResourceId: Record<string, number[]>;
+  productionFactHistoryByResourceId: Record<string, number[]>;
+  productionMaxHistoryByResourceId: Record<string, number[]>;
+  worldTradePolicyByResourceId: Record<string, MarketTradePolicyEntry>;
+  resourceTradePolicyByCountryId: Record<string, Record<string, MarketTradePolicyEntry>>;
+  lastSharedInfrastructureConsumedByCategory: Record<string, number>;
+  lastSharedInfrastructureCapacityByCategory: Record<string, number>;
+} {
+  return {
+    id: marketId,
+    name: `Рынок ${marketId}`,
+    logoUrl: null,
+    ownerCountryId,
+    capitalProvinceId: null,
+    memberCountryIds: [ownerCountryId],
+    visibility: "public",
+    createdAt: new Date().toISOString(),
+    warehouseByResourceId: {},
+    priceByResourceId: {},
+    priceHistoryByResourceId: {},
+    demandHistoryByResourceId: {},
+    offerHistoryByResourceId: {},
+    productionFactHistoryByResourceId: {},
+    productionMaxHistoryByResourceId: {},
+    worldTradePolicyByResourceId: {},
+    resourceTradePolicyByCountryId: {},
+    lastSharedInfrastructureConsumedByCategory: {},
+    lastSharedInfrastructureCapacityByCategory: {},
+  };
+}
+
+function getMarketDisplayName(params: { marketId: string; marketName: string; ownerCountryName?: string | null }): string {
+  const rawName = (params.marketName ?? "").trim();
+  const isDefaultName = rawName.length === 0 || rawName === `Рынок ${params.marketId}`;
+  if (!isDefaultName) {
+    return rawName;
+  }
+  const ownerName = (params.ownerCountryName ?? "").trim();
+  return ownerName ? `Рынок ${ownerName}` : `Рынок ${params.marketId}`;
+}
+
+function isDefaultMarketName(marketId: string, marketName: string): boolean {
+  const raw = (marketName ?? "").trim();
+  return raw.length === 0 || raw === `Рынок ${marketId}`;
+}
+
+async function migratePersistedMarketNamesToReadable(): Promise<boolean> {
+  ensureMarketModelReady();
+  const markets = Object.values(gameSettings.markets.marketById);
+  if (markets.length === 0) return false;
+  const ownerIds = [...new Set(markets.map((market) => market.ownerCountryId).filter(Boolean))];
+  const countries = ownerIds.length
+    ? await prisma.country.findMany({ where: { id: { in: ownerIds } }, select: { id: true, name: true } })
+    : [];
+  const countryNameById = new Map(countries.map((country) => [country.id, country.name] as const));
+  let changed = false;
+  for (const market of markets) {
+    if (!isDefaultMarketName(market.id, market.name)) continue;
+    const ownerName = countryNameById.get(market.ownerCountryId) ?? market.ownerCountryId;
+    const nextName = getMarketDisplayName({
+      marketId: market.id,
+      marketName: market.name,
+      ownerCountryName: ownerName,
+    });
+    if (nextName !== market.name) {
+      market.name = nextName;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function upsertMarketMembership(countryId: string, targetMarketIdRaw: string | null): string {
+  ensureMarketsStateShape();
+  const targetMarketId = normalizeMarketId(targetMarketIdRaw) ?? countryId;
+  const marketById = gameSettings.markets.marketById;
+  if (!marketById[targetMarketId]) {
+    marketById[targetMarketId] = createDefaultMarketRecord(targetMarketId, countryId);
+  }
+  for (const market of Object.values(marketById)) {
+    market.memberCountryIds = (market.memberCountryIds ?? []).filter((id) => id !== countryId);
+  }
+  const target = marketById[targetMarketId];
+  if (!target.memberCountryIds.includes(countryId)) {
+    target.memberCountryIds.push(countryId);
+  }
+  if (!target.ownerCountryId || !target.memberCountryIds.includes(target.ownerCountryId)) {
+    target.ownerCountryId = target.memberCountryIds[0] ?? countryId;
+  }
+  gameSettings.markets.countryMarketByCountryId[countryId] = targetMarketId;
+  return targetMarketId;
+}
+
+function getOwnedProvinceIds(countryId: string): string[] {
+  return adm1ProvinceIndex
+    .filter((province) => worldBase.provinceOwner[province.id] === countryId)
+    .map((province) => province.id);
+}
+
+function rebuildCountryMarketIndexFromMembers(): void {
+  ensureMarketsStateShape();
+  const assignment: Record<string, string> = {};
+  for (const [marketId, market] of Object.entries(gameSettings.markets.marketById)) {
+    market.id = marketId;
+    market.memberCountryIds = [...new Set((market.memberCountryIds ?? []).map((id) => String(id).trim()).filter(Boolean))];
+    market.visibility = normalizeMarketVisibility(market.visibility);
+    market.createdAt =
+      typeof market.createdAt === "string" && market.createdAt.trim() ? market.createdAt : new Date().toISOString();
+    if (!market.ownerCountryId || !market.memberCountryIds.includes(market.ownerCountryId)) {
+      market.ownerCountryId = market.memberCountryIds[0] ?? market.ownerCountryId ?? marketId;
+    }
+    const ownerProvinceIds = getOwnedProvinceIds(market.ownerCountryId);
+    if (
+      typeof market.capitalProvinceId !== "string" ||
+      !ownerProvinceIds.includes(market.capitalProvinceId)
+    ) {
+      market.capitalProvinceId = ownerProvinceIds[0] ?? null;
+    }
+    for (const countryId of market.memberCountryIds) {
+      if (!assignment[countryId]) {
+        assignment[countryId] = marketId;
+      }
+    }
+  }
+  gameSettings.markets.countryMarketByCountryId = assignment;
+}
+
+function ensureMarketModelReady(): void {
+  ensureMarketsStateShape();
+  const knownCountryIds = new Set<string>([
+    ...Object.keys(worldBase.resourcesByCountry ?? {}),
+    ...Object.keys(gameSettings.markets.countryMarketByCountryId ?? {}),
+  ]);
+  for (const countryId of knownCountryIds) {
+    const preferred = normalizeMarketId(gameSettings.markets.countryMarketByCountryId[countryId]) ?? countryId;
+    upsertMarketMembership(countryId, preferred);
+  }
+  rebuildCountryMarketIndexFromMembers();
+  const marketsById = gameSettings.markets.marketById;
+  const corridorsById = gameSettings.markets.transportCorridorsById;
+  const validProvinceIds = new Set<string>(adm1ProvinceIndex.map((province) => province.id));
+  for (const [corridorId, corridor] of Object.entries(corridorsById)) {
+    const market = marketsById[corridor.marketId];
+    if (!market) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    if (!validProvinceIds.has(corridor.fromProvinceId) || !validProvinceIds.has(corridor.toProvinceId)) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    if (corridor.fromProvinceId === corridor.toProvinceId) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    const fromOwner = worldBase.provinceOwner[corridor.fromProvinceId] ?? null;
+    const toOwner = worldBase.provinceOwner[corridor.toProvinceId] ?? null;
+    const memberSet = new Set(market.memberCountryIds);
+    if (!fromOwner || !toOwner || !memberSet.has(fromOwner) || !memberSet.has(toOwner)) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+    corridor.categories = [...new Set((corridor.categories ?? []).map((id) => id.trim()).filter(Boolean))];
+    corridor.capacityByCategory = normalizeCategoryAmountMap(corridor.capacityByCategory);
+    corridor.categories = corridor.categories.filter((categoryId) => (corridor.capacityByCategory[categoryId] ?? 0) > 0);
+    if (corridor.categories.length === 0) {
+      delete corridorsById[corridorId];
+      continue;
+    }
+  }
+}
+
+function getCountryMarketId(countryId: string): string {
+  ensureMarketModelReady();
+  const raw = gameSettings.markets.countryMarketByCountryId[countryId];
+  const next = normalizeMarketId(raw) ?? countryId;
+  if (!gameSettings.markets.marketById[next]) {
+    gameSettings.markets.marketById[next] = createDefaultMarketRecord(next, countryId);
+  }
+  return next;
+}
+
+function setCountryMarketId(countryId: string, marketId: string | null): void {
+  ensureMarketModelReady();
+  upsertMarketMembership(countryId, marketId);
+  rebuildCountryMarketIndexFromMembers();
+}
+
+function getMarketById(marketId: string): (typeof gameSettings.markets.marketById)[string] | null {
+  ensureMarketModelReady();
+  return gameSettings.markets.marketById[marketId] ?? null;
+}
+
+function getCountryMarketRecord(countryId: string): (typeof gameSettings.markets.marketById)[string] {
+  const marketId = getCountryMarketId(countryId);
+  const market = getMarketById(marketId);
+  if (market) return market;
+  const fallback = createDefaultMarketRecord(marketId, countryId);
+  gameSettings.markets.marketById[marketId] = fallback;
+  rebuildCountryMarketIndexFromMembers();
+  return fallback;
+}
+
+function getMarketTransportCorridors(marketId: string, options?: { includeDisabled?: boolean }): TransportCorridorEntry[] {
+  ensureMarketModelReady();
+  const includeDisabled = options?.includeDisabled === true;
+  return Object.values(gameSettings.markets.transportCorridorsById ?? {})
+    .filter((corridor) => corridor.marketId === marketId)
+    .filter((corridor) => includeDisabled || corridor.enabled !== false)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function buildTransportConnectedCategoriesByProvince(categoryIds: string[]): Record<string, Set<string>> {
+  ensureMarketModelReady();
+  const connectedByProvince: Record<string, Set<string>> = {};
+  const wantedCategories = [...new Set(categoryIds.map((id) => id.trim()).filter(Boolean))];
+  if (wantedCategories.length === 0) return connectedByProvince;
+
+  for (const market of Object.values(gameSettings.markets.marketById)) {
+    const capitalProvinceId = typeof market.capitalProvinceId === "string" ? market.capitalProvinceId.trim() : "";
+    if (!capitalProvinceId) continue;
+    const capitalOwnerId = worldBase.provinceOwner[capitalProvinceId] ?? null;
+    if (!capitalOwnerId || !market.memberCountryIds.includes(capitalOwnerId)) continue;
+    const marketMemberSet = new Set(market.memberCountryIds);
+    const corridors = getMarketTransportCorridors(market.id).filter((corridor) => {
+      const fromOwnerId = worldBase.provinceOwner[corridor.fromProvinceId] ?? null;
+      const toOwnerId = worldBase.provinceOwner[corridor.toProvinceId] ?? null;
+      return Boolean(fromOwnerId && toOwnerId && marketMemberSet.has(fromOwnerId) && marketMemberSet.has(toOwnerId));
+    });
+    if (!connectedByProvince[capitalProvinceId]) connectedByProvince[capitalProvinceId] = new Set<string>();
+
+    for (const categoryId of wantedCategories) {
+      const adjacency = new Map<string, string[]>();
+      for (const corridor of corridors) {
+        if (!corridor.categories.includes(categoryId)) continue;
+        if ((corridor.capacityByCategory[categoryId] ?? 0) <= 0) continue;
+        const from = corridor.fromProvinceId;
+        const to = corridor.toProvinceId;
+        const fromEdges = adjacency.get(from) ?? [];
+        fromEdges.push(to);
+        adjacency.set(from, fromEdges);
+        const toEdges = adjacency.get(to) ?? [];
+        toEdges.push(from);
+        adjacency.set(to, toEdges);
+      }
+      const visited = new Set<string>([capitalProvinceId]);
+      const queue = [capitalProvinceId];
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current) break;
+        for (const next of adjacency.get(current) ?? []) {
+          if (visited.has(next)) continue;
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+      for (const provinceId of visited) {
+        if (!connectedByProvince[provinceId]) connectedByProvince[provinceId] = new Set<string>();
+        connectedByProvince[provinceId].add(categoryId);
+      }
+    }
+  }
+
+  return connectedByProvince;
+}
+
+function cleanupMarketsAfterCountryRemoval(removedCountryId: string): void {
+  ensureMarketsStateShape();
+  const validCountryIds = new Set<string>(Object.keys(worldBase.resourcesByCountry ?? {}));
+  const validProvinceIds = new Set<string>(adm1ProvinceIndex.map((province) => province.id));
+  const marketById = gameSettings.markets.marketById;
+  for (const [marketId, market] of Object.entries(marketById)) {
+    const members = [...new Set((market.memberCountryIds ?? []).filter((countryId) => validCountryIds.has(countryId)))];
+    market.memberCountryIds = members;
+    if (!members.includes(market.ownerCountryId)) {
+      market.ownerCountryId = members[0] ?? "";
+    }
+    if (members.length === 0) {
+      if (market.logoUrl) removeUploadedByUrl(market.logoUrl);
+      delete marketById[marketId];
+      continue;
+    }
+    const ownerProvinces = adm1ProvinceIndex
+      .filter((province) => worldBase.provinceOwner[province.id] === market.ownerCountryId)
+      .map((province) => province.id);
+    if (market.capitalProvinceId && !ownerProvinces.includes(market.capitalProvinceId)) {
+      market.capitalProvinceId = ownerProvinces[0] ?? null;
+    }
+  }
+
+  for (const [corridorId, corridor] of Object.entries(gameSettings.markets.transportCorridorsById ?? {})) {
+    if (!marketById[corridor.marketId]) {
+      delete gameSettings.markets.transportCorridorsById[corridorId];
+      continue;
+    }
+    if (!validProvinceIds.has(corridor.fromProvinceId) || !validProvinceIds.has(corridor.toProvinceId)) {
+      delete gameSettings.markets.transportCorridorsById[corridorId];
+      continue;
+    }
+    if (corridor.fromProvinceId === corridor.toProvinceId) {
+      delete gameSettings.markets.transportCorridorsById[corridorId];
+      continue;
+    }
+  }
+
+  for (const [inviteId, invite] of Object.entries(gameSettings.markets.marketInvitesById)) {
+    if (
+      invite.fromCountryId === removedCountryId ||
+      invite.toCountryId === removedCountryId ||
+      !marketById[invite.marketId] ||
+      !validCountryIds.has(invite.fromCountryId) ||
+      !validCountryIds.has(invite.toCountryId)
+    ) {
+      delete gameSettings.markets.marketInvitesById[inviteId];
+    }
+  }
+
+  for (const [sanctionId, sanction] of Object.entries(gameSettings.markets.sanctionsById ?? {})) {
+    const initiatorExists = validCountryIds.has(sanction.initiatorCountryId);
+    const targetExists =
+      sanction.targetType === "country" ? validCountryIds.has(sanction.targetId) : Boolean(marketById[sanction.targetId]);
+    if (!initiatorExists || !targetExists) {
+      delete gameSettings.markets.sanctionsById[sanctionId];
+    }
+  }
+
+  ensureMarketModelReady();
+}
 
 type PopulationDimensionKey = "culturePct" | "ideologyPct" | "religionPct" | "racePct" | "professionPct";
 
@@ -342,7 +803,7 @@ type WorkforceRequirement = {
 
 type BuildingCountryLimit = {
   countryId: string;
-  limit: number;
+  limit: number | null;
 };
 
 type GameContentEntry = {
@@ -353,27 +814,101 @@ type GameContentEntry = {
   logoUrl: string | null;
   malePortraitUrl: string | null;
   femalePortraitUrl: string | null;
+  baseWage?: number | null;
 };
 
 type GoodContentEntry = GameContentEntry & {
+  resourceCategoryId?: string | null;
+  isResourceDiscoverable?: boolean | null;
   basePrice?: number | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  infraPerUnit?: number | null;
+  infrastructureCostPerUnit?: number | null;
+  explorationBaseWeight?: number | null;
+  explorationSmallVeinChancePct?: number | null;
+  explorationMediumVeinChancePct?: number | null;
+  explorationLargeVeinChancePct?: number | null;
+  explorationSmallVeinMin?: number | null;
+  explorationSmallVeinMax?: number | null;
+  explorationMediumVeinMin?: number | null;
+  explorationMediumVeinMax?: number | null;
+  explorationLargeVeinMin?: number | null;
+  explorationLargeVeinMax?: number | null;
 };
 
 type BuildingContentEntry = GameContentEntry & {
   costConstruction?: number | null;
   costDucats?: number | null;
+  startingDucats?: number | null;
+  extractionGoodId?: string | null;
+  extractionAmountPerTurn?: number | null;
+  extractionRequiresDeposit?: boolean | null;
   inputs?: GoodFlow[];
   outputs?: GoodFlow[];
   workforceRequirements?: WorkforceRequirement[];
+  infrastructureUse?: number | null;
+  marketInfrastructureByCategory?: Record<string, number> | null;
   allowedCountryIds?: string[];
   deniedCountryIds?: string[];
   countryBuildLimits?: BuildingCountryLimit[];
   globalBuildLimit?: number | null;
 };
 
+type MarketTradePolicyEntry = {
+  allowImportFromWorld?: boolean;
+  allowExportToWorld?: boolean;
+  maxImportAmountPerTurnFromWorld?: number | null;
+  maxExportAmountPerTurnToWorld?: number | null;
+  overridesByCountryId?: Record<
+    string,
+    {
+      allowImportFromWorld?: boolean;
+      allowExportToWorld?: boolean;
+      maxImportAmountPerTurnFromWorld?: number | null;
+      maxExportAmountPerTurnToWorld?: number | null;
+    }
+  >;
+  overridesByMarketId?: Record<
+    string,
+    {
+      allowImportFromWorld?: boolean;
+      allowExportToWorld?: boolean;
+      maxImportAmountPerTurnFromWorld?: number | null;
+      maxExportAmountPerTurnToWorld?: number | null;
+    }
+  >;
+};
+
+type MarketSanctionEntry = {
+  id: string;
+  initiatorCountryId: string;
+  direction: "import" | "export" | "both";
+  targetType: "country" | "market";
+  targetId: string;
+  goods?: string[];
+  mode: "ban" | "cap";
+  capAmountPerTurn?: number | null;
+  startTurn: number;
+  durationTurns: number;
+  enabled?: boolean;
+};
+
+type TransportCorridorEntry = {
+  id: string;
+  marketId: string;
+  fromProvinceId: string;
+  toProvinceId: string;
+  categories: string[];
+  capacityByCategory: Record<string, number>;
+  enabled: boolean;
+  createdAt: string;
+};
+
 type GameSettings = {
   content: {
     races: GameContentEntry[];
+    resourceCategories: GameContentEntry[];
     professions: GameContentEntry[];
     ideologies: GameContentEntry[];
     religions: GameContentEntry[];
@@ -402,6 +937,54 @@ type GameSettings = {
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
+    marketPriceSmoothing: number;
+    explorationBaseEmptyChancePct: number;
+    explorationDepletionPerAttemptPct: number;
+    explorationDurationTurns: number;
+    explorationRollsPerExpedition: number;
+  };
+  markets: {
+    countryMarketByCountryId: Record<string, string>;
+    marketById: Record<
+      string,
+      {
+        id: string;
+        name: string;
+        logoUrl: string | null;
+        ownerCountryId: string;
+        capitalProvinceId?: string | null;
+        memberCountryIds: string[];
+        visibility: "public" | "private";
+        createdAt: string;
+        warehouseByResourceId?: Record<string, number>;
+        priceByResourceId?: Record<string, number>;
+        priceHistoryByResourceId?: Record<string, number[]>;
+        demandHistoryByResourceId?: Record<string, number[]>;
+        offerHistoryByResourceId?: Record<string, number[]>;
+        productionFactHistoryByResourceId?: Record<string, number[]>;
+        productionMaxHistoryByResourceId?: Record<string, number[]>;
+        worldTradePolicyByResourceId?: Record<string, MarketTradePolicyEntry>;
+        resourceTradePolicyByCountryId?: Record<string, Record<string, MarketTradePolicyEntry>>;
+        lastSharedInfrastructureConsumedByCategory?: Record<string, number>;
+        lastSharedInfrastructureCapacityByCategory?: Record<string, number>;
+      }
+    >;
+    transportCorridorsById: Record<string, TransportCorridorEntry>;
+    marketInvitesById: Record<
+      string,
+      {
+        id: string;
+        marketId: string;
+        fromCountryId: string;
+        toCountryId: string;
+        kind: "invite" | "join-request";
+        status: "pending" | "accepted" | "rejected" | "canceled";
+        expiresAt: string;
+        createdAt: string;
+        updatedAt: string;
+      }
+    >;
+    sanctionsById: Record<string, MarketSanctionEntry>;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -425,6 +1008,7 @@ type GameSettings = {
   turnTimer: {
     enabled: boolean;
     secondsPerTurn: number;
+    pauseWhenNoPlayersOnline: boolean;
   };
   map: {
     showAntarctica: boolean;
@@ -441,6 +1025,31 @@ type GameSettings = {
   };
 };
 
+type MarketOverviewAlert = {
+  id: string;
+  severity: "warning" | "critical";
+  kind: "critical-deficit" | "infra-overload" | "building-inactive";
+  message: string;
+  provinceId?: string;
+  buildingId?: string;
+  instanceId?: string;
+  goodId?: string;
+};
+
+type MarketOverviewState = {
+  turnId: number;
+  demandByCountry: Record<string, Record<string, number>>;
+  offerByCountry: Record<string, Record<string, number>>;
+  demandGlobal: Record<string, number>;
+  offerGlobal: Record<string, number>;
+  infraByProvince: Record<string, { capacity: number; required: number; coverage: number }>;
+  alertsByCountry: Record<string, MarketOverviewAlert[]>;
+  importsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>>;
+  exportsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>>;
+  importsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>>;
+  exportsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>>;
+};
+
 function normalizeContentCultures(input: unknown): GameSettings["content"]["cultures"] {
   if (!Array.isArray(input)) return [];
   const seen = new Set<string>();
@@ -455,6 +1064,7 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
       logoUrl: unknown;
       malePortraitUrl: unknown;
       femalePortraitUrl: unknown;
+      baseWage: unknown;
     }>;
     const id = typeof row.id === "string" ? row.id.trim() : "";
     const name = typeof row.name === "string" ? row.name.trim() : "";
@@ -465,6 +1075,8 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
       typeof row.malePortraitUrl === "string" || row.malePortraitUrl === null ? (row.malePortraitUrl ?? null) : null;
     const femalePortraitUrl =
       typeof row.femalePortraitUrl === "string" || row.femalePortraitUrl === null ? (row.femalePortraitUrl ?? null) : null;
+    const baseWage =
+      typeof row.baseWage === "number" && Number.isFinite(row.baseWage) ? Math.max(0, Number(row.baseWage)) : undefined;
     if (!id || !name || seen.has(id)) continue;
     seen.add(id);
     items.push({
@@ -475,6 +1087,7 @@ function normalizeContentCultures(input: unknown): GameSettings["content"]["cult
       logoUrl,
       malePortraitUrl,
       femalePortraitUrl,
+      baseWage: baseWage == null ? undefined : Number(baseWage.toFixed(3)),
     });
   }
   return items;
@@ -528,28 +1141,431 @@ function normalizeCountryIdList(input: unknown): string[] {
 
 function normalizeBuildingCountryLimits(input: unknown): BuildingCountryLimit[] {
   if (!Array.isArray(input)) return [];
-  const byCountry = new Map<string, number>();
+  const byCountry = new Map<string, number | null>();
   for (const raw of input) {
     if (!raw || typeof raw !== "object") continue;
     const row = raw as Partial<{ countryId: unknown; limit: unknown }>;
     const countryId = typeof row.countryId === "string" ? row.countryId.trim() : "";
+    if (!countryId) continue;
+    if (row.limit === null) {
+      byCountry.set(countryId, null);
+      continue;
+    }
     const limit = typeof row.limit === "number" && Number.isFinite(row.limit) ? Math.max(1, Math.floor(row.limit)) : 0;
-    if (!countryId || limit <= 0) continue;
+    if (limit <= 0) continue;
     byCountry.set(countryId, limit);
   }
   return [...byCountry.entries()].slice(0, 256).map(([countryId, limit]) => ({ countryId, limit }));
+}
+
+function normalizeCategoryAmountMap(input: unknown): Record<string, number> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, number> = {};
+  for (const [key, rawValue] of Object.entries(source)) {
+    const nextKey = key.trim();
+    if (!nextKey) continue;
+    if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) continue;
+    const value = round3(Math.max(0, Number(rawValue)));
+    if (value <= 0) continue;
+    normalized[nextKey] = value;
+  }
+  return normalized;
+}
+
+function normalizeNumberMap(input: unknown): Record<string, number> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, number> = {};
+  for (const [key, rawValue] of Object.entries(source)) {
+    const nextKey = key.trim();
+    if (!nextKey) continue;
+    if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) continue;
+    normalized[nextKey] = round3(Number(rawValue));
+  }
+  return normalized;
+}
+
+function normalizeNumberHistoryMap(input: unknown): Record<string, number[]> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, number[]> = {};
+  for (const [key, rawValue] of Object.entries(source)) {
+    const nextKey = key.trim();
+    if (!nextKey || !Array.isArray(rawValue)) continue;
+    const values = rawValue
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+      .map((value) => round3(value))
+      .slice(-MARKET_PRICE_HISTORY_LENGTH);
+    normalized[nextKey] = values;
+  }
+  return normalized;
+}
+
+function normalizeNumberMapL2(input: unknown): Record<string, Record<string, number>> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, Record<string, number>> = {};
+  for (const [scopeId, rawValue] of Object.entries(source)) {
+    const key = scopeId.trim();
+    if (!key) continue;
+    normalized[key] = normalizeNumberMap(rawValue);
+  }
+  return normalized;
+}
+
+function normalizeNumberMapL3(input: unknown): Record<string, Record<string, Record<string, number>>> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, Record<string, Record<string, number>>> = {};
+  for (const [scopeId, rawGoods] of Object.entries(source)) {
+    const key = scopeId.trim();
+    if (!key || !rawGoods || typeof rawGoods !== "object") continue;
+    const goodsMap: Record<string, Record<string, number>> = {};
+    for (const [goodId, rawPartners] of Object.entries(rawGoods as Record<string, unknown>)) {
+      const goodKey = goodId.trim();
+      if (!goodKey) continue;
+      goodsMap[goodKey] = normalizeNumberMap(rawPartners);
+    }
+    normalized[key] = goodsMap;
+  }
+  return normalized;
+}
+
+function normalizeInfraOverviewMap(
+  input: unknown,
+): Record<string, { capacity: number; required: number; coverage: number }> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, { capacity: number; required: number; coverage: number }> = {};
+  for (const [provinceId, rawValue] of Object.entries(source)) {
+    const key = provinceId.trim();
+    if (!key || !rawValue || typeof rawValue !== "object") continue;
+    const row = rawValue as Record<string, unknown>;
+    const capacity =
+      typeof row.capacity === "number" && Number.isFinite(row.capacity) ? round3(Math.max(0, row.capacity)) : 0;
+    const required =
+      typeof row.required === "number" && Number.isFinite(row.required) ? round3(Math.max(0, row.required)) : 0;
+    const coverage =
+      typeof row.coverage === "number" && Number.isFinite(row.coverage)
+        ? round3(Math.max(0, row.coverage))
+        : required <= 0
+          ? 1
+          : round3(Math.max(0, Math.min(1, capacity / required)));
+    normalized[key] = { capacity, required, coverage };
+  }
+  return normalized;
+}
+
+function normalizeMarketOverviewAlertsMap(input: unknown): Record<string, MarketOverviewAlert[]> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, MarketOverviewAlert[]> = {};
+  for (const [countryId, rawAlerts] of Object.entries(source)) {
+    const key = countryId.trim();
+    if (!key || !Array.isArray(rawAlerts)) continue;
+    const alerts: MarketOverviewAlert[] = [];
+    for (const rawAlert of rawAlerts) {
+      if (!rawAlert || typeof rawAlert !== "object") continue;
+      const row = rawAlert as Record<string, unknown>;
+      const severity = row.severity === "critical" ? "critical" : "warning";
+      const kindRaw = typeof row.kind === "string" ? row.kind : "";
+      const kind: MarketOverviewAlert["kind"] =
+        kindRaw === "critical-deficit" || kindRaw === "infra-overload" || kindRaw === "building-inactive"
+          ? kindRaw
+          : "critical-deficit";
+      const message = typeof row.message === "string" ? row.message.trim() : "";
+      if (!message) continue;
+      alerts.push({
+        id: typeof row.id === "string" && row.id.trim() ? row.id : randomUUID(),
+        severity,
+        kind,
+        message,
+        provinceId: typeof row.provinceId === "string" ? row.provinceId : undefined,
+        buildingId: typeof row.buildingId === "string" ? row.buildingId : undefined,
+        instanceId: typeof row.instanceId === "string" ? row.instanceId : undefined,
+        goodId: typeof row.goodId === "string" ? row.goodId : undefined,
+      });
+    }
+    normalized[key] = alerts;
+  }
+  return normalized;
+}
+
+function normalizeMarketOverviewState(input: unknown, fallbackTurnId: number): MarketOverviewState {
+  if (!input || typeof input !== "object") {
+    return createEmptyMarketOverviewState(fallbackTurnId);
+  }
+  const row = input as Partial<MarketOverviewState>;
+  const nextTurnId =
+    typeof row.turnId === "number" && Number.isFinite(row.turnId) && row.turnId >= 1
+      ? Math.floor(row.turnId)
+      : Math.max(1, Math.floor(Number(fallbackTurnId) || 1));
+  return {
+    turnId: nextTurnId,
+    demandByCountry: normalizeNumberMapL2(row.demandByCountry),
+    offerByCountry: normalizeNumberMapL2(row.offerByCountry),
+    demandGlobal: normalizeNumberMap(row.demandGlobal),
+    offerGlobal: normalizeNumberMap(row.offerGlobal),
+    infraByProvince: normalizeInfraOverviewMap(row.infraByProvince),
+    alertsByCountry: normalizeMarketOverviewAlertsMap(row.alertsByCountry),
+    importsByCountryByCountryAndGood: normalizeNumberMapL3(row.importsByCountryByCountryAndGood),
+    exportsByCountryByCountryAndGood: normalizeNumberMapL3(row.exportsByCountryByCountryAndGood),
+    importsByMarketByMarketAndGood: normalizeNumberMapL3(row.importsByMarketByMarketAndGood),
+    exportsByMarketByMarketAndGood: normalizeNumberMapL3(row.exportsByMarketByMarketAndGood),
+  };
+}
+
+function normalizeMarketTradePolicyEntry(input: unknown): MarketTradePolicyEntry {
+  const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const normalizeLayer = (
+    value: unknown,
+  ): {
+    allowImportFromWorld?: boolean;
+    allowExportToWorld?: boolean;
+    maxImportAmountPerTurnFromWorld?: number | null;
+    maxExportAmountPerTurnToWorld?: number | null;
+  } => {
+    const row = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return {
+      allowImportFromWorld:
+        typeof row.allowImportFromWorld === "boolean" ? row.allowImportFromWorld : undefined,
+      allowExportToWorld:
+        typeof row.allowExportToWorld === "boolean" ? row.allowExportToWorld : undefined,
+      maxImportAmountPerTurnFromWorld:
+        typeof row.maxImportAmountPerTurnFromWorld === "number" && Number.isFinite(row.maxImportAmountPerTurnFromWorld)
+          ? Math.max(0, row.maxImportAmountPerTurnFromWorld)
+          : undefined,
+      maxExportAmountPerTurnToWorld:
+        typeof row.maxExportAmountPerTurnToWorld === "number" && Number.isFinite(row.maxExportAmountPerTurnToWorld)
+          ? Math.max(0, row.maxExportAmountPerTurnToWorld)
+          : undefined,
+    };
+  };
+
+  const normalizeOverrides = (
+    value: unknown,
+  ): Record<
+    string,
+    {
+      allowImportFromWorld?: boolean;
+      allowExportToWorld?: boolean;
+      maxImportAmountPerTurnFromWorld?: number | null;
+      maxExportAmountPerTurnToWorld?: number | null;
+    }
+  > => {
+    if (!value || typeof value !== "object") return {};
+    const map = value as Record<string, unknown>;
+    const result: Record<string, ReturnType<typeof normalizeLayer>> = {};
+    for (const [id, row] of Object.entries(map)) {
+      const key = id.trim();
+      if (!key) continue;
+      result[key] = normalizeLayer(row);
+    }
+    return result;
+  };
+
+  return {
+    ...normalizeLayer(source),
+    overridesByCountryId: normalizeOverrides(source.overridesByCountryId),
+    overridesByMarketId: normalizeOverrides(source.overridesByMarketId),
+  };
+}
+
+function normalizeMarketTradePolicyMap(input: unknown): Record<string, MarketTradePolicyEntry> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, MarketTradePolicyEntry> = {};
+  for (const [resourceId, rawValue] of Object.entries(source)) {
+    const key = resourceId.trim();
+    if (!key) continue;
+    normalized[key] = normalizeMarketTradePolicyEntry(rawValue);
+  }
+  return normalized;
+}
+
+function normalizeCountryResourceTradePolicyMap(
+  input: unknown,
+): Record<string, Record<string, MarketTradePolicyEntry>> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, Record<string, MarketTradePolicyEntry>> = {};
+  for (const [countryId, rawValue] of Object.entries(source)) {
+    const key = countryId.trim();
+    if (!key) continue;
+    normalized[key] = normalizeMarketTradePolicyMap(rawValue);
+  }
+  return normalized;
+}
+
+function normalizeMarketSanctionsMap(input: unknown): Record<string, MarketSanctionEntry> {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const normalized: Record<string, MarketSanctionEntry> = {};
+  for (const [entryId, rawValue] of Object.entries(source)) {
+    const fallbackId = entryId.trim();
+    if (!fallbackId) continue;
+    const value = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : {};
+    const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : fallbackId;
+    const initiatorCountryId =
+      typeof value.initiatorCountryId === "string" && value.initiatorCountryId.trim()
+        ? value.initiatorCountryId.trim()
+        : "";
+    const targetId = typeof value.targetId === "string" && value.targetId.trim() ? value.targetId.trim() : "";
+    if (!initiatorCountryId || !targetId) continue;
+    const directionRaw = typeof value.direction === "string" ? value.direction : "both";
+    const direction: MarketSanctionEntry["direction"] =
+      directionRaw === "import" || directionRaw === "export" ? directionRaw : "both";
+    const targetTypeRaw = typeof value.targetType === "string" ? value.targetType : "country";
+    const targetType: MarketSanctionEntry["targetType"] = targetTypeRaw === "market" ? "market" : "country";
+    const modeRaw = typeof value.mode === "string" ? value.mode : "ban";
+    const mode: MarketSanctionEntry["mode"] = modeRaw === "cap" ? "cap" : "ban";
+    const goods = Array.isArray(value.goods)
+      ? [
+          ...new Set(
+            value.goods.filter((row): row is string => typeof row === "string").map((row) => row.trim()).filter(Boolean),
+          ),
+        ]
+      : [];
+    const capAmountPerTurn =
+      typeof value.capAmountPerTurn === "number" && Number.isFinite(value.capAmountPerTurn)
+        ? round3(Math.max(0, Number(value.capAmountPerTurn)))
+        : null;
+    const startTurn =
+      typeof value.startTurn === "number" && Number.isFinite(value.startTurn)
+        ? Math.max(1, Math.floor(value.startTurn))
+        : turnId;
+    const durationTurns =
+      typeof value.durationTurns === "number" && Number.isFinite(value.durationTurns)
+        ? Math.max(1, Math.floor(value.durationTurns))
+        : 1;
+    const enabled = typeof value.enabled === "boolean" ? value.enabled : true;
+    normalized[id] = {
+      id,
+      initiatorCountryId,
+      direction,
+      targetType,
+      targetId,
+      goods,
+      mode,
+      capAmountPerTurn: mode === "cap" ? capAmountPerTurn ?? 0 : null,
+      startTurn,
+      durationTurns,
+      enabled,
+    };
+  }
+  return normalized;
 }
 
 function normalizeContentGoods(input: unknown): GameSettings["content"]["goods"] {
   const base = normalizeContentCultures(input);
   const sourceRows = Array.isArray(input) ? input : [];
   return base.map((entry, index) => {
-    const raw = sourceRows[index] as Partial<{ basePrice?: unknown }> | undefined;
+    const raw = sourceRows[index] as Partial<{
+      resourceCategoryId?: unknown;
+      isResourceDiscoverable?: unknown;
+      basePrice?: unknown;
+      minPrice?: unknown;
+      maxPrice?: unknown;
+      infraPerUnit?: unknown;
+      infrastructureCostPerUnit?: unknown;
+      explorationBaseWeight?: unknown;
+      explorationSmallVeinChancePct?: unknown;
+      explorationMediumVeinChancePct?: unknown;
+      explorationLargeVeinChancePct?: unknown;
+      explorationSmallVeinMin?: unknown;
+      explorationSmallVeinMax?: unknown;
+      explorationMediumVeinMin?: unknown;
+      explorationMediumVeinMax?: unknown;
+      explorationLargeVeinMin?: unknown;
+      explorationLargeVeinMax?: unknown;
+    }> | undefined;
     const basePrice =
-      typeof raw?.basePrice === "number" && Number.isFinite(raw.basePrice) ? Math.max(0, raw.basePrice) : 1;
+      typeof raw?.basePrice === "number" && Number.isFinite(raw.basePrice)
+        ? Math.max(0, raw.basePrice)
+        : DEFAULT_RESOURCE_BASE_PRICE;
+    const defaultMin = basePrice * 0.1;
+    const defaultMax = basePrice * 10;
+    const minPriceRaw =
+      typeof raw?.minPrice === "number" && Number.isFinite(raw.minPrice) ? Math.max(0, Number(raw.minPrice)) : defaultMin;
+    const maxPriceRaw =
+      typeof raw?.maxPrice === "number" && Number.isFinite(raw.maxPrice) ? Math.max(minPriceRaw, Number(raw.maxPrice)) : defaultMax;
+    const infraRaw =
+      typeof raw?.infrastructureCostPerUnit === "number" && Number.isFinite(raw.infrastructureCostPerUnit)
+        ? Number(raw.infrastructureCostPerUnit)
+        : typeof raw?.infraPerUnit === "number" && Number.isFinite(raw.infraPerUnit)
+          ? Number(raw.infraPerUnit)
+          : 1;
+    const infraPerUnit = Math.max(0.01, Math.max(0, infraRaw));
+    const resourceCategoryId =
+      typeof raw?.resourceCategoryId === "string" && raw.resourceCategoryId.trim().length > 0
+        ? raw.resourceCategoryId.trim()
+        : null;
+    const isResourceDiscoverable = typeof raw?.isResourceDiscoverable === "boolean" ? raw.isResourceDiscoverable : false;
+    const explorationBaseWeight =
+      typeof raw?.explorationBaseWeight === "number" && Number.isFinite(raw.explorationBaseWeight)
+        ? Math.max(0, Number(raw.explorationBaseWeight))
+        : 1;
+    const smallChanceRaw =
+      typeof raw?.explorationSmallVeinChancePct === "number" && Number.isFinite(raw.explorationSmallVeinChancePct)
+        ? Math.max(0, Number(raw.explorationSmallVeinChancePct))
+        : 60;
+    const mediumChanceRaw =
+      typeof raw?.explorationMediumVeinChancePct === "number" && Number.isFinite(raw.explorationMediumVeinChancePct)
+        ? Math.max(0, Number(raw.explorationMediumVeinChancePct))
+        : 30;
+    const largeChanceRaw =
+      typeof raw?.explorationLargeVeinChancePct === "number" && Number.isFinite(raw.explorationLargeVeinChancePct)
+        ? Math.max(0, Number(raw.explorationLargeVeinChancePct))
+        : 10;
+    const chanceSum = smallChanceRaw + mediumChanceRaw + largeChanceRaw;
+    const chanceNormDiv = chanceSum > 0 ? chanceSum / 100 : 1;
+    const smallChance = chanceSum > 0 ? smallChanceRaw / chanceNormDiv : 60;
+    const mediumChance = chanceSum > 0 ? mediumChanceRaw / chanceNormDiv : 30;
+    const largeChance = chanceSum > 0 ? largeChanceRaw / chanceNormDiv : 10;
+    const smallMin =
+      typeof raw?.explorationSmallVeinMin === "number" && Number.isFinite(raw.explorationSmallVeinMin)
+        ? Math.max(0, Number(raw.explorationSmallVeinMin))
+        : 10;
+    const smallMax =
+      typeof raw?.explorationSmallVeinMax === "number" && Number.isFinite(raw.explorationSmallVeinMax)
+        ? Math.max(smallMin, Number(raw.explorationSmallVeinMax))
+        : 100;
+    const mediumMin =
+      typeof raw?.explorationMediumVeinMin === "number" && Number.isFinite(raw.explorationMediumVeinMin)
+        ? Math.max(0, Number(raw.explorationMediumVeinMin))
+        : 100;
+    const mediumMax =
+      typeof raw?.explorationMediumVeinMax === "number" && Number.isFinite(raw.explorationMediumVeinMax)
+        ? Math.max(mediumMin, Number(raw.explorationMediumVeinMax))
+        : 500;
+    const largeMin =
+      typeof raw?.explorationLargeVeinMin === "number" && Number.isFinite(raw.explorationLargeVeinMin)
+        ? Math.max(0, Number(raw.explorationLargeVeinMin))
+        : 500;
+    const largeMax =
+      typeof raw?.explorationLargeVeinMax === "number" && Number.isFinite(raw.explorationLargeVeinMax)
+        ? Math.max(largeMin, Number(raw.explorationLargeVeinMax))
+        : 2_000;
     return {
       ...entry,
+      resourceCategoryId,
+      isResourceDiscoverable,
       basePrice: Number(basePrice.toFixed(3)),
+      minPrice: Number(minPriceRaw.toFixed(3)),
+      maxPrice: Number(maxPriceRaw.toFixed(3)),
+      infraPerUnit: Number(infraPerUnit.toFixed(3)),
+      infrastructureCostPerUnit: Number(infraPerUnit.toFixed(3)),
+      explorationBaseWeight: Number(explorationBaseWeight.toFixed(3)),
+      explorationSmallVeinChancePct: Number(smallChance.toFixed(3)),
+      explorationMediumVeinChancePct: Number(mediumChance.toFixed(3)),
+      explorationLargeVeinChancePct: Number(largeChance.toFixed(3)),
+      explorationSmallVeinMin: Number(smallMin.toFixed(3)),
+      explorationSmallVeinMax: Number(smallMax.toFixed(3)),
+      explorationMediumVeinMin: Number(mediumMin.toFixed(3)),
+      explorationMediumVeinMax: Number(mediumMax.toFixed(3)),
+      explorationLargeVeinMin: Number(largeMin.toFixed(3)),
+      explorationLargeVeinMax: Number(largeMax.toFixed(3)),
     };
   });
 }
@@ -561,9 +1577,15 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
     const raw = sourceRows[index] as Partial<{
       costConstruction?: unknown;
       costDucats?: unknown;
+      startingDucats?: unknown;
+      extractionGoodId?: unknown;
+      extractionAmountPerTurn?: unknown;
+      extractionRequiresDeposit?: unknown;
       inputs?: unknown;
       outputs?: unknown;
       workforceRequirements?: unknown;
+      infrastructureUse?: unknown;
+      marketInfrastructureByCategory?: unknown;
       allowedCountryIds?: unknown;
       deniedCountryIds?: unknown;
       countryBuildLimits?: unknown;
@@ -577,17 +1599,40 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       typeof raw?.costDucats === "number" && Number.isFinite(raw.costDucats)
         ? Math.max(0, Number(raw.costDucats))
         : 10;
+    const startingDucats =
+      typeof raw?.startingDucats === "number" && Number.isFinite(raw.startingDucats)
+        ? Math.max(0, Number(raw.startingDucats))
+        : 0;
     const globalBuildLimit =
-      typeof raw?.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit)
+      typeof raw?.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit) && raw.globalBuildLimit > 0
         ? Math.max(1, Math.floor(raw.globalBuildLimit))
         : null;
+    const extractionGoodId =
+      typeof raw?.extractionGoodId === "string" && raw.extractionGoodId.trim().length > 0
+        ? raw.extractionGoodId.trim()
+        : null;
+    const extractionAmountPerTurn =
+      typeof raw?.extractionAmountPerTurn === "number" && Number.isFinite(raw.extractionAmountPerTurn)
+        ? Number(Math.max(0, raw.extractionAmountPerTurn).toFixed(3))
+        : 0;
+    const extractionRequiresDeposit =
+      typeof raw?.extractionRequiresDeposit === "boolean" ? raw.extractionRequiresDeposit : true;
     return {
       ...entry,
       costConstruction,
       costDucats: Number(costDucats.toFixed(3)),
+      startingDucats: Number(startingDucats.toFixed(3)),
+      extractionGoodId,
+      extractionAmountPerTurn,
+      extractionRequiresDeposit,
       inputs: normalizeGoodFlows(raw?.inputs),
       outputs: normalizeGoodFlows(raw?.outputs),
       workforceRequirements: normalizeWorkforceRequirements(raw?.workforceRequirements),
+      infrastructureUse:
+        typeof raw?.infrastructureUse === "number" && Number.isFinite(raw.infrastructureUse)
+          ? Number(Math.max(0, raw.infrastructureUse).toFixed(3))
+          : 0,
+      marketInfrastructureByCategory: normalizeCategoryAmountMap(raw?.marketInfrastructureByCategory),
       allowedCountryIds: normalizeCountryIdList(raw?.allowedCountryIds),
       deniedCountryIds: normalizeCountryIdList(raw?.deniedCountryIds),
       countryBuildLimits: normalizeBuildingCountryLimits(raw?.countryBuildLimits),
@@ -828,8 +1873,24 @@ function normalizeProvincePopulationMap(input: unknown): Record<string, Province
   return normalized;
 }
 
+function normalizeProvinceInfrastructureMap(input: unknown): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  if (input && typeof input === "object") {
+    for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
+      const value = typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, Number(raw)) : DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY;
+      normalized[provinceId] = round3(value);
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (normalized[province.id] == null) {
+      normalized[province.id] = DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY;
+    }
+  }
+  return normalized;
+}
+
 function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingInstance[]> {
-  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
+  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "SYSTEM";
   const normalized: Record<string, BuildingInstance[]> = {};
   if (input && typeof input === "object") {
     for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
@@ -844,6 +1905,10 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             typeof source.createdTurnId === "number" && Number.isFinite(source.createdTurnId)
               ? Math.max(1, Math.floor(source.createdTurnId))
               : turnId;
+          const level =
+            typeof source.level === "number" && Number.isFinite(source.level)
+              ? Math.max(1, Math.floor(source.level))
+              : 1;
           instances.push({
             instanceId:
               typeof source.instanceId === "string" && source.instanceId.trim()
@@ -852,22 +1917,181 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             buildingId,
             owner: normalizeBuildingOwner(source.owner ?? { type: "state", countryId: fallbackCountryId }),
             createdTurnId,
+            level,
+            ducats:
+              typeof source.ducats === "number" && Number.isFinite(source.ducats)
+                ? Number(Math.max(0, source.ducats).toFixed(3))
+                : 0,
+            warehouseByGoodId:
+              source.warehouseByGoodId && typeof source.warehouseByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.warehouseByGoodId as Record<string, unknown>)
+                      .filter(([goodId]) => typeof goodId === "string" && goodId.trim().length > 0)
+                      .map(([goodId, valueRaw]) => [
+                        goodId,
+                        Number(
+                          (
+                            typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                          ).toFixed(3),
+                        ),
+                      ]),
+                  )
+                : {},
+            lastLaborCoverage:
+              typeof source.lastLaborCoverage === "number" && Number.isFinite(source.lastLaborCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastLaborCoverage)).toFixed(3))
+                : 0,
+            lastInfraCoverage:
+              typeof source.lastInfraCoverage === "number" && Number.isFinite(source.lastInfraCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastInfraCoverage)).toFixed(3))
+                : 0,
+            lastInputCoverage:
+              typeof source.lastInputCoverage === "number" && Number.isFinite(source.lastInputCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastInputCoverage)).toFixed(3))
+                : 0,
+            lastFinanceCoverage:
+              typeof source.lastFinanceCoverage === "number" && Number.isFinite(source.lastFinanceCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastFinanceCoverage)).toFixed(3))
+                : 0,
+            lastProductivity:
+              typeof source.lastProductivity === "number" && Number.isFinite(source.lastProductivity)
+                ? Number(Math.max(0, Math.min(1, source.lastProductivity)).toFixed(3))
+                : 0,
+            lastPurchaseByGoodId:
+              source.lastPurchaseByGoodId && typeof source.lastPurchaseByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastPurchaseByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
+            lastPurchaseCostByGoodId:
+              source.lastPurchaseCostByGoodId && typeof source.lastPurchaseCostByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastPurchaseCostByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number.isFinite(Number(valueRaw)) ? round3(Math.max(0, Number(valueRaw))) : 0,
+                    ]),
+                  )
+                : {},
+            lastSalesByGoodId:
+              source.lastSalesByGoodId && typeof source.lastSalesByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastSalesByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number.isFinite(Number(valueRaw)) ? round3(Math.max(0, Number(valueRaw))) : 0,
+                    ]),
+                  )
+                : {},
+            lastSalesRevenueByGoodId:
+              source.lastSalesRevenueByGoodId && typeof source.lastSalesRevenueByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastSalesRevenueByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number.isFinite(Number(valueRaw)) ? round3(Math.max(0, Number(valueRaw))) : 0,
+                    ]),
+                  )
+                : {},
+            lastConsumptionByGoodId:
+              source.lastConsumptionByGoodId && typeof source.lastConsumptionByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastConsumptionByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
+            lastProductionByGoodId:
+              source.lastProductionByGoodId && typeof source.lastProductionByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastProductionByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
+            lastExtractionByGoodId:
+              source.lastExtractionByGoodId && typeof source.lastExtractionByGoodId === "object"
+                ? Object.fromEntries(
+                    Object.entries(source.lastExtractionByGoodId as Record<string, unknown>).map(([goodId, valueRaw]) => [
+                      goodId,
+                      Number(
+                        (
+                          typeof valueRaw === "number" && Number.isFinite(valueRaw) ? Math.max(0, valueRaw) : 0
+                        ).toFixed(3),
+                      ),
+                    ]),
+                  )
+                : {},
+            lastRevenueDucats:
+              typeof source.lastRevenueDucats === "number" && Number.isFinite(source.lastRevenueDucats)
+                ? Number(source.lastRevenueDucats.toFixed(3))
+                : 0,
+            lastInputCostDucats:
+              typeof source.lastInputCostDucats === "number" && Number.isFinite(source.lastInputCostDucats)
+                ? Number(source.lastInputCostDucats.toFixed(3))
+                : 0,
+            lastWagesDucats:
+              typeof source.lastWagesDucats === "number" && Number.isFinite(source.lastWagesDucats)
+                ? Number(source.lastWagesDucats.toFixed(3))
+                : 0,
+            lastNetDucats:
+              typeof source.lastNetDucats === "number" && Number.isFinite(source.lastNetDucats)
+                ? Number(source.lastNetDucats.toFixed(3))
+                : 0,
+            isInactive: Boolean(source.isInactive),
+            inactiveReason:
+              typeof source.inactiveReason === "string" || source.inactiveReason === null
+                ? (source.inactiveReason ?? null)
+                : null,
           });
         }
       } else if (raw && typeof raw === "object") {
-        // Legacy migration: { [buildingId]: level } -> instance array.
+        // Legacy migration: { [buildingId]: level } -> single instance with level.
         for (const [buildingId, levelRaw] of Object.entries(raw as Record<string, unknown>)) {
           const level =
             typeof levelRaw === "number" && Number.isFinite(levelRaw) ? Math.max(0, Math.floor(levelRaw)) : 0;
           if (!buildingId || level <= 0) continue;
-          for (let i = 0; i < level; i += 1) {
-            instances.push({
-              instanceId: randomUUID(),
-              buildingId,
-              owner: { type: "state", countryId: fallbackCountryId },
-              createdTurnId: turnId,
-            });
-          }
+          instances.push({
+            instanceId: randomUUID(),
+            buildingId,
+            owner: { type: "state", countryId: fallbackCountryId },
+            createdTurnId: turnId,
+            level,
+            ducats: 0,
+            warehouseByGoodId: {},
+            lastLaborCoverage: 0,
+            lastInfraCoverage: 0,
+            lastInputCoverage: 0,
+            lastFinanceCoverage: 0,
+            lastProductivity: 0,
+            lastPurchaseByGoodId: {},
+            lastPurchaseCostByGoodId: {},
+            lastSalesByGoodId: {},
+            lastSalesRevenueByGoodId: {},
+            lastConsumptionByGoodId: {},
+            lastProductionByGoodId: {},
+            lastExtractionByGoodId: {},
+            lastRevenueDucats: 0,
+            lastInputCostDucats: 0,
+            lastWagesDucats: 0,
+            lastNetDucats: 0,
+            isInactive: false,
+            inactiveReason: null,
+          });
         }
       }
       normalized[provinceId] = instances;
@@ -920,7 +2144,7 @@ function normalizeProvinceBuildingDucatsMap(input: unknown): Record<string, Reco
 }
 
 function normalizeBuildingOwner(input: unknown): BuildingOwner {
-  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
+  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "SYSTEM";
   const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   if (source.type === "company" && typeof source.companyId === "string" && source.companyId.trim()) {
     return { type: "company", companyId: source.companyId.trim() };
@@ -932,7 +2156,7 @@ function normalizeBuildingOwner(input: unknown): BuildingOwner {
 }
 
 function normalizeProvinceConstructionQueueMap(input: unknown): Record<string, ProvinceConstructionProject[]> {
-  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "ARC";
+  const fallbackCountryId = Object.keys(worldBase.resourcesByCountry ?? {})[0] ?? "SYSTEM";
   const normalized: Record<string, ProvinceConstructionProject[]> = {};
   if (input && typeof input === "object") {
     for (const [provinceId, raw] of Object.entries(input as Record<string, unknown>)) {
@@ -986,6 +2210,99 @@ function normalizeProvinceConstructionQueueMap(input: unknown): Record<string, P
   return normalized;
 }
 
+function normalizeProvinceResourceDepositsMap(input: unknown): Record<string, ProvinceResourceDeposit[]> {
+  const normalized: Record<string, ProvinceResourceDeposit[]> = {};
+  if (input && typeof input === "object") {
+    const source = input as Record<string, unknown>;
+    for (const [provinceId, rawRows] of Object.entries(source)) {
+      if (!provinceId || !Array.isArray(rawRows)) continue;
+      const rows: ProvinceResourceDeposit[] = [];
+      for (const rawRow of rawRows) {
+        if (!rawRow || typeof rawRow !== "object") continue;
+        const row = rawRow as Partial<ProvinceResourceDeposit>;
+        const goodId = typeof row.goodId === "string" ? row.goodId.trim() : "";
+        if (!goodId) continue;
+        const amount =
+          typeof row.amount === "number" && Number.isFinite(row.amount) ? round3(Math.max(0, Number(row.amount))) : 0;
+        if (amount <= 0) continue;
+        const discoveredTurnId =
+          typeof row.discoveredTurnId === "number" && Number.isFinite(row.discoveredTurnId)
+            ? Math.max(1, Math.floor(row.discoveredTurnId))
+            : turnId;
+        const veinSize =
+          row.veinSize === "small" || row.veinSize === "medium" || row.veinSize === "large"
+            ? row.veinSize
+            : "small";
+        const existing = rows.find((entry) => entry.goodId === goodId);
+        if (existing) {
+          existing.amount = round3(existing.amount + amount);
+          continue;
+        }
+        rows.push({ goodId, amount, discoveredTurnId, veinSize });
+      }
+      normalized[provinceId] = rows.sort((a, b) => a.goodId.localeCompare(b.goodId));
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (!normalized[province.id]) normalized[province.id] = [];
+  }
+  return normalized;
+}
+
+function normalizeProvinceResourceExplorationQueueMap(
+  input: unknown,
+): Record<string, ProvinceResourceExplorationProject[]> {
+  const normalized: Record<string, ProvinceResourceExplorationProject[]> = {};
+  if (input && typeof input === "object") {
+    const source = input as Record<string, unknown>;
+    for (const [provinceId, rawRows] of Object.entries(source)) {
+      if (!provinceId || !Array.isArray(rawRows)) continue;
+      const rows: ProvinceResourceExplorationProject[] = [];
+      for (const rawRow of rawRows) {
+        if (!rawRow || typeof rawRow !== "object") continue;
+        const row = rawRow as Partial<ProvinceResourceExplorationProject>;
+        const requestedByCountryId =
+          typeof row.requestedByCountryId === "string" && row.requestedByCountryId.trim()
+            ? row.requestedByCountryId.trim()
+            : "";
+        if (!requestedByCountryId) continue;
+        const queueId = typeof row.queueId === "string" && row.queueId.trim() ? row.queueId.trim() : randomUUID();
+        const startedTurnId =
+          typeof row.startedTurnId === "number" && Number.isFinite(row.startedTurnId)
+            ? Math.max(1, Math.floor(row.startedTurnId))
+            : turnId;
+        const turnsRemaining =
+          typeof row.turnsRemaining === "number" && Number.isFinite(row.turnsRemaining)
+            ? Math.max(0, Math.floor(row.turnsRemaining))
+            : 0;
+        rows.push({ queueId, requestedByCountryId, startedTurnId, turnsRemaining });
+      }
+      normalized[provinceId] = rows;
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (!normalized[province.id]) normalized[province.id] = [];
+  }
+  return normalized;
+}
+
+function normalizeProvinceResourceExplorationCountMap(input: unknown): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  if (input && typeof input === "object") {
+    const source = input as Record<string, unknown>;
+    for (const [provinceId, rawValue] of Object.entries(source)) {
+      if (!provinceId) continue;
+      const value =
+        typeof rawValue === "number" && Number.isFinite(rawValue) ? Math.max(0, Math.floor(rawValue)) : 0;
+      normalized[provinceId] = value;
+    }
+  }
+  for (const province of adm1ProvinceIndex) {
+    if (normalized[province.id] == null) normalized[province.id] = 0;
+  }
+  return normalized;
+}
+
 function resolvePopulationTurnForProvince(
   currentPopulation: ProvincePopulation,
   nextProfessionPct?: Record<string, number>,
@@ -1011,47 +2328,859 @@ function resolvePopulationTurnForProvince(
 function resolveBuildingsTurn(): Record<string, Record<string, number>> {
   const domains = getPopulationDomainKeys();
   const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
-  const goodBasePriceById = new Map(gameSettings.content.goods.map((entry) => [entry.id, Number(entry.basePrice ?? 1)] as const));
+  const goodById = new Map(gameSettings.content.goods.map((entry) => [entry.id, entry] as const));
+  const professionById = new Map(gameSettings.content.professions.map((entry) => [entry.id, entry] as const));
+  const goodBasePriceById = new Map(
+    gameSettings.content.goods.map((entry) => [entry.id, Number(entry.basePrice ?? 1)] as const),
+  );
   const nextProfessionPctByProvince: Record<string, Record<string, number>> = {};
+  const smoothing = Number(
+    Math.max(0, Math.min(1, gameSettings.economy.marketPriceSmoothing ?? DEFAULT_MARKET_PRICE_SMOOTHING)).toFixed(3),
+  );
+
+  type CountryGoodMap = Record<string, Record<string, number>>;
+  const demandRequestedByCountry: CountryGoodMap = {};
+  const productionByCountry: CountryGoodMap = {};
+  const productionMaxByCountry: CountryGoodMap = {};
+  const marketVolumeByCountry: CountryGoodMap = {};
+  const demandRequestedGlobal: Record<string, number> = {};
+  const productionGlobal: Record<string, number> = {};
+  const productionMaxGlobal: Record<string, number> = {};
+  const marketVolumeGlobal: Record<string, number> = {};
+  const infraRemainingByProvinceAndCategory: Record<string, Record<string, number>> = {};
+  const infraConsumedByProvinceAndCategory: Record<string, Record<string, number>> = {};
+  const localInfrastructureProvidedByProvinceAndCategory: Record<string, Record<string, number>> = {};
+  const remainingSharedInfrastructureByMarketIdAndCategory: Record<string, Record<string, number>> = {};
+  const consumedSharedInfrastructureByMarketIdAndCategory: Record<string, Record<string, number>> = {};
+  const worldTradeUsedAmountByScope: Record<string, number> = {};
+  const sanctionUsedAmountById: Record<string, number> = {};
+  const infraByProvince: Record<string, { capacity: number; required: number; coverage: number }> = {};
+  const alertsByCountry: Record<string, MarketOverviewAlert[]> = {};
+  const importsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>> = {};
+  const exportsByCountryByCountryAndGood: Record<string, Record<string, Record<string, number>>> = {};
+  const importsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>> = {};
+  const exportsByMarketByMarketAndGood: Record<string, Record<string, Record<string, number>>> = {};
+  let alertSeq = 0;
+  const pushCountryAlert = (countryId: string, alert: Omit<MarketOverviewAlert, "id">): void => {
+    if (!alertsByCountry[countryId]) alertsByCountry[countryId] = [];
+    alertsByCountry[countryId].push({ id: `a-${turnId}-${++alertSeq}`, ...alert });
+  };
+  type ActiveTradeSanction = MarketSanctionEntry & {
+    goodsSet: Set<string> | null;
+    expiresAtTurnExclusive: number;
+  };
+  const sanctionsRaw = Object.values(gameSettings.markets.sanctionsById ?? {});
+  const activeSanctionsByInitiator = new Map<string, ActiveTradeSanction[]>();
+  for (const sanction of sanctionsRaw) {
+    if (sanction.enabled === false) continue;
+    const startTurn = Math.max(1, Math.floor(Number(sanction.startTurn ?? turnId)));
+    const durationTurns = Math.max(1, Math.floor(Number(sanction.durationTurns ?? 1)));
+    const expiresAtTurnExclusive = startTurn + durationTurns;
+    if (turnId < startTurn || turnId >= expiresAtTurnExclusive) continue;
+    const list = activeSanctionsByInitiator.get(sanction.initiatorCountryId) ?? [];
+    list.push({
+      ...sanction,
+      goodsSet: sanction.goods && sanction.goods.length > 0 ? new Set(sanction.goods) : null,
+      expiresAtTurnExclusive,
+    });
+    activeSanctionsByInitiator.set(sanction.initiatorCountryId, list);
+  }
+  const collectTradeSanctions = (params: {
+    initiatorCountryId: string;
+    direction: "import" | "export";
+    targetCountryId: string;
+    targetMarketId: string;
+    goodId: string;
+  }): ActiveTradeSanction[] => {
+    const list = activeSanctionsByInitiator.get(params.initiatorCountryId) ?? [];
+    if (list.length === 0) return [];
+    return list.filter((sanction) => {
+      if (!(sanction.direction === "both" || sanction.direction === params.direction)) return false;
+      if (sanction.goodsSet && !sanction.goodsSet.has(params.goodId)) return false;
+      if (sanction.targetType === "country") return sanction.targetId === params.targetCountryId;
+      return sanction.targetId === params.targetMarketId;
+    });
+  };
+
+  type SellerSlot = {
+    provinceId: string;
+    countryId: string;
+    marketId: string;
+    instanceId: string;
+    instance: BuildingInstance;
+  };
+  const sellersByProvinceGood = new Map<string, SellerSlot[]>();
+  const sellersByCountryGood = new Map<string, SellerSlot[]>();
+  const sellersByMarketGood = new Map<string, SellerSlot[]>();
+  const sellersByGlobalGood = new Map<string, SellerSlot[]>();
+  const soldBySellerAndGood = new Map<string, number>();
+  const getSellerUsageKey = (instanceId: string, goodId: string) => `${instanceId}:${goodId}`;
+
+  const ensureCountryGood = (map: CountryGoodMap, countryId: string, goodId: string): void => {
+    if (!map[countryId]) map[countryId] = {};
+    if (map[countryId][goodId] == null) map[countryId][goodId] = 0;
+  };
+  const addCountryGood = (map: CountryGoodMap, countryId: string, goodId: string, value: number): void => {
+    if (value <= 0) return;
+    ensureCountryGood(map, countryId, goodId);
+    map[countryId][goodId] = round3((map[countryId][goodId] ?? 0) + value);
+  };
+  const addGlobalGood = (map: Record<string, number>, goodId: string, value: number): void => {
+    if (value <= 0) return;
+    map[goodId] = round3((map[goodId] ?? 0) + value);
+  };
+  const getMarketIdByCountry = (countryId: string): string => getCountryMarketId(countryId);
+  const infrastructureCategoryIds = [
+    ...new Set(
+      [
+        ...gameSettings.content.goods
+          .map((entry) => (typeof entry.resourceCategoryId === "string" ? entry.resourceCategoryId.trim() : ""))
+          .filter(Boolean),
+        ...gameSettings.content.buildings.flatMap((entry) => Object.keys(entry.marketInfrastructureByCategory ?? {})),
+        ...Object.values(gameSettings.markets.transportCorridorsById ?? {}).flatMap((corridor) => corridor.categories ?? []),
+      ].map((id) => id.trim()).filter(Boolean),
+    ),
+  ];
+  const transportConnectedCategoriesByProvince = buildTransportConnectedCategoriesByProvince(infrastructureCategoryIds);
+  const isProvinceConnectedByCategory = (provinceId: string, categoryId: string): boolean =>
+    Boolean(transportConnectedCategoriesByProvince[provinceId]?.has(categoryId));
+  const getProvinceInfrastructureFallbackCapacity = (provinceId: string): number =>
+    round3(Math.max(0, Number(worldBase.provinceInfrastructureByProvince[provinceId] ?? DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY)));
+  const getProvinceCategoryCapacity = (provinceId: string, categoryId: string): number => {
+    if (!isProvinceConnectedByCategory(provinceId, categoryId)) {
+      return 0;
+    }
+    const anyWorldBase = worldBase as WorldBase & {
+      provinceLogisticsPointsByCategoryByProvince?: Record<string, Record<string, number>>;
+    };
+    const explicit = anyWorldBase.provinceLogisticsPointsByCategoryByProvince?.[provinceId]?.[categoryId];
+    const providedFromBuildings = Number(localInfrastructureProvidedByProvinceAndCategory[provinceId]?.[categoryId] ?? 0);
+    if (typeof explicit === "number" && Number.isFinite(explicit)) {
+      return round3(Math.max(0, explicit) + Math.max(0, providedFromBuildings));
+    }
+    return round3(DEFAULT_LOCAL_INFRA_CATEGORY_CAPACITY + Math.max(0, providedFromBuildings));
+  };
+  const getProvinceInfraRemaining = (provinceId: string, categoryId: string): number => {
+    if (!infraRemainingByProvinceAndCategory[provinceId]) infraRemainingByProvinceAndCategory[provinceId] = {};
+    if (infraRemainingByProvinceAndCategory[provinceId][categoryId] == null) {
+      infraRemainingByProvinceAndCategory[provinceId][categoryId] = getProvinceCategoryCapacity(provinceId, categoryId);
+    }
+    return Math.max(0, Number(infraRemainingByProvinceAndCategory[provinceId][categoryId]));
+  };
+  const consumeProvinceInfra = (provinceId: string, categoryId: string, amount: number): void => {
+    if (amount <= 0) return;
+    const currentRemaining = getProvinceInfraRemaining(provinceId, categoryId);
+    const consumed = Math.min(currentRemaining, amount);
+    infraRemainingByProvinceAndCategory[provinceId][categoryId] = round3(Math.max(0, currentRemaining - consumed));
+    if (!infraConsumedByProvinceAndCategory[provinceId]) infraConsumedByProvinceAndCategory[provinceId] = {};
+    infraConsumedByProvinceAndCategory[provinceId][categoryId] = round3(
+      (infraConsumedByProvinceAndCategory[provinceId][categoryId] ?? 0) + consumed,
+    );
+  };
+  const getSharedInfraRemaining = (marketId: string, categoryId: string): number => {
+    return Math.max(0, Number(remainingSharedInfrastructureByMarketIdAndCategory[marketId]?.[categoryId] ?? 0));
+  };
+  const consumeSharedInfra = (marketId: string, categoryId: string, amount: number): void => {
+    if (amount <= 0) return;
+    if (!remainingSharedInfrastructureByMarketIdAndCategory[marketId]) {
+      remainingSharedInfrastructureByMarketIdAndCategory[marketId] = {};
+    }
+    const current = Math.max(0, Number(remainingSharedInfrastructureByMarketIdAndCategory[marketId][categoryId] ?? 0));
+    const consumed = Math.min(current, amount);
+    remainingSharedInfrastructureByMarketIdAndCategory[marketId][categoryId] = round3(Math.max(0, current - consumed));
+    if (!consumedSharedInfrastructureByMarketIdAndCategory[marketId]) {
+      consumedSharedInfrastructureByMarketIdAndCategory[marketId] = {};
+    }
+    consumedSharedInfrastructureByMarketIdAndCategory[marketId][categoryId] = round3(
+      (consumedSharedInfrastructureByMarketIdAndCategory[marketId][categoryId] ?? 0) + consumed,
+    );
+  };
+  const getPriceMeta = (goodId: string): { base: number; min: number; max: number } => {
+    const entry = goodById.get(goodId);
+    const base = Math.max(0, Number(entry?.basePrice ?? DEFAULT_RESOURCE_BASE_PRICE));
+    const min = Math.max(0, Number(entry?.minPrice ?? base * 0.1));
+    const max = Math.max(min, Number(entry?.maxPrice ?? base * 10));
+    return { base, min, max };
+  };
+  const getCountryGoodPrice = (countryId: string, goodId: string): number => {
+    const meta = getPriceMeta(goodId);
+    const marketId = getCountryMarketId(countryId);
+    if (!countryGoodPrices[marketId]) countryGoodPrices[marketId] = {};
+    if (countryGoodPrices[marketId][goodId] == null) {
+      countryGoodPrices[marketId][goodId] = round3(meta.base);
+    }
+    return Math.max(meta.min, Math.min(meta.max, Number(countryGoodPrices[marketId][goodId])));
+  };
+  const getGlobalGoodPrice = (goodId: string): number => {
+    const meta = getPriceMeta(goodId);
+    if (globalGoodPrices[goodId] == null) {
+      globalGoodPrices[goodId] = round3(meta.base);
+    }
+    return Math.max(meta.min, Math.min(meta.max, Number(globalGoodPrices[goodId])));
+  };
+  const getInfraPerUnit = (goodId: string): number => {
+    const entry = goodById.get(goodId);
+    const value = Number(entry?.infrastructureCostPerUnit ?? entry?.infraPerUnit ?? 1);
+    return round3(Math.max(0.01, Math.max(0, Number.isFinite(value) ? value : 1)));
+  };
+  const getResourceCategoryId = (goodId: string): string | null => {
+    const raw = goodById.get(goodId)?.resourceCategoryId;
+    if (typeof raw !== "string") return null;
+    const next = raw.trim();
+    return next.length > 0 ? next : null;
+  };
+  const resolveTradePolicyLayer = (
+    base: MarketTradePolicyEntry | undefined,
+    otherMarketId: string,
+    otherCountryId: string,
+  ): {
+    allowImportFromWorld: boolean;
+    allowExportToWorld: boolean;
+    maxImportAmountPerTurnFromWorld: number | null;
+    maxExportAmountPerTurnToWorld: number | null;
+    scopeImport: string;
+    scopeExport: string;
+  } => {
+    const byCountry = base?.overridesByCountryId?.[otherCountryId];
+    const byMarket = base?.overridesByMarketId?.[otherMarketId];
+    const layer = byCountry ?? byMarket ?? base;
+    const scope = byCountry ? `country:${otherCountryId}` : byMarket ? `market:${otherMarketId}` : "all";
+    return {
+      allowImportFromWorld: layer?.allowImportFromWorld ?? true,
+      allowExportToWorld: layer?.allowExportToWorld ?? true,
+      maxImportAmountPerTurnFromWorld:
+        typeof layer?.maxImportAmountPerTurnFromWorld === "number" && Number.isFinite(layer.maxImportAmountPerTurnFromWorld)
+          ? Math.max(0, layer.maxImportAmountPerTurnFromWorld)
+          : null,
+      maxExportAmountPerTurnToWorld:
+        typeof layer?.maxExportAmountPerTurnToWorld === "number" && Number.isFinite(layer.maxExportAmountPerTurnToWorld)
+          ? Math.max(0, layer.maxExportAmountPerTurnToWorld)
+          : null,
+      scopeImport: scope,
+      scopeExport: scope,
+    };
+  };
+  const getWorldTradeUsageKey = (
+    marketId: string,
+    goodId: string,
+    direction: "import" | "export",
+    scope: string,
+  ): string => `${marketId}::${goodId}::${direction}::${scope}`;
+  const getRemainingByPolicyLimit = (
+    marketId: string,
+    goodId: string,
+    direction: "import" | "export",
+    scope: string,
+    limit: number | null,
+  ): number => {
+    if (limit == null) return Number.POSITIVE_INFINITY;
+    const used = Number(worldTradeUsedAmountByScope[getWorldTradeUsageKey(marketId, goodId, direction, scope)] ?? 0);
+    return Math.max(0, round3(limit - used));
+  };
+  const consumePolicyLimit = (
+    marketId: string,
+    goodId: string,
+    direction: "import" | "export",
+    scope: string,
+    amount: number,
+  ): void => {
+    if (amount <= 0) return;
+    const key = getWorldTradeUsageKey(marketId, goodId, direction, scope);
+    worldTradeUsedAmountByScope[key] = round3((worldTradeUsedAmountByScope[key] ?? 0) + amount);
+  };
+  const updatePrice = (current: number, demand: number, offer: number, meta: { base: number; min: number; max: number }): number => {
+    const ratio = (demand + 1) / (offer + 1);
+    const epsilon = MARKET_PRICE_EPSILON;
+    const target = Math.abs(demand - offer) <= epsilon ? meta.base : current * ratio;
+    const clampedTarget = Math.max(meta.min, Math.min(meta.max, target));
+    const next = current * (1 - smoothing) + clampedTarget * smoothing;
+    return round3(Math.max(0.01, Math.max(meta.min, Math.min(meta.max, next))));
+  };
+  const addCategoryAmount = (map: Record<string, Record<string, number>>, scopeId: string, categoryId: string, value: number): void => {
+    if (!scopeId || !categoryId || value <= 0) return;
+    if (!map[scopeId]) map[scopeId] = {};
+    map[scopeId][categoryId] = round3((map[scopeId][categoryId] ?? 0) + value);
+  };
+  const addScopeGoodPartnerAmount = (
+    map: Record<string, Record<string, Record<string, number>>>,
+    scopeId: string,
+    goodId: string,
+    partnerId: string,
+    value: number,
+  ): void => {
+    if (!scopeId || !goodId || !partnerId || value <= 0) return;
+    if (!map[scopeId]) map[scopeId] = {};
+    if (!map[scopeId][goodId]) map[scopeId][goodId] = {};
+    map[scopeId][goodId][partnerId] = round3((map[scopeId][goodId][partnerId] ?? 0) + value);
+  };
+  const getScopeGoodTradeTotal = (
+    map: Record<string, Record<string, Record<string, number>>>,
+    scopeId: string,
+    goodId: string,
+  ): number => {
+    const byPartner = map[scopeId]?.[goodId] ?? {};
+    return round3(
+      Object.values(byPartner).reduce((sum, value) => sum + Math.max(0, Number(value ?? 0)), 0),
+    );
+  };
+  const pushHistory = (map: Record<string, number[]>, key: string, value: number): void => {
+    const prev = map[key] ?? [];
+    map[key] = [...prev, round3(value)].slice(-MARKET_PRICE_HISTORY_LENGTH);
+  };
+
+  for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince)) {
+    const ownerCountryId = worldBase.provinceOwner[provinceId];
+    if (!ownerCountryId) continue;
+    const marketId = getMarketIdByCountry(ownerCountryId);
+    for (const instance of instances ?? []) {
+      const building = buildingById.get(instance.buildingId);
+      if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      for (const [categoryId, amountRaw] of Object.entries(building.marketInfrastructureByCategory ?? {})) {
+        const amount = round3(Math.max(0, Number(amountRaw)) * instanceLevel);
+        if (amount <= 0) continue;
+        addCategoryAmount(localInfrastructureProvidedByProvinceAndCategory, provinceId, categoryId, amount);
+        addCategoryAmount(remainingSharedInfrastructureByMarketIdAndCategory, marketId, categoryId, amount);
+      }
+    }
+  }
+
+  // Pass 1: normalize instances and index all sellers before any purchases.
+  // This lets buildings buy from the full market scope (province/country/market/global)
+  // instead of only provinces that were processed earlier in the same turn.
+  for (const province of adm1ProvinceIndex) {
+    const provinceId = province.id;
+    const ownerCountryId = worldBase.provinceOwner[provinceId];
+    if (!ownerCountryId) continue;
+    const marketId = getMarketIdByCountry(ownerCountryId);
+    const buildingInstances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])].sort((a, b) =>
+      a.instanceId.localeCompare(b.instanceId),
+    );
+    for (const instance of buildingInstances) {
+      const building = buildingById.get(instance.buildingId);
+      if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      instance.level = instanceLevel;
+      instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0)));
+      instance.warehouseByGoodId = { ...(instance.warehouseByGoodId ?? {}) };
+      instance.lastPurchaseByGoodId = {};
+      instance.lastPurchaseCostByGoodId = {};
+      instance.lastSalesByGoodId = {};
+      instance.lastSalesRevenueByGoodId = {};
+      instance.lastConsumptionByGoodId = {};
+      instance.lastProductionByGoodId = {};
+      instance.lastExtractionByGoodId = {};
+      instance.lastLaborCoverage = 0;
+      instance.lastInfraCoverage = 0;
+      instance.lastInputCoverage = 0;
+      instance.lastFinanceCoverage = 0;
+      instance.lastProductivity = 0;
+      instance.lastRevenueDucats = 0;
+      instance.lastInputCostDucats = 0;
+      instance.lastWagesDucats = 0;
+      instance.lastNetDucats = 0;
+      instance.isInactive = false;
+      instance.inactiveReason = null;
+      for (const [goodId, amountRaw] of Object.entries(instance.warehouseByGoodId ?? {})) {
+        const amount = round3(Math.max(0, Number(amountRaw)));
+        if (amount <= 0) continue;
+        const slot: SellerSlot = {
+          provinceId,
+          countryId: ownerCountryId,
+          marketId,
+          instanceId: instance.instanceId,
+          instance,
+        };
+        const provinceKey = `${provinceId}:${goodId}`;
+        const countryKey = `${ownerCountryId}:${goodId}`;
+        const marketKey = `${marketId}:${goodId}`;
+        const globalKey = goodId;
+        const provinceList = sellersByProvinceGood.get(provinceKey) ?? [];
+        provinceList.push(slot);
+        sellersByProvinceGood.set(provinceKey, provinceList);
+        const countryList = sellersByCountryGood.get(countryKey) ?? [];
+        countryList.push(slot);
+        sellersByCountryGood.set(countryKey, countryList);
+        const marketList = sellersByMarketGood.get(marketKey) ?? [];
+        marketList.push(slot);
+        sellersByMarketGood.set(marketKey, marketList);
+        const globalList = sellersByGlobalGood.get(globalKey) ?? [];
+        globalList.push(slot);
+        sellersByGlobalGood.set(globalKey, globalList);
+        addCountryGood(marketVolumeByCountry, marketId, goodId, amount);
+        addGlobalGood(marketVolumeGlobal, goodId, amount);
+      }
+    }
+  }
 
   for (const province of adm1ProvinceIndex) {
     const provinceId = province.id;
-    if (!worldBase.provinceOwner[provinceId]) continue;
+    const ownerCountryId = worldBase.provinceOwner[provinceId];
+    if (!ownerCountryId) continue;
+    if (!alertsByCountry[ownerCountryId]) alertsByCountry[ownerCountryId] = [];
 
     const population = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
-    const buildingInstances = worldBase.provinceBuildingsByProvince[provinceId] ?? [];
-    const buildingCounts: Record<string, number> = {};
-    for (const instance of buildingInstances) {
-      if (!instance?.buildingId) continue;
-      buildingCounts[instance.buildingId] = (buildingCounts[instance.buildingId] ?? 0) + 1;
-    }
-    const buildingDucats = { ...(worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {}) };
-    const professionDemandById: Record<string, number> = {};
-    let totalWorkforceDemand = 0;
+    const marketId = getMarketIdByCountry(ownerCountryId);
+    const buildingInstances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])]
+      .sort((a, b) => a.instanceId.localeCompare(b.instanceId));
+    const provinceDeposits = [...(worldBase.provinceResourceDepositsByProvince[provinceId] ?? [])];
+    if (buildingInstances.length === 0) continue;
 
-    for (const [buildingId, levelRaw] of Object.entries(buildingCounts)) {
-      const count = Math.max(0, Math.floor(levelRaw));
-      if (count <= 0) continue;
-      const building = buildingById.get(buildingId);
+    const demandByProfession: Record<string, number> = {};
+    let totalWorkforceDemand = 0;
+    for (const instance of buildingInstances) {
+      const building = buildingById.get(instance.buildingId);
       if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
       for (const requirement of building.workforceRequirements ?? []) {
-        const workersDemand = Math.max(0, requirement.workers) * count;
+        const workersDemand = Math.max(0, requirement.workers) * instanceLevel;
         if (workersDemand <= 0) continue;
-        professionDemandById[requirement.professionId] = (professionDemandById[requirement.professionId] ?? 0) + workersDemand;
+        demandByProfession[requirement.professionId] = (demandByProfession[requirement.professionId] ?? 0) + workersDemand;
         totalWorkforceDemand += workersDemand;
       }
     }
 
-    const employmentRatio =
-      totalWorkforceDemand > 0 ? Math.max(0, Math.min(1, population.populationTotal / totalWorkforceDemand)) : 0;
+    const laborCoverageProvince =
+      totalWorkforceDemand > 0 ? round3(Math.max(0, Math.min(1, population.populationTotal / totalWorkforceDemand))) : 1;
 
-    const employedByProfession: Record<string, number> = {};
+    const availableByProfession: Record<string, number> = {};
+    for (const [professionId, pct] of Object.entries(population.professionPct ?? {})) {
+      availableByProfession[professionId] = (population.populationTotal * Math.max(0, Number(pct))) / 100;
+    }
+    const wageMultiplierByProfession: Record<string, number> = {};
+    for (const [professionId, demand] of Object.entries(demandByProfession)) {
+      const available = Math.max(1, availableByProfession[professionId] ?? 0);
+      const shortageRatio = demand / available;
+      const multiplier = shortageRatio > 1 ? 1 + (shortageRatio - 1) * 0.5 : 1;
+      wageMultiplierByProfession[professionId] = round3(Math.max(0.5, Math.min(3, multiplier)));
+    }
     let totalEmployed = 0;
-    for (const [professionId, demand] of Object.entries(professionDemandById)) {
-      const employed = demand * employmentRatio;
-      if (employed <= 0) continue;
-      employedByProfession[professionId] = employed;
-      totalEmployed += employed;
+    const employedByProfession: Record<string, number> = {};
+    let provinceWages = 0;
+
+    const getScopedSellerList = (scope: "province" | "country" | "market" | "global", goodId: string): SellerSlot[] => {
+      if (scope === "province") return sellersByProvinceGood.get(`${provinceId}:${goodId}`) ?? [];
+      if (scope === "country") return sellersByCountryGood.get(`${ownerCountryId}:${goodId}`) ?? [];
+      if (scope === "market") return sellersByMarketGood.get(`${marketId}:${goodId}`) ?? [];
+      return sellersByGlobalGood.get(goodId) ?? [];
+    };
+
+    for (const instance of buildingInstances) {
+      const building = buildingById.get(instance.buildingId);
+      if (!building) continue;
+      const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      const warehouse = instance.warehouseByGoodId ?? {};
+      let wagesEstimate = 0;
+      let workersDemand = 0;
+      for (const requirement of building.workforceRequirements ?? []) {
+        const baseWage = Math.max(0, Number(professionById.get(requirement.professionId)?.baseWage ?? BUILDING_BASE_WAGE_PER_WORKER_GOLD));
+        const multiplier = wageMultiplierByProfession[requirement.professionId] ?? 1;
+        const workers = Math.max(0, requirement.workers) * instanceLevel;
+        wagesEstimate += workers * baseWage * multiplier;
+        workersDemand += workers;
+      }
+      const laborCoverage = workersDemand > 0 ? laborCoverageProvince : 1;
+      const employedWorkers = workersDemand * laborCoverage;
+      totalEmployed += employedWorkers;
+      for (const requirement of building.workforceRequirements ?? []) {
+        const workers = Math.max(0, requirement.workers) * instanceLevel * laborCoverage;
+        employedByProfession[requirement.professionId] = round3((employedByProfession[requirement.professionId] ?? 0) + workers);
+      }
+      const infraCoverage = 1;
+
+      let requiredInputValueEstimate = 0;
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        const deficit = Math.max(0, required - available);
+        const price = getCountryGoodPrice(ownerCountryId, input.goodId);
+        requiredInputValueEstimate += deficit * price;
+        addCountryGood(demandRequestedByCountry, marketId, input.goodId, deficit);
+        addGlobalGood(demandRequestedGlobal, input.goodId, deficit);
+      }
+      const financeCoverage =
+        wagesEstimate + requiredInputValueEstimate > 0
+          ? round3(Math.max(0, Math.min(1, Number(instance.ducats ?? 0) / (wagesEstimate + requiredInputValueEstimate))))
+          : 1;
+
+      let purchaseCost = 0;
+      const purchasedByGood: Record<string, number> = {};
+      const purchasedCostByGood: Record<string, number> = {};
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        let deficit = Math.max(0, required - available);
+        if (deficit <= 0) continue;
+        let remainingNeed = round3(deficit);
+        if (remainingNeed <= 0) continue;
+        type ScopeOption = { scope: "province" | "country" | "market" | "global"; unitPrice: number; list: SellerSlot[] };
+        const options: ScopeOption[] = [
+          { scope: "province", unitPrice: getCountryGoodPrice(ownerCountryId, input.goodId), list: getScopedSellerList("province", input.goodId) },
+          { scope: "country", unitPrice: getCountryGoodPrice(ownerCountryId, input.goodId), list: getScopedSellerList("country", input.goodId) },
+          { scope: "market", unitPrice: getCountryGoodPrice(ownerCountryId, input.goodId), list: getScopedSellerList("market", input.goodId) },
+          { scope: "global", unitPrice: getGlobalGoodPrice(input.goodId), list: getScopedSellerList("global", input.goodId) },
+        ];
+        options.sort((a, b) => a.unitPrice - b.unitPrice);
+        for (const option of options) {
+          if (remainingNeed <= 0) break;
+          if (option.unitPrice <= 0) continue;
+          const affordable = Math.floor((Number(instance.ducats ?? 0) - purchaseCost) / option.unitPrice);
+          if (affordable <= 0) continue;
+          const sellerCandidates = [...option.list].sort((a, b) => {
+            const score = (slot: SellerSlot): number => {
+              if (slot.countryId === ownerCountryId) return 0;
+              if (slot.marketId === marketId) return 1;
+              return 2;
+            };
+            return score(a) - score(b) || a.instanceId.localeCompare(b.instanceId);
+          });
+          for (const seller of sellerCandidates) {
+            if (remainingNeed <= 0) break;
+            if (seller.instanceId === instance.instanceId) continue;
+            const sellerWarehouse = seller.instance.warehouseByGoodId ?? {};
+            const sellerAvailable = Math.max(0, Number(sellerWarehouse[input.goodId] ?? 0));
+            if (sellerAvailable <= 0) continue;
+            const soldKey = getSellerUsageKey(seller.instanceId, input.goodId);
+            const soldAlready = soldBySellerAndGood.get(soldKey) ?? 0;
+            const transferCap = Math.max(0, sellerAvailable - soldAlready);
+            if (transferCap <= 0) continue;
+            const maxAffordableNow = Math.floor((Number(instance.ducats ?? 0) - purchaseCost) / option.unitPrice);
+            if (maxAffordableNow <= 0) break;
+            const isExternalTrade = seller.marketId !== marketId;
+            const isCrossCountryTrade = seller.countryId !== ownerCountryId;
+            let applicableCapSanctions: ActiveTradeSanction[] = [];
+            let maxBySanctions = Number.POSITIVE_INFINITY;
+            if (isCrossCountryTrade) {
+              const buyerSideSanctions = collectTradeSanctions({
+                initiatorCountryId: ownerCountryId,
+                direction: "import",
+                targetCountryId: seller.countryId,
+                targetMarketId: seller.marketId,
+                goodId: input.goodId,
+              });
+              const sellerSideSanctions = collectTradeSanctions({
+                initiatorCountryId: seller.countryId,
+                direction: "export",
+                targetCountryId: ownerCountryId,
+                targetMarketId: marketId,
+                goodId: input.goodId,
+              });
+              const allSanctions = [...buyerSideSanctions, ...sellerSideSanctions];
+              if (allSanctions.some((sanction) => sanction.mode === "ban")) {
+                continue;
+              }
+              applicableCapSanctions = allSanctions.filter((sanction) => sanction.mode === "cap");
+              for (const sanction of applicableCapSanctions) {
+                const cap = Math.max(0, Number(sanction.capAmountPerTurn ?? 0));
+                const used = Math.max(0, Number(sanctionUsedAmountById[sanction.id] ?? 0));
+                const remaining = round3(Math.max(0, cap - used));
+                maxBySanctions = Math.min(maxBySanctions, remaining);
+              }
+              if (maxBySanctions <= 0) continue;
+            }
+            let maxByPolicy = Number.POSITIVE_INFINITY;
+            let buyerPolicyScope = "all";
+            let sellerPolicyScope = "all";
+            if (isExternalTrade) {
+              const buyerMarket = getMarketById(marketId);
+              const sellerMarket = getMarketById(seller.marketId);
+              const buyerPolicy = resolveTradePolicyLayer(
+                buyerMarket?.worldTradePolicyByResourceId?.[input.goodId],
+                seller.marketId,
+                seller.countryId,
+              );
+              const sellerPolicy = resolveTradePolicyLayer(
+                sellerMarket?.worldTradePolicyByResourceId?.[input.goodId],
+                marketId,
+                ownerCountryId,
+              );
+              if (!buyerPolicy.allowImportFromWorld || !sellerPolicy.allowExportToWorld) {
+                continue;
+              }
+              buyerPolicyScope = buyerPolicy.scopeImport;
+              sellerPolicyScope = sellerPolicy.scopeExport;
+              const buyerRemainingByPolicy = getRemainingByPolicyLimit(
+                marketId,
+                input.goodId,
+                "import",
+                buyerPolicy.scopeImport,
+                buyerPolicy.maxImportAmountPerTurnFromWorld,
+              );
+              const sellerRemainingByPolicy = getRemainingByPolicyLimit(
+                seller.marketId,
+                input.goodId,
+                "export",
+                sellerPolicy.scopeExport,
+                sellerPolicy.maxExportAmountPerTurnToWorld,
+              );
+              maxByPolicy = Math.floor(Math.min(buyerRemainingByPolicy, sellerRemainingByPolicy));
+              if (maxByPolicy <= 0) continue;
+            }
+
+            let maxByInfra = Number.POSITIVE_INFINITY;
+            const categoryId = getResourceCategoryId(input.goodId);
+            if (categoryId) {
+              const infraPerUnit = getInfraPerUnit(input.goodId);
+              const buyerLocal = getProvinceInfraRemaining(provinceId, categoryId);
+              const sellerLocal = getProvinceInfraRemaining(seller.provinceId, categoryId);
+              if (isExternalTrade) {
+                const buyerShared = getSharedInfraRemaining(marketId, categoryId);
+                const sellerShared = getSharedInfraRemaining(seller.marketId, categoryId);
+                maxByInfra = Math.floor(Math.min(buyerLocal, sellerLocal, buyerShared, sellerShared) / infraPerUnit);
+              } else if (provinceId === seller.provinceId) {
+                maxByInfra = Math.floor(buyerLocal / (infraPerUnit * 2));
+              } else {
+                maxByInfra = Math.floor(Math.min(buyerLocal, sellerLocal) / infraPerUnit);
+              }
+              if (maxByInfra <= 0) {
+                if (getProvinceInfraRemaining(provinceId, categoryId) <= 0) {
+                  remainingNeed = 0;
+                  break;
+                }
+                continue;
+              }
+            }
+
+            const transfer = round3(
+              Math.min(remainingNeed, transferCap, maxAffordableNow, maxByInfra, maxByPolicy, maxBySanctions),
+            );
+            if (transfer <= 0) continue;
+            remainingNeed = round3(Math.max(0, remainingNeed - transfer));
+            const transferCost = round3(transfer * option.unitPrice);
+            if (seller.countryId !== ownerCountryId) {
+              addScopeGoodPartnerAmount(
+                importsByCountryByCountryAndGood,
+                ownerCountryId,
+                input.goodId,
+                seller.countryId,
+                transfer,
+              );
+              addScopeGoodPartnerAmount(
+                exportsByCountryByCountryAndGood,
+                seller.countryId,
+                input.goodId,
+                ownerCountryId,
+                transfer,
+              );
+            }
+            if (isExternalTrade) {
+              addScopeGoodPartnerAmount(
+                importsByMarketByMarketAndGood,
+                marketId,
+                input.goodId,
+                seller.marketId,
+                transfer,
+              );
+              addScopeGoodPartnerAmount(
+                exportsByMarketByMarketAndGood,
+                seller.marketId,
+                input.goodId,
+                marketId,
+                transfer,
+              );
+            }
+            if (categoryId) {
+              const infraConsumed = round3(transfer * getInfraPerUnit(input.goodId));
+              consumeProvinceInfra(provinceId, categoryId, infraConsumed);
+              consumeProvinceInfra(seller.provinceId, categoryId, infraConsumed);
+              if (isExternalTrade) {
+                consumeSharedInfra(marketId, categoryId, infraConsumed);
+                consumeSharedInfra(seller.marketId, categoryId, infraConsumed);
+              }
+            }
+            if (isExternalTrade) {
+              consumePolicyLimit(marketId, input.goodId, "import", buyerPolicyScope, transfer);
+              consumePolicyLimit(seller.marketId, input.goodId, "export", sellerPolicyScope, transfer);
+            }
+            for (const sanction of applicableCapSanctions) {
+              sanctionUsedAmountById[sanction.id] = round3(
+                Math.max(0, Number(sanctionUsedAmountById[sanction.id] ?? 0)) + transfer,
+              );
+            }
+            purchaseCost = round3(purchaseCost + transferCost);
+            purchasedByGood[input.goodId] = round3((purchasedByGood[input.goodId] ?? 0) + transfer);
+            purchasedCostByGood[input.goodId] = round3((purchasedCostByGood[input.goodId] ?? 0) + transferCost);
+            sellerWarehouse[input.goodId] = round3(Math.max(0, sellerAvailable - transfer));
+            seller.instance.warehouseByGoodId = sellerWarehouse;
+            const revenueDelta = transferCost;
+            seller.instance.ducats = round3(Math.max(0, Number(seller.instance.ducats ?? 0)) + revenueDelta);
+            seller.instance.lastRevenueDucats = round3(Math.max(0, Number(seller.instance.lastRevenueDucats ?? 0)) + revenueDelta);
+            const sellerSales = seller.instance.lastSalesByGoodId ?? {};
+            sellerSales[input.goodId] = round3(Math.max(0, Number(sellerSales[input.goodId] ?? 0)) + transfer);
+            seller.instance.lastSalesByGoodId = sellerSales;
+            const sellerSalesRevenue = seller.instance.lastSalesRevenueByGoodId ?? {};
+            sellerSalesRevenue[input.goodId] = round3(
+              Math.max(0, Number(sellerSalesRevenue[input.goodId] ?? 0)) + revenueDelta,
+            );
+            seller.instance.lastSalesRevenueByGoodId = sellerSalesRevenue;
+            soldBySellerAndGood.set(soldKey, round3(soldAlready + transfer));
+          }
+        }
+      }
+
+      for (const [goodId, amount] of Object.entries(purchasedByGood)) {
+        warehouse[goodId] = round3(Math.max(0, Number(warehouse[goodId] ?? 0)) + amount);
+      }
+      instance.lastPurchaseByGoodId = purchasedByGood;
+      instance.lastPurchaseCostByGoodId = purchasedCostByGood;
+      instance.lastInputCostDucats = round3(purchaseCost);
+
+      let inputCoverage = 1;
+      const missingInputGoods: string[] = [];
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        if (required <= 0) continue;
+        const available = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        inputCoverage = Math.min(inputCoverage, available / required);
+        if (available + 1e-9 < required) {
+          const goodName = goodById.get(input.goodId)?.name?.trim() || input.goodId;
+          if (!missingInputGoods.includes(goodName)) {
+            missingInputGoods.push(goodName);
+          }
+        }
+      }
+      if (!Number.isFinite(inputCoverage)) inputCoverage = 1;
+      inputCoverage = round3(Math.max(0, Math.min(1, inputCoverage)));
+      const productivity = round3(Math.max(0, Math.min(1, Math.min(laborCoverage, infraCoverage, inputCoverage, financeCoverage))));
+      instance.lastLaborCoverage = laborCoverage;
+      instance.lastInfraCoverage = infraCoverage;
+      instance.lastInputCoverage = inputCoverage;
+      instance.lastFinanceCoverage = financeCoverage;
+      instance.lastProductivity = productivity;
+
+      const consumedByGood: Record<string, number> = {};
+      for (const input of building.inputs ?? []) {
+        const required = Math.max(0, input.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT;
+        const consumed = round3(required * productivity);
+        if (consumed <= 0) continue;
+        const before = Math.max(0, Number(warehouse[input.goodId] ?? 0));
+        const next = round3(Math.max(0, before - consumed));
+        warehouse[input.goodId] = next;
+        consumedByGood[input.goodId] = consumed;
+      }
+      instance.lastConsumptionByGoodId = consumedByGood;
+
+      const producedByGood: Record<string, number> = {};
+      for (const output of building.outputs ?? []) {
+        const producedMax = round3(Math.max(0, output.amount) * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT);
+        if (producedMax > 0) {
+          addCountryGood(productionMaxByCountry, marketId, output.goodId, producedMax);
+          addGlobalGood(productionMaxGlobal, output.goodId, producedMax);
+        }
+        const produced = round3(Math.max(0, output.amount) * instanceLevel * productivity * BUILDING_BASE_THROUGHPUT);
+        if (produced <= 0) continue;
+        warehouse[output.goodId] = round3(Math.max(0, Number(warehouse[output.goodId] ?? 0)) + produced);
+        producedByGood[output.goodId] = produced;
+        addCountryGood(productionByCountry, marketId, output.goodId, produced);
+        addGlobalGood(productionGlobal, output.goodId, produced);
+      }
+      const extractedByGood: Record<string, number> = {};
+      const extractionGoodId =
+        typeof building.extractionGoodId === "string" && building.extractionGoodId.trim().length > 0
+          ? building.extractionGoodId.trim()
+          : "";
+      const extractionAmountPerTurn = Math.max(0, Number(building.extractionAmountPerTurn ?? 0));
+      const extractionRequiresDeposit = building.extractionRequiresDeposit !== false;
+      if (extractionGoodId && extractionAmountPerTurn > 0) {
+        const deposit = provinceDeposits.find((row) => row.goodId === extractionGoodId);
+        const availableDeposit = Math.max(0, Number(deposit?.amount ?? 0));
+        const extractionMax = round3(extractionAmountPerTurn * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT);
+        if (extractionMax > 0) {
+          addCountryGood(productionMaxByCountry, marketId, extractionGoodId, Math.min(extractionMax, availableDeposit));
+          addGlobalGood(productionMaxGlobal, extractionGoodId, Math.min(extractionMax, availableDeposit));
+        }
+        if (!extractionRequiresDeposit || availableDeposit > 0) {
+          const extractionRaw = round3(extractionAmountPerTurn * instanceLevel * productivity * BUILDING_BASE_THROUGHPUT);
+          const extracted = extractionRequiresDeposit
+            ? Math.min(extractionRaw, availableDeposit)
+            : extractionRaw;
+          if (extracted > 0) {
+            warehouse[extractionGoodId] = round3(Math.max(0, Number(warehouse[extractionGoodId] ?? 0)) + extracted);
+            extractedByGood[extractionGoodId] = extracted;
+            producedByGood[extractionGoodId] = round3((producedByGood[extractionGoodId] ?? 0) + extracted);
+            addCountryGood(productionByCountry, marketId, extractionGoodId, extracted);
+            addGlobalGood(productionGlobal, extractionGoodId, extracted);
+            if (extractionRequiresDeposit && deposit) {
+              deposit.amount = round3(Math.max(0, availableDeposit - extracted));
+            }
+          }
+        }
+      }
+      instance.lastProductionByGoodId = producedByGood;
+      instance.lastExtractionByGoodId = extractedByGood;
+      const realizedRevenue = round3(Math.max(0, Number(instance.lastRevenueDucats ?? 0)));
+      instance.lastRevenueDucats = realizedRevenue;
+      instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - purchaseCost));
+
+      const wagesActual = round3(wagesEstimate * productivity);
+      provinceWages = round3(provinceWages + wagesActual);
+      instance.lastWagesDucats = wagesActual;
+      const paidWages = Math.min(Number(instance.ducats ?? 0), wagesActual);
+      instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - paidWages));
+      const unpaidWages = round3(Math.max(0, wagesActual - paidWages));
+      const net = round3(realizedRevenue - purchaseCost - wagesActual);
+      instance.lastNetDucats = net;
+      if (productivity <= 0) {
+        instance.isInactive = true;
+        const buildingLabel = building.name?.trim() || instance.buildingId;
+        const coverages: Array<{ key: "labor" | "input" | "infra" | "finance"; value: number }> = [
+          { key: "labor", value: laborCoverage },
+          { key: "input", value: inputCoverage },
+          { key: "infra", value: infraCoverage },
+          { key: "finance", value: financeCoverage },
+        ];
+        coverages.sort((a, b) => a.value - b.value);
+        const limiting = coverages[0];
+        const label =
+          limiting.key === "labor"
+            ? "труда"
+            : limiting.key === "input"
+              ? "входных товаров"
+              : limiting.key === "infra"
+                ? "инфраструктуры"
+                : "финансов";
+        const missingInputsText =
+          limiting.key === "input" && missingInputGoods.length > 0
+            ? `; не хватает: ${missingInputGoods.slice(0, 4).join(", ")}${missingInputGoods.length > 4 ? "..." : ""}`
+            : "";
+        instance.inactiveReason = `Нулевая продуктивность (лимит: ${label}, ${(limiting.value * 100).toFixed(1)}%${missingInputsText})`;
+        pushCountryAlert(ownerCountryId, {
+          severity: "critical",
+          kind: "building-inactive",
+          message: `Здание ${buildingLabel} неактивно: ${instance.inactiveReason}`,
+          provinceId,
+          buildingId: instance.buildingId,
+          instanceId: instance.instanceId,
+        });
+      } else if (unpaidWages > 0) {
+        instance.isInactive = true;
+        const buildingLabel = building.name?.trim() || instance.buildingId;
+        instance.inactiveReason = "Недостаточно дукатов для покрытия расходов";
+        pushCountryAlert(ownerCountryId, {
+          severity: "critical",
+          kind: "building-inactive",
+          message: `Здание ${buildingLabel} неактивно: ${instance.inactiveReason}`,
+          provinceId,
+          buildingId: instance.buildingId,
+          instanceId: instance.instanceId,
+        });
+      } else {
+        instance.isInactive = false;
+        instance.inactiveReason = null;
+      }
+      instance.warehouseByGoodId = Object.fromEntries(
+        Object.entries(warehouse)
+          .map(([goodId, amount]) => [goodId, round3(Math.max(0, Number(amount)))])
+          .filter(([, amount]) => Number(amount) > 0),
+      );
+    }
+
+    for (const instance of buildingInstances) {
+      instance.lastNetDucats = round3(
+        Number(instance.lastRevenueDucats ?? 0) -
+          Number(instance.lastInputCostDucats ?? 0) -
+          Number(instance.lastWagesDucats ?? 0),
+      );
     }
 
     if (totalEmployed > 0) {
@@ -1062,48 +3191,237 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       );
     }
 
-    for (const [buildingId, levelRaw] of Object.entries(buildingCounts)) {
-      const count = Math.max(0, Math.floor(levelRaw));
-      if (count <= 0) continue;
-      const building = buildingById.get(buildingId);
-      if (!building) continue;
-      let buildingRevenue = 0;
-      let buildingInputCost = 0;
-      let buildingWorkersDemand = 0;
-      for (const requirement of building.workforceRequirements ?? []) {
-        buildingWorkersDemand += Math.max(0, requirement.workers) * count;
-      }
-      const buildingEmployed = buildingWorkersDemand * employmentRatio;
-      const buildingWages = buildingEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;
-      for (const input of building.inputs ?? []) {
-        const basePrice = goodBasePriceById.get(input.goodId) ?? 1;
-        const amount = Math.max(0, input.amount) * count * employmentRatio * BUILDING_BASE_THROUGHPUT;
-        const totalCost = amount * basePrice;
-        buildingInputCost += totalCost;
-      }
-      for (const output of building.outputs ?? []) {
-        const basePrice = goodBasePriceById.get(output.goodId) ?? 1;
-        const amount = Math.max(0, output.amount) * count * employmentRatio * BUILDING_BASE_THROUGHPUT;
-        const totalRevenue = amount * basePrice;
-        buildingRevenue += totalRevenue;
-      }
-      const resultDucats = buildingRevenue - buildingInputCost - buildingWages;
-      const prevDucats = buildingDucats[buildingId] ?? 0;
-      if (resultDucats >= 0) {
-        buildingDucats[buildingId] = Number((prevDucats + resultDucats).toFixed(3));
-      } else {
-        const loss = Math.abs(resultDucats);
-        const coveredByBuilding = Math.min(prevDucats, loss);
-        const nextBuildingDucats = Math.max(0, prevDucats - coveredByBuilding);
-        buildingDucats[buildingId] = Number(nextBuildingDucats.toFixed(3));
+    const prevTreasury = worldBase.provincePopulationTreasuryByProvince[provinceId] ?? 0;
+    worldBase.provincePopulationTreasuryByProvince[provinceId] = round3(prevTreasury + provinceWages);
+    const byBuildingDucats: Record<string, number> = {};
+    for (const instance of buildingInstances) {
+      byBuildingDucats[instance.buildingId] = round3((byBuildingDucats[instance.buildingId] ?? 0) + Number(instance.ducats ?? 0));
+    }
+    worldBase.provinceBuildingDucatsByProvince[provinceId] = byBuildingDucats;
+    worldBase.provinceBuildingsByProvince[provinceId] = buildingInstances;
+    worldBase.provinceResourceDepositsByProvince[provinceId] = provinceDeposits
+      .filter((row) => Number(row.amount) > 0)
+      .sort((a, b) => a.goodId.localeCompare(b.goodId));
+  }
+
+  const marketIds = new Set<string>([
+    ...Object.keys(gameSettings.markets.marketById ?? {}),
+    ...Object.keys(worldBase.resourcesByCountry).map((countryId) => getCountryMarketId(countryId)),
+  ]);
+  for (const marketId of marketIds) {
+    if (!countryGoodPrices[marketId]) countryGoodPrices[marketId] = {};
+    const keys = new Set<string>([
+      ...Object.keys(demandRequestedByCountry[marketId] ?? {}),
+      ...Object.keys(productionByCountry[marketId] ?? {}),
+      ...Object.keys(marketVolumeByCountry[marketId] ?? {}),
+      ...Object.keys(countryGoodPrices[marketId] ?? {}),
+      ...gameSettings.content.goods.map((g) => g.id),
+    ]);
+    const marketRecord = getMarketById(marketId) ?? createDefaultMarketRecord(marketId, marketId);
+    if (!gameSettings.markets.marketById[marketId]) {
+      gameSettings.markets.marketById[marketId] = marketRecord;
+    }
+    marketRecord.priceByResourceId ??= {};
+    marketRecord.warehouseByResourceId ??= {};
+    marketRecord.priceHistoryByResourceId ??= {};
+    marketRecord.demandHistoryByResourceId ??= {};
+    marketRecord.offerHistoryByResourceId ??= {};
+    marketRecord.productionFactHistoryByResourceId ??= {};
+    marketRecord.productionMaxHistoryByResourceId ??= {};
+    for (const goodId of keys) {
+      const current = getCountryGoodPrice(marketId, goodId);
+      const demand = Number(demandRequestedByCountry[marketId]?.[goodId] ?? 0);
+      const offerFact = Number(productionByCountry[marketId]?.[goodId] ?? 0);
+      const marketVolume = Number(marketVolumeByCountry[marketId]?.[goodId] ?? 0);
+      const importsTotal = getScopeGoodTradeTotal(importsByMarketByMarketAndGood, marketId, goodId);
+      const exportsTotal = getScopeGoodTradeTotal(exportsByMarketByMarketAndGood, marketId, goodId);
+      const netTrade = round3(importsTotal - exportsTotal);
+      const offer = Math.max(0, round3(offerFact + marketVolume + netTrade));
+      const adjustedWarehouse = Math.max(0, round3(marketVolume + netTrade));
+      const nextPrice = updatePrice(current, demand, offer, getPriceMeta(goodId));
+      countryGoodPrices[marketId][goodId] = nextPrice;
+      marketRecord.priceByResourceId[goodId] = nextPrice;
+      marketRecord.warehouseByResourceId[goodId] = adjustedWarehouse;
+      pushHistory(marketRecord.priceHistoryByResourceId, goodId, nextPrice);
+      pushHistory(marketRecord.demandHistoryByResourceId, goodId, demand);
+      pushHistory(marketRecord.offerHistoryByResourceId, goodId, offer);
+      pushHistory(marketRecord.productionFactHistoryByResourceId, goodId, offerFact);
+      pushHistory(
+        marketRecord.productionMaxHistoryByResourceId,
+        goodId,
+        Number(productionMaxByCountry[marketId]?.[goodId] ?? 0),
+      );
+    }
+  }
+  {
+    const keys = new Set<string>([
+      ...Object.keys(demandRequestedGlobal),
+      ...Object.keys(productionGlobal),
+      ...Object.keys(productionMaxGlobal),
+      ...Object.keys(marketVolumeGlobal),
+      ...Object.keys(globalGoodPrices),
+      ...gameSettings.content.goods.map((g) => g.id),
+    ]);
+    for (const goodId of keys) {
+      const current = getGlobalGoodPrice(goodId);
+      const demand = Number(demandRequestedGlobal[goodId] ?? 0);
+      const offerFact = Number(productionGlobal[goodId] ?? 0);
+      const marketVolume = Number(marketVolumeGlobal[goodId] ?? 0);
+      const offer = offerFact + marketVolume;
+      const nextPrice = updatePrice(current, demand, offer, getPriceMeta(goodId));
+      globalGoodPrices[goodId] = nextPrice;
+      pushHistory(globalGoodPriceHistoryByResourceId, goodId, nextPrice);
+      pushHistory(globalGoodDemandHistoryByResourceId, goodId, demand);
+      pushHistory(globalGoodOfferHistoryByResourceId, goodId, offer);
+      pushHistory(globalGoodProductionFactHistoryByResourceId, goodId, offerFact);
+      pushHistory(globalGoodProductionMaxHistoryByResourceId, goodId, Number(productionMaxGlobal[goodId] ?? 0));
+    }
+  }
+
+  for (const countryId of Object.keys(worldBase.resourcesByCountry)) {
+    const marketId = getCountryMarketId(countryId);
+    const demand = demandRequestedByCountry[marketId] ?? {};
+    const offerProduced = productionByCountry[marketId] ?? {};
+    const offerStock = marketVolumeByCountry[marketId] ?? {};
+    for (const goodId of Object.keys(demand)) {
+      const d = Number(demand[goodId] ?? 0);
+      if (d <= 0) continue;
+      const importsTotal = getScopeGoodTradeTotal(importsByMarketByMarketAndGood, marketId, goodId);
+      const exportsTotal = getScopeGoodTradeTotal(exportsByMarketByMarketAndGood, marketId, goodId);
+      const netTrade = round3(importsTotal - exportsTotal);
+      const o = Math.max(0, Number(offerProduced[goodId] ?? 0) + Number(offerStock[goodId] ?? 0) + netTrade);
+      const coverage = d > 0 ? o / d : 1;
+      if (coverage < 0.5) {
+        pushCountryAlert(countryId, {
+          severity: "critical",
+          kind: "critical-deficit",
+          message: `Критический дефицит ${goodId}: покрытие ${(coverage * 100).toFixed(1)}%`,
+          goodId,
+        });
       }
     }
-
-    const provinceWages = totalEmployed * BUILDING_BASE_WAGE_PER_WORKER_GOLD;
-    const prevTreasury = worldBase.provincePopulationTreasuryByProvince[provinceId] ?? 0;
-    worldBase.provincePopulationTreasuryByProvince[provinceId] = Number((prevTreasury + provinceWages).toFixed(3));
-    worldBase.provinceBuildingDucatsByProvince[provinceId] = buildingDucats;
   }
+  const offerByCountry: Record<string, Record<string, number>> = {};
+  for (const countryId of marketIds) {
+    const keys = new Set<string>([
+      ...Object.keys(productionByCountry[countryId] ?? {}),
+      ...Object.keys(marketVolumeByCountry[countryId] ?? {}),
+    ]);
+    offerByCountry[countryId] = {};
+    for (const goodId of keys) {
+      const produced = Number(productionByCountry[countryId]?.[goodId] ?? 0);
+      const stock = Number(marketVolumeByCountry[countryId]?.[goodId] ?? 0);
+      const importsTotal = getScopeGoodTradeTotal(importsByMarketByMarketAndGood, countryId, goodId);
+      const exportsTotal = getScopeGoodTradeTotal(exportsByMarketByMarketAndGood, countryId, goodId);
+      const netTrade = round3(importsTotal - exportsTotal);
+      offerByCountry[countryId][goodId] = round3(Math.max(0, produced + stock + netTrade));
+    }
+  }
+  const offerGlobal: Record<string, number> = {};
+  for (const goodId of new Set<string>([...Object.keys(productionGlobal), ...Object.keys(marketVolumeGlobal)])) {
+    const produced = Number(productionGlobal[goodId] ?? 0);
+    const stock = Number(marketVolumeGlobal[goodId] ?? 0);
+    offerGlobal[goodId] = round3(produced + stock);
+  }
+  for (const province of adm1ProvinceIndex) {
+    const provinceId = province.id;
+    const capacity = getProvinceInfrastructureFallbackCapacity(provinceId);
+    const consumed = round3(
+      Object.values(infraConsumedByProvinceAndCategory[provinceId] ?? {}).reduce(
+        (sum, value) => sum + Math.max(0, Number(value)),
+        0,
+      ),
+    );
+    const remaining = round3(Math.max(0, capacity - consumed));
+    const coverage = capacity > 0 ? round3(Math.max(0, Math.min(1, remaining / capacity))) : 1;
+    infraByProvince[provinceId] = {
+      capacity,
+      required: consumed,
+      coverage,
+    };
+    if (consumed > 0 && remaining <= 0) {
+      const ownerCountryId = worldBase.provinceOwner[provinceId];
+      if (ownerCountryId) {
+        pushCountryAlert(ownerCountryId, {
+          severity: "warning",
+          kind: "infra-overload",
+          message: `Инфраструктура в провинции ${provinceId} исчерпана в этом ходу`,
+          provinceId,
+        });
+      }
+    }
+  }
+  {
+    const anyWorldBase = worldBase as WorldBase & {
+      provinceLastLogisticsConsumedByCategoryByProvince?: Record<string, Record<string, number>>;
+      provinceLastLogisticsCapacityByCategoryByProvince?: Record<string, Record<string, number>>;
+    };
+    anyWorldBase.provinceLastLogisticsConsumedByCategoryByProvince = Object.fromEntries(
+      adm1ProvinceIndex.map((province) => [
+        province.id,
+        normalizeCategoryAmountMap(infraConsumedByProvinceAndCategory[province.id] ?? {}),
+      ]),
+    );
+    anyWorldBase.provinceLastLogisticsCapacityByCategoryByProvince = Object.fromEntries(
+      adm1ProvinceIndex.map((province) => {
+        const provinceId = province.id;
+        const categories = new Set<string>([
+          ...Object.keys(infraConsumedByProvinceAndCategory[provinceId] ?? {}),
+          ...Object.keys(infraRemainingByProvinceAndCategory[provinceId] ?? {}),
+        ]);
+        const capacityByCategory: Record<string, number> = {};
+        for (const categoryId of categories) {
+          const consumed = Number(infraConsumedByProvinceAndCategory[provinceId]?.[categoryId] ?? 0);
+          const remaining = Number(infraRemainingByProvinceAndCategory[provinceId]?.[categoryId] ?? 0);
+          const capacity = round3(Math.max(0, consumed + remaining));
+          if (capacity > 0) capacityByCategory[categoryId] = capacity;
+        }
+        return [provinceId, capacityByCategory];
+      }),
+    );
+  }
+  for (const marketId of marketIds) {
+    const market = getMarketById(marketId);
+    if (!market) continue;
+    const capacityByCategory: Record<string, number> = {};
+    for (const categoryId of new Set<string>([
+      ...Object.keys(consumedSharedInfrastructureByMarketIdAndCategory[marketId] ?? {}),
+      ...Object.keys(remainingSharedInfrastructureByMarketIdAndCategory[marketId] ?? {}),
+    ])) {
+      const consumed = Number(consumedSharedInfrastructureByMarketIdAndCategory[marketId]?.[categoryId] ?? 0);
+      const remaining = Number(remainingSharedInfrastructureByMarketIdAndCategory[marketId]?.[categoryId] ?? 0);
+      const capacity = round3(Math.max(0, consumed + remaining));
+      if (capacity > 0) capacityByCategory[categoryId] = capacity;
+    }
+    market.lastSharedInfrastructureCapacityByCategory = capacityByCategory;
+    market.lastSharedInfrastructureConsumedByCategory = normalizeCategoryAmountMap(
+      consumedSharedInfrastructureByMarketIdAndCategory[marketId] ?? {},
+    );
+  }
+  latestMarketOverview = {
+    turnId,
+    demandByCountry: structuredClone(demandRequestedByCountry),
+    offerByCountry,
+    demandGlobal: structuredClone(demandRequestedGlobal),
+    offerGlobal,
+    infraByProvince,
+    alertsByCountry,
+    importsByCountryByCountryAndGood,
+    exportsByCountryByCountryAndGood,
+    importsByMarketByMarketAndGood,
+    exportsByMarketByMarketAndGood,
+  };
+  previousTradeInfraLoadByProvince = Object.fromEntries(
+    adm1ProvinceIndex.map((province) => [
+      province.id,
+      round3(
+        Object.values(infraConsumedByProvinceAndCategory[province.id] ?? {}).reduce(
+          (sum, value) => sum + Math.max(0, Number(value)),
+          0,
+        ),
+      ),
+    ]),
+  );
 
   return nextProfessionPctByProvince;
 }
@@ -1306,9 +3624,64 @@ function normalizeCivilopediaCategories(input: unknown, entries: GameSettings["c
   return [...base];
 }
 
-const defaultGameSettings = (): GameSettings => ({
+const persistedContentLibraryPath = resolve(__dirname, "../data/content-library.json");
+type PersistedContentLibrary = {
+  content?: unknown;
+  civilopedia?: {
+    categories?: unknown;
+    entries?: unknown;
+  };
+  map?: {
+    backgroundImageUrl?: unknown;
+  };
+  resourceIcons?: Partial<Record<keyof GameSettings["resourceIcons"], unknown>>;
+};
+
+let cachedPersistedContentLibrary: PersistedContentLibrary | null | undefined;
+
+function getPersistedContentLibraryFromDisk(): PersistedContentLibrary | null {
+  if (cachedPersistedContentLibrary !== undefined) {
+    return cachedPersistedContentLibrary;
+  }
+  if (!existsSync(persistedContentLibraryPath)) {
+    cachedPersistedContentLibrary = null;
+    return null;
+  }
+  try {
+    const raw = readFileSync(persistedContentLibraryPath, "utf8");
+    const parsed = JSON.parse(raw) as PersistedContentLibrary;
+    cachedPersistedContentLibrary = parsed && typeof parsed === "object" ? parsed : null;
+    return cachedPersistedContentLibrary;
+  } catch (error) {
+    console.error("[content-library] Failed to read content-library.json:", error);
+    cachedPersistedContentLibrary = null;
+    return null;
+  }
+}
+
+function persistContentLibraryFromSettings(): void {
+  const snapshot = {
+    content: gameSettings.content,
+    civilopedia: gameSettings.civilopedia,
+    map: {
+      backgroundImageUrl: gameSettings.map.backgroundImageUrl,
+    },
+    resourceIcons: gameSettings.resourceIcons,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    writeFileSync(persistedContentLibraryPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    cachedPersistedContentLibrary = snapshot;
+  } catch (error) {
+    console.error("[content-library] Failed to persist content-library.json:", error);
+  }
+}
+
+const defaultGameSettings = (): GameSettings => {
+  const defaults: GameSettings = {
     content: {
       races: [],
+      resourceCategories: [],
       professions: [],
       ideologies: [],
       religions: [],
@@ -1319,53 +3692,136 @@ const defaultGameSettings = (): GameSettings => ({
       industries: [],
       cultures: [],
     },
-  civilopedia: {
-    categories: defaultCivilopediaCategories(),
-    entries: defaultCivilopediaEntries(),
-  },
-  economy: {
-    baseConstructionPerTurn: 5,
-    baseDucatsPerTurn: 5,
-    baseGoldPerTurn: 10,
-    demolitionCostConstructionPercent: 20,
-  },
-  colonization: {
-    maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
-    pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
-    pointsCostPer1000Km2: 5,
-    ducatsCostPer1000Km2: 5,
-  },
-  customization: {
-    renameDucats: 20,
-    recolorDucats: 10,
-    flagDucats: 15,
-    crestDucats: 15,
-    provinceRenameDucats: 25,
-  },
-  registration: {
-    requireAdminApproval: false,
-  },
-  eventLog: {
-    retentionTurns: 3,
-  },
-  turnTimer: {
-    enabled: true,
-    secondsPerTurn: 86_400,
-  },
-  map: {
-    showAntarctica: false,
-    backgroundImageUrl: null,
-  },
-  resourceIcons: {
-    culture: null,
-    science: null,
-    religion: null,
-    colonization: null,
-    construction: null,
-    ducats: null,
-    gold: null,
-  },
-});
+    civilopedia: {
+      categories: defaultCivilopediaCategories(),
+      entries: defaultCivilopediaEntries(),
+    },
+    economy: {
+      baseConstructionPerTurn: 5,
+      baseDucatsPerTurn: 5,
+      baseGoldPerTurn: 10,
+      demolitionCostConstructionPercent: 20,
+      marketPriceSmoothing: 0.2,
+      explorationBaseEmptyChancePct: DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT,
+      explorationDepletionPerAttemptPct: DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT,
+      explorationDurationTurns: DEFAULT_EXPLORATION_DURATION_TURNS,
+      explorationRollsPerExpedition: DEFAULT_EXPLORATION_ROLLS_PER_EXPEDITION,
+    },
+    markets: {
+      countryMarketByCountryId: {},
+      marketById: {},
+      transportCorridorsById: {},
+      marketInvitesById: {},
+      sanctionsById: {},
+    },
+    colonization: {
+      maxActiveColonizations: DEFAULT_MAX_ACTIVE_COLONIZATIONS,
+      pointsPerTurn: DEFAULT_COLONIZATION_POINTS_PER_TURN,
+      pointsCostPer1000Km2: 5,
+      ducatsCostPer1000Km2: 5,
+    },
+    customization: {
+      renameDucats: 20,
+      recolorDucats: 10,
+      flagDucats: 15,
+      crestDucats: 15,
+      provinceRenameDucats: 25,
+    },
+    registration: {
+      requireAdminApproval: false,
+    },
+    eventLog: {
+      retentionTurns: 3,
+    },
+    turnTimer: {
+      enabled: true,
+      secondsPerTurn: 86_400,
+      pauseWhenNoPlayersOnline: false,
+    },
+    map: {
+      showAntarctica: false,
+      backgroundImageUrl: null,
+    },
+    resourceIcons: {
+      culture: null,
+      science: null,
+      religion: null,
+      colonization: null,
+      construction: null,
+      ducats: null,
+      gold: null,
+    },
+  };
+
+  const library = getPersistedContentLibraryFromDisk();
+  if (!library) {
+    return defaults;
+  }
+
+  const civilopediaEntries = normalizeCivilopediaEntries(library.civilopedia?.entries);
+  return {
+    ...defaults,
+    content: {
+      races: normalizeContentRaces((library.content as { races?: unknown } | undefined)?.races),
+      resourceCategories: normalizeContentCultures(
+        (library.content as { resourceCategories?: unknown } | undefined)?.resourceCategories,
+      ).map((entry) => ({
+        ...entry,
+        logoUrl: normalizeLegacyContentLogoUrl("resourceCategories", entry.logoUrl),
+      })),
+      professions: normalizeContentCultures((library.content as { professions?: unknown } | undefined)?.professions),
+      ideologies: normalizeContentCultures((library.content as { ideologies?: unknown } | undefined)?.ideologies),
+      religions: normalizeContentCultures((library.content as { religions?: unknown } | undefined)?.religions),
+      technologies: normalizeContentCultures((library.content as { technologies?: unknown } | undefined)?.technologies),
+      buildings: normalizeContentBuildings((library.content as { buildings?: unknown } | undefined)?.buildings),
+      goods: normalizeContentGoods((library.content as { goods?: unknown } | undefined)?.goods),
+      companies: normalizeContentCultures((library.content as { companies?: unknown } | undefined)?.companies),
+      industries: normalizeContentCultures((library.content as { industries?: unknown } | undefined)?.industries),
+      cultures: normalizeContentCultures((library.content as { cultures?: unknown } | undefined)?.cultures),
+    },
+    civilopedia: {
+      categories: normalizeCivilopediaCategories(library.civilopedia?.categories, civilopediaEntries),
+      entries: civilopediaEntries,
+    },
+    map: {
+      ...defaults.map,
+      backgroundImageUrl:
+        typeof library.map?.backgroundImageUrl === "string" || library.map?.backgroundImageUrl === null
+          ? (library.map.backgroundImageUrl ?? null)
+          : defaults.map.backgroundImageUrl,
+    },
+    resourceIcons: {
+      culture:
+        typeof library.resourceIcons?.culture === "string" || library.resourceIcons?.culture === null
+          ? (library.resourceIcons.culture ?? null)
+          : defaults.resourceIcons.culture,
+      science:
+        typeof library.resourceIcons?.science === "string" || library.resourceIcons?.science === null
+          ? (library.resourceIcons.science ?? null)
+          : defaults.resourceIcons.science,
+      religion:
+        typeof library.resourceIcons?.religion === "string" || library.resourceIcons?.religion === null
+          ? (library.resourceIcons.religion ?? null)
+          : defaults.resourceIcons.religion,
+      colonization:
+        typeof library.resourceIcons?.colonization === "string" || library.resourceIcons?.colonization === null
+          ? (library.resourceIcons.colonization ?? null)
+          : defaults.resourceIcons.colonization,
+      construction:
+        typeof library.resourceIcons?.construction === "string" || library.resourceIcons?.construction === null
+          ? (library.resourceIcons.construction ?? null)
+          : defaults.resourceIcons.construction,
+      ducats:
+        typeof library.resourceIcons?.ducats === "string" || library.resourceIcons?.ducats === null
+          ? (library.resourceIcons.ducats ?? null)
+          : defaults.resourceIcons.ducats,
+      gold:
+        typeof library.resourceIcons?.gold === "string" || library.resourceIcons?.gold === null
+          ? (library.resourceIcons.gold ?? null)
+          : defaults.resourceIcons.gold,
+    },
+  };
+};
 
 function normalizeResourceTotals(input: unknown): ResourceTotals {
   const source = input && typeof input === "object" ? (input as Partial<ResourceTotals>) : {};
@@ -1399,36 +3855,41 @@ function normalizeResourcesByCountryMap(input: unknown): Record<string, Resource
 function defaultWorldBase(currentTurnId: number): WorldBase {
   const domains = getPopulationDomainKeys();
   const provincePopulationByProvince: Record<string, ProvincePopulation> = {};
+  const provinceInfrastructureByProvince: Record<string, number> = {};
   const provinceBuildingsByProvince: Record<string, BuildingInstance[]> = {};
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number>> = {};
   const provincePopulationTreasuryByProvince: Record<string, number> = {};
   const provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[]> = {};
+  const provinceResourceDepositsByProvince: Record<string, ProvinceResourceDeposit[]> = {};
+  const provinceResourceExplorationQueueByProvince: Record<string, ProvinceResourceExplorationProject[]> = {};
+  const provinceResourceExplorationCountByProvince: Record<string, number> = {};
   for (const province of adm1ProvinceIndex) {
     provincePopulationByProvince[province.id] = buildDefaultProvincePopulation(province.id, domains);
+    provinceInfrastructureByProvince[province.id] = DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY;
     provinceBuildingsByProvince[province.id] = [];
     provinceBuildingDucatsByProvince[province.id] = {};
     provincePopulationTreasuryByProvince[province.id] = 0;
     provinceConstructionQueueByProvince[province.id] = [];
+    provinceResourceDepositsByProvince[province.id] = [];
+    provinceResourceExplorationQueueByProvince[province.id] = [];
+    provinceResourceExplorationCountByProvince[province.id] = 0;
   }
   return {
     turnId: currentTurnId,
-    resourcesByCountry: {
-      ARC: { culture: 12, science: 9, religion: 6, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, construction: 10, ducats: 35, gold: 120 },
-      VAL: { culture: 8, science: 12, religion: 7, colonization: DEFAULT_COLONIZATION_POINTS_PER_TURN, construction: 10, ducats: 28, gold: 110 },
-    },
-    provinceOwner: {
-      "p-north": "ARC",
-      "p-south": "ARC",
-      "p-east": "VAL",
-    },
+    resourcesByCountry: {},
+    provinceOwner: {},
     provinceNameById: {},
     colonyProgressByProvince: {},
     provinceColonizationByProvince: {},
+    provinceInfrastructureByProvince,
     provincePopulationByProvince,
     provinceBuildingsByProvince,
     provinceBuildingDucatsByProvince,
     provincePopulationTreasuryByProvince,
     provinceConstructionQueueByProvince,
+    provinceResourceDepositsByProvince,
+    provinceResourceExplorationQueueByProvince,
+    provinceResourceExplorationCountByProvince,
   };
 }
 
@@ -1466,6 +3927,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     worldBase: unknown;
     ordersByTurn: unknown;
     resolveReadyByTurn: unknown;
+    marketOverview: unknown;
   }>;
 
   if (typeof parsed.turnId === "number" && Number.isFinite(parsed.turnId) && parsed.turnId >= 1) {
@@ -1482,6 +3944,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
     gameSettings = {
         content: {
           races: normalizeContentRaces((next as Partial<{ content?: { races?: unknown } }>).content?.races),
+          resourceCategories: normalizeContentCultures((next as Partial<{ content?: { resourceCategories?: unknown } }>).content?.resourceCategories).map((entry) => ({
+            ...entry,
+            logoUrl: normalizeLegacyContentLogoUrl("resourceCategories", entry.logoUrl),
+          })),
           professions: normalizeContentCultures((next as Partial<{ content?: { professions?: unknown } }>).content?.professions),
           ideologies: normalizeContentCultures((next as Partial<{ content?: { ideologies?: unknown } }>).content?.ideologies),
           religions: normalizeContentCultures((next as Partial<{ content?: { religions?: unknown } }>).content?.religions),
@@ -1513,6 +3979,178 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.economy?.demolitionCostConstructionPercent === "number"
             ? Math.max(0, Math.min(100, Math.floor(next.economy.demolitionCostConstructionPercent)))
             : defaults.economy.demolitionCostConstructionPercent,
+        marketPriceSmoothing:
+          typeof next.economy?.marketPriceSmoothing === "number" && Number.isFinite(next.economy.marketPriceSmoothing)
+            ? Math.max(0, Math.min(1, Number(next.economy.marketPriceSmoothing)))
+            : defaults.economy.marketPriceSmoothing,
+        explorationBaseEmptyChancePct:
+          typeof next.economy?.explorationBaseEmptyChancePct === "number" &&
+          Number.isFinite(next.economy.explorationBaseEmptyChancePct)
+            ? Math.max(0, Math.min(100, Number(next.economy.explorationBaseEmptyChancePct)))
+            : defaults.economy.explorationBaseEmptyChancePct,
+        explorationDepletionPerAttemptPct:
+          typeof next.economy?.explorationDepletionPerAttemptPct === "number" &&
+          Number.isFinite(next.economy.explorationDepletionPerAttemptPct)
+            ? Math.max(0, Math.min(100, Number(next.economy.explorationDepletionPerAttemptPct)))
+            : defaults.economy.explorationDepletionPerAttemptPct,
+        explorationDurationTurns:
+          typeof next.economy?.explorationDurationTurns === "number" &&
+          Number.isFinite(next.economy.explorationDurationTurns)
+            ? Math.max(1, Math.floor(next.economy.explorationDurationTurns))
+            : defaults.economy.explorationDurationTurns,
+        explorationRollsPerExpedition:
+          typeof next.economy?.explorationRollsPerExpedition === "number" &&
+          Number.isFinite(next.economy.explorationRollsPerExpedition)
+            ? Math.max(1, Math.floor(next.economy.explorationRollsPerExpedition))
+            : defaults.economy.explorationRollsPerExpedition,
+      },
+      markets: {
+        countryMarketByCountryId:
+          next.markets && typeof next.markets === "object" && next.markets.countryMarketByCountryId && typeof next.markets.countryMarketByCountryId === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.countryMarketByCountryId as Record<string, unknown>)
+                  .map(([countryId, marketId]) => [countryId, normalizeMarketId(marketId)])
+                  .filter((row): row is [string, string] => Boolean(row[0] && row[1])),
+              )
+            : { ...defaults.markets.countryMarketByCountryId },
+        marketById:
+          next.markets && typeof next.markets === "object" && next.markets.marketById && typeof next.markets.marketById === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.marketById as Record<string, unknown>).map(([marketId, raw]) => {
+                  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+                  const ownerCountryId =
+                    typeof value.ownerCountryId === "string" && value.ownerCountryId.trim()
+                      ? value.ownerCountryId.trim()
+                      : marketId;
+                  return [
+                    marketId,
+                    {
+                      id: marketId,
+                      name:
+                        typeof value.name === "string" && value.name.trim() ? value.name.trim() : `Рынок ${marketId}`,
+                      logoUrl: typeof value.logoUrl === "string" || value.logoUrl === null ? (value.logoUrl ?? null) : null,
+                      ownerCountryId,
+                      capitalProvinceId:
+                        typeof value.capitalProvinceId === "string" && value.capitalProvinceId.trim().length > 0
+                          ? value.capitalProvinceId.trim()
+                          : null,
+                      memberCountryIds: Array.isArray(value.memberCountryIds)
+                        ? [
+                            ...new Set(
+                              value.memberCountryIds
+                                .filter((row): row is string => typeof row === "string" && row.trim().length > 0)
+                                .map((row) => row.trim()),
+                            ),
+                          ]
+                        : [ownerCountryId],
+                      visibility: normalizeMarketVisibility(value.visibility),
+                      createdAt:
+                        typeof value.createdAt === "string" && value.createdAt.trim()
+                          ? value.createdAt.trim()
+                          : new Date().toISOString(),
+                      warehouseByResourceId: normalizeNumberMap(value.warehouseByResourceId),
+                      priceByResourceId: normalizeNumberMap(value.priceByResourceId),
+                      priceHistoryByResourceId: normalizeNumberHistoryMap(value.priceHistoryByResourceId),
+                      demandHistoryByResourceId: normalizeNumberHistoryMap(value.demandHistoryByResourceId),
+                      offerHistoryByResourceId: normalizeNumberHistoryMap(value.offerHistoryByResourceId),
+                      productionFactHistoryByResourceId: normalizeNumberHistoryMap(value.productionFactHistoryByResourceId),
+                      productionMaxHistoryByResourceId: normalizeNumberHistoryMap(value.productionMaxHistoryByResourceId),
+                      worldTradePolicyByResourceId: normalizeMarketTradePolicyMap(value.worldTradePolicyByResourceId),
+                      resourceTradePolicyByCountryId: normalizeCountryResourceTradePolicyMap(value.resourceTradePolicyByCountryId),
+                      lastSharedInfrastructureConsumedByCategory: normalizeCategoryAmountMap(
+                        value.lastSharedInfrastructureConsumedByCategory,
+                      ),
+                      lastSharedInfrastructureCapacityByCategory: normalizeCategoryAmountMap(
+                        value.lastSharedInfrastructureCapacityByCategory,
+                      ),
+                    },
+                  ];
+                }),
+              )
+            : { ...defaults.markets.marketById },
+        transportCorridorsById:
+          next.markets &&
+          typeof next.markets === "object" &&
+          next.markets.transportCorridorsById &&
+          typeof next.markets.transportCorridorsById === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.transportCorridorsById as Record<string, unknown>).flatMap(([corridorId, raw]) => {
+                  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+                  const marketId = typeof value.marketId === "string" ? value.marketId.trim() : "";
+                  const fromProvinceId = typeof value.fromProvinceId === "string" ? value.fromProvinceId.trim() : "";
+                  const toProvinceId = typeof value.toProvinceId === "string" ? value.toProvinceId.trim() : "";
+                  if (!marketId || !fromProvinceId || !toProvinceId || fromProvinceId === toProvinceId) {
+                    return [];
+                  }
+                  const categories = Array.isArray(value.categories)
+                    ? [...new Set(value.categories.filter((row): row is string => typeof row === "string" && row.trim().length > 0).map((row) => row.trim()))]
+                    : [];
+                  const capacityByCategoryRaw =
+                    value.capacityByCategory && typeof value.capacityByCategory === "object"
+                      ? (value.capacityByCategory as Record<string, unknown>)
+                      : {};
+                  const capacityByCategory: Record<string, number> = Object.fromEntries(
+                    Object.entries(capacityByCategoryRaw)
+                      .map(([categoryId, amountRaw]) => {
+                        const amount = typeof amountRaw === "number" && Number.isFinite(amountRaw)
+                          ? round3(Math.max(0, Number(amountRaw)))
+                          : 0;
+                        return [categoryId.trim(), amount] as const;
+                      })
+                      .filter(([categoryId, amount]) => categoryId.length > 0 && amount > 0),
+                  );
+                  const normalizedCategories = categories.filter((categoryId) => (capacityByCategory[categoryId] ?? 0) > 0);
+                  return [[
+                    corridorId,
+                    {
+                      id: corridorId,
+                      marketId,
+                      fromProvinceId,
+                      toProvinceId,
+                      categories: normalizedCategories,
+                      capacityByCategory,
+                      enabled: value.enabled !== false,
+                      createdAt:
+                        typeof value.createdAt === "string" && value.createdAt.trim().length > 0
+                          ? value.createdAt.trim()
+                          : new Date().toISOString(),
+                    } satisfies TransportCorridorEntry,
+                  ]];
+                }),
+              )
+            : { ...defaults.markets.transportCorridorsById },
+        marketInvitesById:
+          next.markets && typeof next.markets === "object" && next.markets.marketInvitesById && typeof next.markets.marketInvitesById === "object"
+            ? Object.fromEntries(
+                Object.entries(next.markets.marketInvitesById as Record<string, unknown>).map(([inviteId, raw]) => {
+                  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+                  const nowIso = new Date().toISOString();
+                  const statusRaw = typeof value.status === "string" ? value.status : "pending";
+                  const status =
+                    statusRaw === "accepted" || statusRaw === "rejected" || statusRaw === "canceled" ? statusRaw : "pending";
+                  const kindRaw = typeof value.kind === "string" ? value.kind : "invite";
+                  const kind = kindRaw === "join-request" ? "join-request" : "invite";
+                  return [
+                    inviteId,
+                    {
+                      id: inviteId,
+                      marketId: typeof value.marketId === "string" ? value.marketId : "",
+                      fromCountryId: typeof value.fromCountryId === "string" ? value.fromCountryId : "",
+                      toCountryId: typeof value.toCountryId === "string" ? value.toCountryId : "",
+                      kind,
+                      status,
+                      expiresAt: typeof value.expiresAt === "string" && value.expiresAt.trim() ? value.expiresAt : nowIso,
+                      createdAt: typeof value.createdAt === "string" && value.createdAt.trim() ? value.createdAt : nowIso,
+                      updatedAt: typeof value.updatedAt === "string" && value.updatedAt.trim() ? value.updatedAt : nowIso,
+                    },
+                  ];
+                }),
+              )
+            : { ...defaults.markets.marketInvitesById },
+        sanctionsById:
+          next.markets && typeof next.markets === "object" && next.markets.sanctionsById && typeof next.markets.sanctionsById === "object"
+            ? normalizeMarketSanctionsMap(next.markets.sanctionsById)
+            : { ...defaults.markets.sanctionsById },
       },
       colonization: {
         maxActiveColonizations:
@@ -1575,6 +4213,10 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof (next as Partial<{ turnTimer?: { secondsPerTurn?: unknown } }>).turnTimer?.secondsPerTurn === "number"
             ? Math.max(10, Math.floor((next as Partial<{ turnTimer?: { secondsPerTurn?: number } }>).turnTimer?.secondsPerTurn ?? defaults.turnTimer.secondsPerTurn))
             : defaults.turnTimer.secondsPerTurn,
+        pauseWhenNoPlayersOnline:
+          typeof (next as Partial<{ turnTimer?: { pauseWhenNoPlayersOnline?: unknown } }>).turnTimer?.pauseWhenNoPlayersOnline === "boolean"
+            ? Boolean((next as Partial<{ turnTimer?: { pauseWhenNoPlayersOnline?: boolean } }>).turnTimer?.pauseWhenNoPlayersOnline)
+            : defaults.turnTimer.pauseWhenNoPlayersOnline,
       },
       map: {
         showAntarctica:
@@ -1603,7 +4245,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
   }
 
   if (parsed.worldBase && typeof parsed.worldBase === "object") {
-    const candidate = parsed.worldBase as Partial<WorldBase>;
+    const candidate = parsed.worldBase as Partial<WorldBase> & { previousTradeInfraLoadByProvince?: unknown };
     if (
       candidate.resourcesByCountry &&
       typeof candidate.resourcesByCountry === "object" &&
@@ -1624,6 +4266,9 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         provinceColonizationByProvince: normalizeProvinceColonizationMap(
           (candidate as Partial<WorldBase> & { provinceColonizationByProvince?: unknown }).provinceColonizationByProvince,
         ),
+        provinceInfrastructureByProvince: normalizeProvinceInfrastructureMap(
+          (candidate as Partial<WorldBase> & { provinceInfrastructureByProvince?: unknown }).provinceInfrastructureByProvince,
+        ),
         provincePopulationByProvince: normalizeProvincePopulationMap(
           (candidate as Partial<WorldBase> & { provincePopulationByProvince?: unknown }).provincePopulationByProvince,
         ),
@@ -1639,6 +4284,18 @@ function parseAndApplyPersistentState(input: unknown): boolean {
         provinceConstructionQueueByProvince: normalizeProvinceConstructionQueueMap(
           (candidate as Partial<WorldBase> & { provinceConstructionQueueByProvince?: unknown }).provinceConstructionQueueByProvince,
         ),
+        provinceResourceDepositsByProvince: normalizeProvinceResourceDepositsMap(
+          (candidate as Partial<WorldBase> & { provinceResourceDepositsByProvince?: unknown })
+            .provinceResourceDepositsByProvince,
+        ),
+        provinceResourceExplorationQueueByProvince: normalizeProvinceResourceExplorationQueueMap(
+          (candidate as Partial<WorldBase> & { provinceResourceExplorationQueueByProvince?: unknown })
+            .provinceResourceExplorationQueueByProvince,
+        ),
+        provinceResourceExplorationCountByProvince: normalizeProvinceResourceExplorationCountMap(
+          (candidate as Partial<WorldBase> & { provinceResourceExplorationCountByProvince?: unknown })
+            .provinceResourceExplorationCountByProvince,
+        ),
       };
     } else {
       worldBase = defaultWorldBase(turnId);
@@ -1646,6 +4303,17 @@ function parseAndApplyPersistentState(input: unknown): boolean {
   } else {
     worldBase = defaultWorldBase(turnId);
   }
+  previousTradeInfraLoadByProvince = normalizeTradeInfraLoadMap(
+    parsed.worldBase && typeof parsed.worldBase === "object"
+      ? (parsed.worldBase as { previousTradeInfraLoadByProvince?: unknown }).previousTradeInfraLoadByProvince
+      : undefined,
+  );
+  latestMarketOverview = normalizeMarketOverviewState(
+    parsed.worldBase && typeof parsed.worldBase === "object"
+      ? (parsed.worldBase as { latestMarketOverview?: unknown }).latestMarketOverview
+      : parsed.marketOverview,
+    turnId,
+  );
 
   ordersByTurn.clear();
   if (Array.isArray(parsed.ordersByTurn)) {
@@ -1697,6 +4365,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
 
   rebuildTurnOrderIndexes();
   rebuildEconomyTickCountryIndexFromWorldBase();
+  ensureMarketModelReady();
 
   return true;
 }
@@ -1708,6 +4377,8 @@ async function persistStateToDb(): Promise<void> {
     worldBase: {
       ...worldBase,
       turnId,
+      previousTradeInfraLoadByProvince,
+      latestMarketOverview,
     },
     ordersByTurn: serializeOrdersByTurn(),
     resolveReadyByTurn: serializeResolveReadyByTurn(),
@@ -1751,6 +4422,7 @@ function savePersistentState(): void {
     persistStateDirty = false;
     persistStateQueue = persistStateQueue
       .then(async () => {
+        persistContentLibraryFromSettings();
         await persistStateToDb();
       })
       .catch((error) => {
@@ -1770,6 +4442,7 @@ function flushPersistentStateNow(): Promise<void> {
   persistStateDirty = false;
   persistStateQueue = persistStateQueue
     .then(async () => {
+      persistContentLibraryFromSettings();
       await persistStateToDb();
     })
     .catch((error) => {
@@ -1791,6 +4464,39 @@ async function ensureWorldDeltaLogTable(): Promise<void> {
   await prisma.$executeRawUnsafe(
     `CREATE INDEX IF NOT EXISTS idx_world_delta_log_version ON WorldDeltaLog(worldStateVersion)`,
   );
+}
+
+async function ensureCorePrismaTables(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS Country (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT NOT NULL,
+      flagUrl TEXT,
+      crestUrl TEXT,
+      passwordHash TEXT NOT NULL,
+      isLocked INTEGER NOT NULL DEFAULT 0,
+      isAdmin INTEGER NOT NULL DEFAULT 0,
+      blockedUntilTurn INTEGER,
+      blockedUntilAt DATETIME,
+      lockReason TEXT,
+      ignoreUntilTurn INTEGER,
+      eventLogRetentionTurns INTEGER NOT NULL DEFAULT 3,
+      isRegistrationApproved INTEGER NOT NULL DEFAULT 1,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS GameState (
+      id TEXT PRIMARY KEY NOT NULL,
+      turnId INTEGER NOT NULL,
+      gameSettingsJson JSONB NOT NULL,
+      worldBaseJson JSONB NOT NULL,
+      ordersByTurnJson JSONB NOT NULL,
+      resolveReadyByTurnJson JSONB NOT NULL,
+      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 }
 
 async function persistWorldDeltaToDb(delta: WorldDelta): Promise<void> {
@@ -2309,6 +5015,7 @@ function broadcast(wss: WebSocketServer, message: WsOutMessage): void {
 function countryFromDb(row: { id: string; name: string; color: string; flagUrl: string | null; crestUrl: string | null; isAdmin: boolean; isLocked: boolean; blockedUntilTurn: number | null; blockedUntilAt: Date | null; lockReason?: string | null; ignoreUntilTurn: number | null; eventLogRetentionTurns?: number | null }): Country {
   return {
     ...row,
+    marketId: getCountryMarketId(row.id),
     blockedUntilAt: row.blockedUntilAt ? row.blockedUntilAt.toISOString() : null,
     lockReason: row.lockReason ?? null,
   };
@@ -2432,11 +5139,15 @@ type WorldBaseSectionSnapshot = {
   provinceNameById?: WorldBase["provinceNameById"];
   colonyProgressByProvince?: WorldBase["colonyProgressByProvince"];
   provinceColonizationByProvince?: WorldBase["provinceColonizationByProvince"];
+  provinceInfrastructureByProvince?: WorldBase["provinceInfrastructureByProvince"];
   provincePopulationByProvince?: WorldBase["provincePopulationByProvince"];
   provinceBuildingsByProvince?: WorldBase["provinceBuildingsByProvince"];
   provinceBuildingDucatsByProvince?: WorldBase["provinceBuildingDucatsByProvince"];
   provincePopulationTreasuryByProvince?: WorldBase["provincePopulationTreasuryByProvince"];
   provinceConstructionQueueByProvince?: WorldBase["provinceConstructionQueueByProvince"];
+  provinceResourceDepositsByProvince?: WorldBase["provinceResourceDepositsByProvince"];
+  provinceResourceExplorationQueueByProvince?: WorldBase["provinceResourceExplorationQueueByProvince"];
+  provinceResourceExplorationCountByProvince?: WorldBase["provinceResourceExplorationCountByProvince"];
 };
 
 function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
@@ -2460,6 +5171,9 @@ function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
   if ((mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0) {
     snapshot.provinceColonizationByProvince = structuredClone(worldBase.provinceColonizationByProvince);
   }
+  if ((mask & WORLD_DELTA_MASK.provinceInfrastructureByProvince) !== 0) {
+    snapshot.provinceInfrastructureByProvince = structuredClone(worldBase.provinceInfrastructureByProvince);
+  }
   if ((mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0) {
     snapshot.provincePopulationByProvince = structuredClone(worldBase.provincePopulationByProvince);
   }
@@ -2474,6 +5188,19 @@ function cloneWorldBaseSectionSnapshot(mask: number): WorldBaseSectionSnapshot {
   }
   if ((mask & WORLD_DELTA_MASK.provinceConstructionQueueByProvince) !== 0) {
     snapshot.provinceConstructionQueueByProvince = structuredClone(worldBase.provinceConstructionQueueByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceResourceDepositsByProvince) !== 0) {
+    snapshot.provinceResourceDepositsByProvince = structuredClone(worldBase.provinceResourceDepositsByProvince);
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince) !== 0) {
+    snapshot.provinceResourceExplorationQueueByProvince = structuredClone(
+      worldBase.provinceResourceExplorationQueueByProvince,
+    );
+  }
+  if ((mask & WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince) !== 0) {
+    snapshot.provinceResourceExplorationCountByProvince = structuredClone(
+      worldBase.provinceResourceExplorationCountByProvince,
+    );
   }
 
   return snapshot;
@@ -2586,6 +5313,50 @@ function isEqualConstructionQueue(
   return true;
 }
 
+function isEqualResourceDeposits(
+  prevValue: ProvinceResourceDeposit[] | undefined,
+  nextValue: ProvinceResourceDeposit[],
+): boolean {
+  if (!prevValue) return false;
+  if (prevValue.length !== nextValue.length) return false;
+  for (let i = 0; i < nextValue.length; i += 1) {
+    const prev = prevValue[i];
+    const next = nextValue[i];
+    if (!prev || !next) return false;
+    if (
+      prev.goodId !== next.goodId ||
+      Number(prev.amount) !== Number(next.amount) ||
+      prev.discoveredTurnId !== next.discoveredTurnId ||
+      prev.veinSize !== next.veinSize
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isEqualResourceExplorationQueue(
+  prevValue: ProvinceResourceExplorationProject[] | undefined,
+  nextValue: ProvinceResourceExplorationProject[],
+): boolean {
+  if (!prevValue) return false;
+  if (prevValue.length !== nextValue.length) return false;
+  for (let i = 0; i < nextValue.length; i += 1) {
+    const prev = prevValue[i];
+    const next = nextValue[i];
+    if (!prev || !next) return false;
+    if (
+      prev.queueId !== next.queueId ||
+      prev.requestedByCountryId !== next.requestedByCountryId ||
+      prev.startedTurnId !== next.startedTurnId ||
+      prev.turnsRemaining !== next.turnsRemaining
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isEqualBuildingInstances(
   prevValue: BuildingInstance[] | undefined,
   nextValue: BuildingInstance[],
@@ -2600,6 +5371,7 @@ function isEqualBuildingInstances(
       prev.instanceId !== next.instanceId ||
       prev.buildingId !== next.buildingId ||
       prev.createdTurnId !== next.createdTurnId ||
+      Math.max(1, Math.floor(Number(prev.level ?? 1))) !== Math.max(1, Math.floor(Number(next.level ?? 1))) ||
       prev.owner.type !== next.owner.type ||
       (prev.owner.type === "state" && next.owner.type === "state" && prev.owner.countryId !== next.owner.countryId) ||
       (prev.owner.type === "company" &&
@@ -2608,6 +5380,30 @@ function isEqualBuildingInstances(
     ) {
       return false;
     }
+    if (
+      Number(prev.ducats ?? 0) !== Number(next.ducats ?? 0) ||
+      Number(prev.lastLaborCoverage ?? 0) !== Number(next.lastLaborCoverage ?? 0) ||
+      Number(prev.lastInfraCoverage ?? 0) !== Number(next.lastInfraCoverage ?? 0) ||
+      Number(prev.lastInputCoverage ?? 0) !== Number(next.lastInputCoverage ?? 0) ||
+      Number(prev.lastFinanceCoverage ?? 0) !== Number(next.lastFinanceCoverage ?? 0) ||
+      Number(prev.lastProductivity ?? 0) !== Number(next.lastProductivity ?? 0) ||
+      Number(prev.lastRevenueDucats ?? 0) !== Number(next.lastRevenueDucats ?? 0) ||
+      Number(prev.lastInputCostDucats ?? 0) !== Number(next.lastInputCostDucats ?? 0) ||
+      Number(prev.lastWagesDucats ?? 0) !== Number(next.lastWagesDucats ?? 0) ||
+      Number(prev.lastNetDucats ?? 0) !== Number(next.lastNetDucats ?? 0) ||
+      Boolean(prev.isInactive) !== Boolean(next.isInactive) ||
+      (prev.inactiveReason ?? null) !== (next.inactiveReason ?? null)
+    ) {
+      return false;
+    }
+    if (!isEqualCountryProgressMap(prev.warehouseByGoodId, next.warehouseByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastPurchaseByGoodId, next.lastPurchaseByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastPurchaseCostByGoodId, next.lastPurchaseCostByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastSalesByGoodId, next.lastSalesByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastSalesRevenueByGoodId, next.lastSalesRevenueByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastConsumptionByGoodId, next.lastConsumptionByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastProductionByGoodId, next.lastProductionByGoodId ?? {})) return false;
+    if (!isEqualCountryProgressMap(prev.lastExtractionByGoodId, next.lastExtractionByGoodId ?? {})) return false;
   }
   return true;
 }
@@ -2621,11 +5417,15 @@ function buildCompactWorldDelta(
   const provinceNameById: Record<string, string | null> = {};
   const colonyProgressByProvince: Record<string, Record<string, number> | null> = {};
   const provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null> = {};
+  const provinceInfrastructureByProvince: Record<string, number | null> = {};
   const provincePopulationByProvince: Record<string, ProvincePopulation | null> = {};
   const provinceBuildingsByProvince: Record<string, BuildingInstance[] | null> = {};
   const provinceBuildingDucatsByProvince: Record<string, Record<string, number> | null> = {};
   const provincePopulationTreasuryByProvince: Record<string, number | null> = {};
   const provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[] | null> = {};
+  const provinceResourceDepositsByProvince: Record<string, ProvinceResourceDeposit[] | null> = {};
+  const provinceResourceExplorationQueueByProvince: Record<string, ProvinceResourceExplorationProject[] | null> = {};
+  const provinceResourceExplorationCountByProvince: Record<string, number | null> = {};
 
   for (const key of new Set([...Object.keys(prev.resourcesByCountry), ...Object.keys(next.resourcesByCountry)])) {
     const prevValue = prev.resourcesByCountry[key];
@@ -2701,6 +5501,18 @@ function buildCompactWorldDelta(
     }
   }
 
+  for (const key of new Set([...Object.keys(prev.provinceInfrastructureByProvince), ...Object.keys(next.provinceInfrastructureByProvince)])) {
+    const prevValue = prev.provinceInfrastructureByProvince[key];
+    const nextValue = next.provinceInfrastructureByProvince[key];
+    if (nextValue == null) {
+      provinceInfrastructureByProvince[key] = null;
+      continue;
+    }
+    if (prevValue !== nextValue) {
+      provinceInfrastructureByProvince[key] = nextValue;
+    }
+  }
+
   for (const key of new Set([...Object.keys(prev.provincePopulationByProvince), ...Object.keys(next.provincePopulationByProvince)])) {
     const prevValue = prev.provincePopulationByProvince[key];
     const nextValue = next.provincePopulationByProvince[key];
@@ -2761,6 +5573,52 @@ function buildCompactWorldDelta(
     }
   }
 
+  for (const key of new Set([...Object.keys(prev.provinceResourceDepositsByProvince), ...Object.keys(next.provinceResourceDepositsByProvince)])) {
+    const prevValue = prev.provinceResourceDepositsByProvince[key];
+    const nextValue = next.provinceResourceDepositsByProvince[key];
+    if (!nextValue) {
+      provinceResourceDepositsByProvince[key] = null;
+      continue;
+    }
+    if (!isEqualResourceDeposits(prevValue, nextValue)) {
+      provinceResourceDepositsByProvince[key] = nextValue;
+    }
+  }
+
+  for (
+    const key of new Set([
+      ...Object.keys(prev.provinceResourceExplorationQueueByProvince),
+      ...Object.keys(next.provinceResourceExplorationQueueByProvince),
+    ])
+  ) {
+    const prevValue = prev.provinceResourceExplorationQueueByProvince[key];
+    const nextValue = next.provinceResourceExplorationQueueByProvince[key];
+    if (!nextValue) {
+      provinceResourceExplorationQueueByProvince[key] = null;
+      continue;
+    }
+    if (!isEqualResourceExplorationQueue(prevValue, nextValue)) {
+      provinceResourceExplorationQueueByProvince[key] = nextValue;
+    }
+  }
+
+  for (
+    const key of new Set([
+      ...Object.keys(prev.provinceResourceExplorationCountByProvince),
+      ...Object.keys(next.provinceResourceExplorationCountByProvince),
+    ])
+  ) {
+    const prevValue = prev.provinceResourceExplorationCountByProvince[key];
+    const nextValue = next.provinceResourceExplorationCountByProvince[key];
+    if (nextValue == null) {
+      provinceResourceExplorationCountByProvince[key] = null;
+      continue;
+    }
+    if (prevValue !== nextValue) {
+      provinceResourceExplorationCountByProvince[key] = nextValue;
+    }
+  }
+
   let mask = 0;
   const compact: Omit<WorldDelta, "type" | "turnId" | "worldStateVersion" | "rejectedOrders"> = { mask: 0 };
   if (Object.keys(resourcesByCountry).length > 0) {
@@ -2783,6 +5641,10 @@ function buildCompactWorldDelta(
     mask |= WORLD_DELTA_MASK.provinceColonizationByProvince;
     compact.z = provinceColonizationByProvince;
   }
+  if (Object.keys(provinceInfrastructureByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceInfrastructureByProvince;
+    compact.s = provinceInfrastructureByProvince;
+  }
   if (Object.keys(provincePopulationByProvince).length > 0) {
     mask |= WORLD_DELTA_MASK.provincePopulationByProvince;
     compact.u = provincePopulationByProvince;
@@ -2802,6 +5664,18 @@ function buildCompactWorldDelta(
   if (Object.keys(provinceConstructionQueueByProvince).length > 0) {
     mask |= WORLD_DELTA_MASK.provinceConstructionQueueByProvince;
     compact.r = provinceConstructionQueueByProvince;
+  }
+  if (Object.keys(provinceResourceDepositsByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceResourceDepositsByProvince;
+    compact.t = provinceResourceDepositsByProvince;
+  }
+  if (Object.keys(provinceResourceExplorationQueueByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince;
+    compact.e = provinceResourceExplorationQueueByProvince;
+  }
+  if (Object.keys(provinceResourceExplorationCountByProvince).length > 0) {
+    mask |= WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince;
+    compact.k = provinceResourceExplorationCountByProvince;
   }
   compact.mask = mask;
   return compact;
@@ -2830,6 +5704,10 @@ function toWorldBaseForDeltaDiff(previous: WorldBaseSectionSnapshot, next: World
       (previous.mask & WORLD_DELTA_MASK.provinceColonizationByProvince) !== 0 && previous.provinceColonizationByProvince
         ? previous.provinceColonizationByProvince
         : next.provinceColonizationByProvince,
+    provinceInfrastructureByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceInfrastructureByProvince) !== 0 && previous.provinceInfrastructureByProvince
+        ? previous.provinceInfrastructureByProvince
+        : next.provinceInfrastructureByProvince,
     provincePopulationByProvince:
       (previous.mask & WORLD_DELTA_MASK.provincePopulationByProvince) !== 0 && previous.provincePopulationByProvince
         ? previous.provincePopulationByProvince
@@ -2850,6 +5728,21 @@ function toWorldBaseForDeltaDiff(previous: WorldBaseSectionSnapshot, next: World
       (previous.mask & WORLD_DELTA_MASK.provinceConstructionQueueByProvince) !== 0 && previous.provinceConstructionQueueByProvince
         ? previous.provinceConstructionQueueByProvince
         : next.provinceConstructionQueueByProvince,
+    provinceResourceDepositsByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceResourceDepositsByProvince) !== 0 &&
+      previous.provinceResourceDepositsByProvince
+        ? previous.provinceResourceDepositsByProvince
+        : next.provinceResourceDepositsByProvince,
+    provinceResourceExplorationQueueByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince) !== 0 &&
+      previous.provinceResourceExplorationQueueByProvince
+        ? previous.provinceResourceExplorationQueueByProvince
+        : next.provinceResourceExplorationQueueByProvince,
+    provinceResourceExplorationCountByProvince:
+      (previous.mask & WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince) !== 0 &&
+      previous.provinceResourceExplorationCountByProvince
+        ? previous.provinceResourceExplorationCountByProvince
+        : next.provinceResourceExplorationCountByProvince,
   };
 }
 
@@ -2878,11 +5771,15 @@ function broadcastWorldDeltaFromSectionSnapshot(
     n: compact.n,
     p: compact.p,
     z: compact.z,
+    s: compact.s,
     u: compact.u,
     b: compact.b,
     q: compact.q,
     y: compact.y,
     r: compact.r,
+    t: compact.t,
+    e: compact.e,
+    k: compact.k,
     rejectedOrders,
   };
   const baselinePayload = {
@@ -2895,11 +5792,15 @@ function broadcastWorldDeltaFromSectionSnapshot(
       provinceNameById: compact.n,
       colonyProgressByProvince: compact.p,
       provinceColonizationByProvince: compact.z,
+      provinceInfrastructureByProvince: compact.s,
       provincePopulationByProvince: compact.u,
       provinceBuildingsByProvince: compact.b,
       provinceBuildingDucatsByProvince: compact.q,
       provincePopulationTreasuryByProvince: compact.y,
       provinceConstructionQueueByProvince: compact.r,
+      provinceResourceDepositsByProvince: compact.t,
+      provinceResourceExplorationQueueByProvince: compact.e,
+      provinceResourceExplorationCountByProvince: compact.k,
     },
     rejectedOrders,
   };
@@ -2963,6 +5864,20 @@ function validateImageDimensions(file: Express.Multer.File, maxSize = 256): bool
   return width > 0 && height > 0 && width <= maxSize && height <= maxSize;
 }
 
+function validateImageRule(
+  file: Express.Multer.File,
+  rule: { maxWidth: number; maxHeight: number; ratioWidth: number; ratioHeight: number },
+): boolean {
+  const dimensions = imageSize(readFileSync(file.path));
+  const width = Number(dimensions.width ?? 0);
+  const height = Number(dimensions.height ?? 0);
+  if (width <= 0 || height <= 0) return false;
+  if (width > rule.maxWidth || height > rule.maxHeight) return false;
+  const expected = rule.ratioWidth / rule.ratioHeight;
+  const actual = width / height;
+  return Math.abs(actual - expected) <= 0.01;
+}
+
 function readProvinceId(properties: Record<string, unknown> | undefined) {
   const raw = properties?.id ?? properties?.ID_1 ?? properties?.adm1_code ?? properties?.name;
   return raw == null ? "" : String(raw);
@@ -2985,12 +5900,135 @@ function removeUploadedFile(file?: Express.Multer.File): void {
   }
 }
 
-function removeUploadedByUrl(url?: string | null): void {
-  if (!url || !url.startsWith("/uploads/")) {
+function extractUploadRelativePathFromUrl(url?: string | null): string | null {
+  if (!url) return null;
+  const raw = String(url).trim();
+  if (!raw) return null;
+  const withoutHash = raw.split("#")[0] ?? "";
+  const withoutQuery = withoutHash.split("?")[0] ?? "";
+  if (withoutQuery.startsWith("/uploads/")) {
+    return withoutQuery.replace(/^\/uploads\//, "").replace(/\\/g, "/");
+  }
+  try {
+    const parsed = new URL(withoutQuery);
+    if (!parsed.pathname.startsWith("/uploads/")) {
+      return null;
+    }
+    return parsed.pathname.replace(/^\/uploads\//, "").replace(/\\/g, "/");
+  } catch {
+    return null;
+  }
+}
+
+function makeVersionedUploadUrl(relativePath: string): string {
+  const clean = relativePath.replace(/^\/+/, "");
+  return `/uploads/${clean}?v=${Date.now()}`;
+}
+
+function collectUploadPathsFromUnknown(input: unknown, sink: Set<string>): void {
+  if (input == null) return;
+  if (typeof input === "string") {
+    const rel = extractUploadRelativePathFromUrl(input);
+    if (rel) sink.add(rel);
+    return;
+  }
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      collectUploadPathsFromUnknown(item, sink);
+    }
+    return;
+  }
+  if (typeof input !== "object") {
+    return;
+  }
+  for (const value of Object.values(input as Record<string, unknown>)) {
+    collectUploadPathsFromUnknown(value, sink);
+  }
+}
+
+function listUploadFilesRecursively(root: string): string[] {
+  if (!existsSync(root)) {
+    return [];
+  }
+  const files: string[] = [];
+  const walk = (current: string, relativePrefix = "") => {
+    const entries = readdirSync(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const rel = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+      const abs = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs, rel);
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(rel.replace(/\\/g, "/"));
+      }
+    }
+  };
+  walk(root);
+  return files;
+}
+
+async function cleanupOrphanUploadsOnServerStart(): Promise<void> {
+  if (!env.autoCleanupUploadsOnStart) {
     return;
   }
 
-  const rel = url.replace(/^\/uploads\//, "");
+  try {
+    const referenced = new Set<string>();
+    collectUploadPathsFromUnknown(worldBase, referenced);
+    collectUploadPathsFromUnknown(gameSettings, referenced);
+    const countries = await prisma.country.findMany({
+      select: {
+        flagUrl: true,
+        crestUrl: true,
+      },
+    });
+    for (const country of countries) {
+      const flagRel = extractUploadRelativePathFromUrl(country.flagUrl);
+      if (flagRel) referenced.add(flagRel);
+      const crestRel = extractUploadRelativePathFromUrl(country.crestUrl);
+      if (crestRel) referenced.add(crestRel);
+    }
+
+    const uploadFiles = listUploadFilesRecursively(uploadsRoot);
+    const orphanFiles = uploadFiles.filter((path) => !referenced.has(path));
+    if (uploadFiles.length > 0 && referenced.size === 0) {
+      console.warn("[uploads] Startup cleanup skipped: no references detected.");
+      return;
+    }
+    const orphanRatio = uploadFiles.length > 0 ? orphanFiles.length / uploadFiles.length : 0;
+    if (orphanFiles.length > 10 && orphanRatio > 0.8) {
+      console.warn(
+        `[uploads] Startup cleanup skipped: suspicious orphan ratio ${Math.round(orphanRatio * 100)}% (${orphanFiles.length}/${uploadFiles.length}).`,
+      );
+      return;
+    }
+    if (orphanFiles.length === 0) {
+      return;
+    }
+
+    let removed = 0;
+    for (const rel of orphanFiles) {
+      try {
+        unlinkSync(resolve(uploadsRoot, rel));
+        removed += 1;
+      } catch {
+        // Ignore per-file delete failures and continue cleanup.
+      }
+    }
+
+    console.log(
+      `[uploads] Startup cleanup removed ${removed}/${orphanFiles.length} orphan files (tracked=${referenced.size}).`,
+    );
+  } catch (error) {
+    console.error("[uploads] Startup cleanup failed:", error);
+  }
+}
+
+function removeUploadedByUrl(url?: string | null): void {
+  const rel = extractUploadRelativePathFromUrl(url);
+  if (!rel) return;
   const absolute = resolve(uploadsRoot, rel);
   try {
     unlinkSync(absolute);
@@ -3075,7 +6113,9 @@ function countBuildingOccurrences(
   let global = 0;
 
   for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince)) {
-    const amount = (instances ?? []).filter((instance) => instance.buildingId === buildingId).length;
+    const amount = (instances ?? [])
+      .filter((instance) => instance.buildingId === buildingId)
+      .reduce((sum, instance) => sum + Math.max(1, Math.floor(Number(instance.level ?? 1))), 0);
     if (amount <= 0) continue;
     global += amount;
     if ((worldBase.provinceOwner[provinceId] ?? null) === countryId) {
@@ -3113,10 +6153,10 @@ function countBuildingOccurrences(
   return { byCountry, global };
 }
 
-function getCountryBuildLimit(building: BuildingContentEntry, countryId: string): number | null {
+function getCountryBuildLimit(building: BuildingContentEntry, countryId: string): number | null | undefined {
   const limits = normalizeBuildingCountryLimits(building.countryBuildLimits);
   const row = limits.find((item) => item.countryId === countryId);
-  return row ? row.limit : null;
+  return row ? row.limit : undefined;
 }
 
 function resolveBuildingOwnerFromPayload(payload: Record<string, unknown>, requestedByCountryId: string): BuildingOwner | null {
@@ -3142,6 +6182,7 @@ function resolveBuildingConstructionQueuesTurn(): void {
   type ProjectRef = { provinceId: string; index: number };
   const projectsByCountry = new Map<string, ProjectRef[]>();
   const EPS = 1e-6;
+  const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
 
   for (const [provinceId, queue] of Object.entries(worldBase.provinceConstructionQueueByProvince ?? {})) {
     if (!Array.isArray(queue) || queue.length === 0) continue;
@@ -3233,18 +6274,164 @@ function resolveBuildingConstructionQueuesTurn(): void {
     const buildingInstances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
     for (const project of queue) {
       if (project.progressConstruction + 1e-9 >= project.costConstruction) {
-        buildingInstances.push({
-          instanceId: randomUUID(),
-          buildingId: project.buildingId,
-          owner: project.owner,
-          createdTurnId: turnId,
+        const building = buildingById.get(project.buildingId);
+        const startingDucats = Math.max(0, Number(building?.startingDucats ?? 0));
+        const existingInstance = buildingInstances.find((instance) => {
+          if (instance.buildingId !== project.buildingId) return false;
+          if (instance.owner.type !== project.owner.type) return false;
+          if (instance.owner.type === "state" && project.owner.type === "state") {
+            return instance.owner.countryId === project.owner.countryId;
+          }
+          if (instance.owner.type === "company" && project.owner.type === "company") {
+            return instance.owner.companyId === project.owner.companyId;
+          }
+          return false;
         });
+        if (existingInstance) {
+          existingInstance.level = Math.max(1, Math.floor(Number(existingInstance.level ?? 1))) + 1;
+          existingInstance.ducats = round3(Math.max(0, Number(existingInstance.ducats ?? 0)) + startingDucats);
+        } else {
+          buildingInstances.push({
+            instanceId: randomUUID(),
+            buildingId: project.buildingId,
+            owner: project.owner,
+            createdTurnId: turnId,
+            level: 1,
+            ducats: Number(startingDucats.toFixed(3)),
+          });
+        }
         continue;
       }
       nextQueue.push(project);
     }
     worldBase.provinceBuildingsByProvince[provinceId] = buildingInstances;
     worldBase.provinceConstructionQueueByProvince[provinceId] = nextQueue;
+  }
+}
+
+function rollIntInRange(minValue: number, maxValue: number): number {
+  const min = Math.max(0, Number.isFinite(minValue) ? minValue : 0);
+  const max = Math.max(min, Number.isFinite(maxValue) ? maxValue : min);
+  const value = min + Math.random() * (max - min);
+  return round3(value);
+}
+
+function rollWeightedChoice<T>(items: Array<{ weight: number; value: T }>): T | null {
+  const prepared = items
+    .map((item) => ({ ...item, weight: Math.max(0, Number(item.weight)) }))
+    .filter((item) => item.weight > 0);
+  if (prepared.length === 0) return null;
+  const total = prepared.reduce((sum, item) => sum + item.weight, 0);
+  if (total <= 0) return null;
+  let pivot = Math.random() * total;
+  for (const item of prepared) {
+    pivot -= item.weight;
+    if (pivot <= 0) return item.value;
+  }
+  return prepared[prepared.length - 1].value;
+}
+
+function resolveResourceExplorationTurn(): void {
+  const goods = gameSettings.content.goods.filter((good) => Boolean(good.isResourceDiscoverable));
+  if (goods.length === 0) return;
+  const duration = Math.max(1, Math.floor(Number(gameSettings.economy.explorationDurationTurns ?? 1)));
+  const rollsPerExpedition = Math.max(
+    1,
+    Math.floor(Number(gameSettings.economy.explorationRollsPerExpedition ?? DEFAULT_EXPLORATION_ROLLS_PER_EXPEDITION)),
+  );
+  const baseEmptyChancePct = Math.max(
+    0,
+    Math.min(100, Number(gameSettings.economy.explorationBaseEmptyChancePct ?? DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT)),
+  );
+  const depletionPerAttemptPct = Math.max(
+    0,
+    Math.min(
+      100,
+      Number(gameSettings.economy.explorationDepletionPerAttemptPct ?? DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT),
+    ),
+  );
+
+  for (const province of adm1ProvinceIndex) {
+    const provinceId = province.id;
+    const ownerCountryId = worldBase.provinceOwner[provinceId] ?? null;
+    const queue = [...(worldBase.provinceResourceExplorationQueueByProvince[provinceId] ?? [])];
+    if (queue.length === 0) continue;
+    const nextQueue: ProvinceResourceExplorationProject[] = [];
+    let explorationCount = Math.max(0, Math.floor(worldBase.provinceResourceExplorationCountByProvince[provinceId] ?? 0));
+    const deposits = [...(worldBase.provinceResourceDepositsByProvince[provinceId] ?? [])];
+    for (const project of queue) {
+      if (!ownerCountryId || project.requestedByCountryId !== ownerCountryId) {
+        continue;
+      }
+      const nextTurnsRemaining = Math.max(0, Math.floor(project.turnsRemaining) - 1);
+      if (nextTurnsRemaining > 0) {
+        nextQueue.push({ ...project, turnsRemaining: nextTurnsRemaining });
+        continue;
+      }
+      const emptyChancePct = Math.max(0, Math.min(99.9, baseEmptyChancePct + explorationCount * depletionPerAttemptPct));
+      const areaKm2 = getProvinceAreaKm2(provinceId);
+      const areaFactor = Math.max(0.001, areaKm2 / 1000);
+      const foundByGoodId = new Map<string, { amount: number; veinSize: "small" | "medium" | "large" }>();
+
+      for (let roll = 0; roll < rollsPerExpedition; roll += 1) {
+        if (Math.random() * 100 < emptyChancePct) continue;
+        const chosenGoodId = rollWeightedChoice(
+          goods.map((good) => ({
+            weight: Math.max(0, Number(good.explorationBaseWeight ?? 0)) * areaFactor,
+            value: good.id,
+          })),
+        );
+        if (!chosenGoodId) continue;
+        const good = goods.find((entry) => entry.id === chosenGoodId);
+        if (!good) continue;
+        const smallChance = Math.max(0, Number(good.explorationSmallVeinChancePct ?? 60));
+        const mediumChance = Math.max(0, Number(good.explorationMediumVeinChancePct ?? 30));
+        const largeChance = Math.max(0, Number(good.explorationLargeVeinChancePct ?? 10));
+        const chosenVeinSize =
+          rollWeightedChoice<"small" | "medium" | "large">([
+            { weight: smallChance, value: "small" },
+            { weight: mediumChance, value: "medium" },
+            { weight: largeChance, value: "large" },
+          ]) ?? "small";
+        const amount =
+          chosenVeinSize === "small"
+            ? rollIntInRange(Number(good.explorationSmallVeinMin ?? 10), Number(good.explorationSmallVeinMax ?? 100))
+            : chosenVeinSize === "medium"
+              ? rollIntInRange(
+                  Number(good.explorationMediumVeinMin ?? 100),
+                  Number(good.explorationMediumVeinMax ?? 500),
+                )
+              : rollIntInRange(Number(good.explorationLargeVeinMin ?? 500), Number(good.explorationLargeVeinMax ?? 2000));
+        if (amount <= 0) continue;
+        const prev = foundByGoodId.get(chosenGoodId);
+        foundByGoodId.set(chosenGoodId, {
+          amount: round3((prev?.amount ?? 0) + amount),
+          veinSize: prev?.veinSize ?? chosenVeinSize,
+        });
+      }
+
+      for (const [goodId, found] of foundByGoodId.entries()) {
+        const existing = deposits.find((row) => row.goodId === goodId);
+        if (existing) {
+          existing.amount = round3(existing.amount + found.amount);
+          continue;
+        }
+        deposits.push({
+          goodId,
+          amount: round3(found.amount),
+          discoveredTurnId: turnId,
+          veinSize: found.veinSize,
+        });
+      }
+      explorationCount += 1;
+    }
+    worldBase.provinceResourceExplorationQueueByProvince[provinceId] = nextQueue;
+    worldBase.provinceResourceExplorationCountByProvince[provinceId] = explorationCount;
+    worldBase.provinceResourceDepositsByProvince[provinceId] = deposits.sort((a, b) => a.goodId.localeCompare(b.goodId));
+    if (worldBase.provinceResourceExplorationQueueByProvince[provinceId].length === 0 && duration > 0) {
+      // Keep array shape stable for delta and UI.
+      worldBase.provinceResourceExplorationQueueByProvince[provinceId] = [];
+    }
   }
 }
 
@@ -3257,7 +6444,10 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
       WORLD_DELTA_MASK.provinceBuildingsByProvince |
       WORLD_DELTA_MASK.provinceBuildingDucatsByProvince |
       WORLD_DELTA_MASK.provincePopulationTreasuryByProvince |
-      WORLD_DELTA_MASK.provinceConstructionQueueByProvince,
+      WORLD_DELTA_MASK.provinceConstructionQueueByProvince |
+      WORLD_DELTA_MASK.provinceResourceDepositsByProvince |
+      WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince |
+      WORLD_DELTA_MASK.provinceResourceExplorationCountByProvince,
   );
   const currentOrders = ordersByTurn.get(turnId) ?? new Map<string, Order[]>();
   const rejectedOrders: WorldDelta["rejectedOrders"] = [];
@@ -3295,15 +6485,16 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
         }
         const counts = countBuildingOccurrences(buildingId, order.countryId, { includePendingOrders: false });
         const countryLimit = getCountryBuildLimit(building, order.countryId);
+        const hasCountryLimitOverride = countryLimit !== undefined;
         const globalLimit =
           typeof building.globalBuildLimit === "number" && Number.isFinite(building.globalBuildLimit)
             ? Math.max(1, Math.floor(building.globalBuildLimit))
             : null;
-        if (countryLimit != null && counts.byCountry >= countryLimit) {
+        if (typeof countryLimit === "number" && counts.byCountry >= countryLimit) {
           rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
           continue;
         }
-        if (globalLimit != null && counts.global >= globalLimit) {
+        if (!hasCountryLimitOverride && globalLimit != null && counts.global >= globalLimit) {
           rejectedOrders.push({ playerId, reason: "BUILD_INVALID", tempOrderId: order.id });
           continue;
         }
@@ -3393,6 +6584,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
   }
 
   resolveBuildingConstructionQueuesTurn();
+  resolveResourceExplorationTurn();
 
   for (const provinceId of touchedProvinceIds) {
     const progressByCountry = worldBase.colonyProgressByProvince[provinceId];
@@ -3526,6 +6718,1011 @@ app.get("/world/snapshot", async (req, res) => {
     turnId,
     worldStateVersion,
   });
+});
+
+app.get("/economy/market-overview", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  ensureCountryInWorldBase(auth.countryId);
+  const countryId = auth.countryId;
+  const marketId = getCountryMarketId(countryId);
+  const marketRecord = getMarketById(marketId);
+  const goods = gameSettings.content.goods.map((good) => {
+    const countryDemand = Number(latestMarketOverview.demandByCountry[marketId]?.[good.id] ?? 0);
+    const countryOffer = Number(latestMarketOverview.offerByCountry[marketId]?.[good.id] ?? 0);
+    const globalDemand = Number(latestMarketOverview.demandGlobal[good.id] ?? 0);
+    const globalOffer = Number(latestMarketOverview.offerGlobal[good.id] ?? 0);
+    const countryCoveragePct = countryDemand > 0 ? round3((countryOffer / countryDemand) * 100) : 100;
+    const globalCoveragePct = globalDemand > 0 ? round3((globalOffer / globalDemand) * 100) : 100;
+    return {
+      goodId: good.id,
+      goodName: good.name,
+      countryPrice: round3(Math.max(0, Number(countryGoodPrices[getCountryMarketId(countryId)]?.[good.id] ?? good.basePrice ?? 1))),
+      globalPrice: round3(Math.max(0, Number(globalGoodPrices[good.id] ?? good.basePrice ?? 1))),
+      countryDemand: round3(countryDemand),
+      countryOffer: round3(countryOffer),
+      countryCoveragePct,
+      globalDemand: round3(globalDemand),
+      globalOffer: round3(globalOffer),
+      globalCoveragePct,
+      countryPriceHistory: (marketRecord?.priceHistoryByResourceId?.[good.id] ?? []).map((value) => round3(value)),
+      globalPriceHistory: (globalGoodPriceHistoryByResourceId[good.id] ?? []).map((value) => round3(value)),
+      countryDemandHistory: (marketRecord?.demandHistoryByResourceId?.[good.id] ?? []).map((value) => round3(value)),
+      countryOfferHistory: (marketRecord?.offerHistoryByResourceId?.[good.id] ?? []).map((value) => round3(value)),
+      globalDemandHistory: (globalGoodDemandHistoryByResourceId[good.id] ?? []).map((value) => round3(value)),
+      globalOfferHistory: (globalGoodOfferHistoryByResourceId[good.id] ?? []).map((value) => round3(value)),
+      countryProductionFactHistory: (marketRecord?.productionFactHistoryByResourceId?.[good.id] ?? []).map((value) =>
+        round3(value),
+      ),
+      countryProductionMaxHistory: (marketRecord?.productionMaxHistoryByResourceId?.[good.id] ?? []).map((value) =>
+        round3(value),
+      ),
+      globalProductionFactHistory: (globalGoodProductionFactHistoryByResourceId[good.id] ?? []).map((value) =>
+        round3(value),
+      ),
+      globalProductionMaxHistory: (globalGoodProductionMaxHistoryByResourceId[good.id] ?? []).map((value) =>
+        round3(value),
+      ),
+    };
+  });
+  const infraByProvince = Object.fromEntries(
+    Object.entries(latestMarketOverview.infraByProvince).filter(
+      ([provinceId]) => (worldBase.provinceOwner[provinceId] ?? null) === countryId,
+    ),
+  );
+  const sharedInfrastructureByMarket = Object.values(gameSettings.markets.marketById).map((market) => {
+    const capacityByCategory = normalizeCategoryAmountMap(market.lastSharedInfrastructureCapacityByCategory ?? {});
+    const consumedByCategory = normalizeCategoryAmountMap(market.lastSharedInfrastructureConsumedByCategory ?? {});
+    const availableByCategory = Object.fromEntries(
+      [...new Set([...Object.keys(capacityByCategory), ...Object.keys(consumedByCategory)])].map((categoryId) => [
+        categoryId,
+        round3(Math.max(0, Number(capacityByCategory[categoryId] ?? 0) - Number(consumedByCategory[categoryId] ?? 0))),
+      ]),
+    );
+    const capacity = round3(
+      Object.values(capacityByCategory).reduce(
+        (sum, value) => sum + Math.max(0, Number(value)),
+        0,
+      ),
+    );
+    const consumed = round3(
+      Object.values(consumedByCategory).reduce(
+        (sum, value) => sum + Math.max(0, Number(value)),
+        0,
+      ),
+    );
+    return {
+      marketId: market.id,
+      marketName: getMarketDisplayName({
+        marketId: market.id,
+        marketName: market.name,
+        ownerCountryName: null,
+      }),
+      capacity,
+      consumed,
+      available: round3(Math.max(0, capacity - consumed)),
+      capacityByCategory,
+      consumedByCategory,
+      availableByCategory,
+    };
+  });
+  const tradeByGood = Object.fromEntries(
+    gameSettings.content.goods.map((good) => [
+      good.id,
+      {
+        countryImportsByCountry: latestMarketOverview.importsByCountryByCountryAndGood[countryId]?.[good.id] ?? {},
+        countryExportsByCountry: latestMarketOverview.exportsByCountryByCountryAndGood[countryId]?.[good.id] ?? {},
+        globalImportsByMarket: latestMarketOverview.importsByMarketByMarketAndGood[marketId]?.[good.id] ?? {},
+        globalExportsByMarket: latestMarketOverview.exportsByMarketByMarketAndGood[marketId]?.[good.id] ?? {},
+      },
+    ]),
+  );
+  return res.json({
+    turnId,
+    countryId,
+    marketId,
+    marketCapitalProvinceId: marketRecord?.capitalProvinceId ?? null,
+    transportCorridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
+    goods,
+    tradeByGood,
+    infraByProvince,
+    sharedInfrastructureByMarket,
+    alerts: latestMarketOverview.alertsByCountry[countryId] ?? [],
+  });
+});
+
+const marketInviteCreateSchema = z.object({
+  toCountryId: z.string().trim().min(1).max(120),
+  expiresInDays: z.coerce.number().int().min(1).max(365).optional(),
+});
+
+const marketInviteActionSchema = z.object({
+  action: z.enum(["accept", "reject", "cancel"]),
+});
+
+const marketTransferOwnerSchema = z.object({
+  nextOwnerCountryId: z.string().trim().min(1).max(120),
+});
+
+const marketPatchSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  visibility: z.enum(["public", "private"]).optional(),
+  capitalProvinceId: z.string().trim().min(1).max(120).nullable().optional(),
+});
+
+const marketTransportCorridorCreateSchema = z.object({
+  fromProvinceId: z.string().trim().min(1).max(120),
+  toProvinceId: z.string().trim().min(1).max(120),
+  categories: z.array(z.string().trim().min(1).max(120)).min(1).max(64),
+  capacityByCategory: z.record(z.string().trim().min(1).max(120), z.number().finite().min(0)).optional(),
+  enabled: z.boolean().optional(),
+});
+
+const marketTransportCorridorPatchSchema = z.object({
+  categories: z.array(z.string().trim().min(1).max(120)).min(1).max(64).optional(),
+  capacityByCategory: z.record(z.string().trim().min(1).max(120), z.number().finite().min(0)).optional(),
+  enabled: z.boolean().optional(),
+});
+
+const marketSanctionCreateSchema = z.object({
+  direction: z.enum(["import", "export", "both"]),
+  targetType: z.enum(["country", "market"]),
+  targetId: z.string().trim().min(1).max(120),
+  goods: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
+  mode: z.enum(["ban", "cap"]),
+  capAmountPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).nullable().optional(),
+  startTurn: z.coerce.number().int().min(1).optional(),
+  durationTurns: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER),
+  enabled: z.boolean().optional(),
+});
+
+const marketSanctionPatchSchema = z.object({
+  direction: z.enum(["import", "export", "both"]).optional(),
+  targetType: z.enum(["country", "market"]).optional(),
+  targetId: z.string().trim().min(1).max(120).optional(),
+  goods: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
+  mode: z.enum(["ban", "cap"]).optional(),
+  capAmountPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).nullable().optional(),
+  startTurn: z.coerce.number().int().min(1).optional(),
+  durationTurns: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
+  enabled: z.boolean().optional(),
+});
+
+function getMarketMemberProvinceIds(market: { memberCountryIds: string[] }): string[] {
+  const members = new Set(market.memberCountryIds);
+  return adm1ProvinceIndex
+    .filter((province) => {
+      const ownerCountryId = worldBase.provinceOwner[province.id] ?? null;
+      return Boolean(ownerCountryId && members.has(ownerCountryId));
+    })
+    .map((province) => province.id);
+}
+
+function normalizeTransportCorridorShape(params: {
+  categories: string[];
+  capacityByCategory?: Record<string, number>;
+}): { categories: string[]; capacityByCategory: Record<string, number> } {
+  const categories = [...new Set(params.categories.map((categoryId) => categoryId.trim()).filter(Boolean))];
+  const rawCapacity = normalizeCategoryAmountMap(params.capacityByCategory ?? {});
+  const capacityByCategory: Record<string, number> = {};
+  for (const categoryId of categories) {
+    const next = Number(rawCapacity[categoryId] ?? DEFAULT_TRANSPORT_CORRIDOR_CAPACITY);
+    if (!Number.isFinite(next) || next <= 0) continue;
+    capacityByCategory[categoryId] = round3(Math.max(0, next));
+  }
+  const normalizedCategories = categories.filter((categoryId) => (capacityByCategory[categoryId] ?? 0) > 0);
+  return {
+    categories: normalizedCategories,
+    capacityByCategory: Object.fromEntries(
+      Object.entries(capacityByCategory).filter(([categoryId]) => normalizedCategories.includes(categoryId)),
+    ),
+  };
+}
+
+async function buildMarketDetailsResponse(marketId: string): Promise<{
+  market: {
+    id: string;
+    name: string;
+    logoUrl: string | null;
+    ownerCountryId: string;
+    ownerCountryName: string;
+    capitalProvinceId: string | null;
+    memberCountryIds: string[];
+    visibility: "public" | "private";
+    createdAt: string;
+    members: Array<{ countryId: string; countryName: string; flagUrl: string | null; isOwner: boolean }>;
+    transportCorridors: TransportCorridorEntry[];
+  };
+}> {
+  const market = getMarketById(marketId);
+  if (!market) {
+    throw new Error("MARKET_NOT_FOUND");
+  }
+  const countries = await prisma.country.findMany({
+    where: { id: { in: market.memberCountryIds } },
+    select: { id: true, name: true, flagUrl: true },
+  });
+  const byId = new Map(countries.map((country) => [country.id, country] as const));
+  const members = market.memberCountryIds.map((countryId) => {
+    const country = byId.get(countryId);
+    return {
+      countryId,
+      countryName: country?.name ?? countryId,
+      flagUrl: country?.flagUrl ?? null,
+      isOwner: market.ownerCountryId === countryId,
+    };
+  });
+  return {
+    market: {
+      id: market.id,
+      name: getMarketDisplayName({
+        marketId: market.id,
+        marketName: market.name,
+        ownerCountryName: byId.get(market.ownerCountryId)?.name ?? market.ownerCountryId,
+      }),
+      logoUrl: market.logoUrl,
+      ownerCountryId: market.ownerCountryId,
+      ownerCountryName: byId.get(market.ownerCountryId)?.name ?? market.ownerCountryId,
+      capitalProvinceId: market.capitalProvinceId ?? null,
+      memberCountryIds: [...market.memberCountryIds],
+      visibility: market.visibility,
+      createdAt: market.createdAt,
+      members,
+      transportCorridors: getMarketTransportCorridors(market.id, { includeDisabled: true }),
+    },
+  };
+}
+
+async function enrichMarketInvites(
+  invites: Array<(typeof gameSettings.markets.marketInvitesById)[string]>,
+): Promise<
+  Array<
+    (typeof gameSettings.markets.marketInvitesById)[string] & {
+      marketName: string;
+      marketLogoUrl: string | null;
+      fromCountryName: string;
+      fromCountryFlagUrl: string | null;
+      toCountryName: string;
+      toCountryFlagUrl: string | null;
+    }
+  >
+> {
+  const countryIds = [...new Set(invites.flatMap((invite) => [invite.fromCountryId, invite.toCountryId]))];
+  const countries = countryIds.length
+    ? await prisma.country.findMany({ where: { id: { in: countryIds } }, select: { id: true, name: true, flagUrl: true } })
+    : [];
+  const countryById = new Map(countries.map((country) => [country.id, country] as const));
+  return invites.map((invite) => ({
+    ...invite,
+    marketName: getMarketDisplayName({
+      marketId: invite.marketId,
+      marketName: gameSettings.markets.marketById[invite.marketId]?.name ?? "",
+      ownerCountryName: countryById.get(gameSettings.markets.marketById[invite.marketId]?.ownerCountryId ?? "")?.name ?? null,
+    }),
+    marketLogoUrl: gameSettings.markets.marketById[invite.marketId]?.logoUrl ?? null,
+    fromCountryName: countryById.get(invite.fromCountryId)?.name ?? invite.fromCountryId,
+    fromCountryFlagUrl: countryById.get(invite.fromCountryId)?.flagUrl ?? null,
+    toCountryName: countryById.get(invite.toCountryId)?.name ?? invite.toCountryId,
+    toCountryFlagUrl: countryById.get(invite.toCountryId)?.flagUrl ?? null,
+  }));
+}
+
+async function enrichMarketSanctions(
+  sanctions: MarketSanctionEntry[],
+): Promise<
+  Array<
+    MarketSanctionEntry & {
+      initiatorCountryName: string;
+      targetName: string;
+      goodsNamed: Array<{ id: string; name: string }>;
+      activeNow: boolean;
+      expiresAtTurn: number;
+    }
+  >
+> {
+  const countryIds = new Set<string>();
+  for (const sanction of sanctions) {
+    countryIds.add(sanction.initiatorCountryId);
+    if (sanction.targetType === "country") countryIds.add(sanction.targetId);
+  }
+  const countries = countryIds.size
+    ? await prisma.country.findMany({
+        where: { id: { in: [...countryIds] } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const countryById = new Map(countries.map((country) => [country.id, country.name] as const));
+  const goodsById = new Map(gameSettings.content.goods.map((good) => [good.id, good.name] as const));
+  return sanctions.map((sanction) => {
+    const targetName =
+      sanction.targetType === "country"
+        ? countryById.get(sanction.targetId) ?? sanction.targetId
+        : getMarketDisplayName({
+            marketId: sanction.targetId,
+            marketName: gameSettings.markets.marketById[sanction.targetId]?.name ?? sanction.targetId,
+            ownerCountryName: null,
+          });
+    const goodsNamed = (sanction.goods ?? []).map((id) => ({ id, name: goodsById.get(id) ?? id }));
+    const expiresAtTurn = sanction.startTurn + sanction.durationTurns;
+    const activeNow =
+      sanction.enabled !== false && turnId >= sanction.startTurn && turnId < sanction.startTurn + sanction.durationTurns;
+    return {
+      ...sanction,
+      initiatorCountryName: countryById.get(sanction.initiatorCountryId) ?? sanction.initiatorCountryId,
+      targetName,
+      goodsNamed,
+      activeNow,
+      expiresAtTurn,
+    };
+  });
+}
+
+app.get("/markets/:marketId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  if (!marketId) {
+    return res.status(400).json({ error: "MARKET_ID_REQUIRED" });
+  }
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  const isMember = market.memberCountryIds.includes(auth.countryId);
+  const isPublic = market.visibility === "public";
+  if (!isMember && !isPublic) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  try {
+    return res.json(await buildMarketDetailsResponse(marketId));
+  } catch {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+});
+
+app.get("/markets", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  ensureMarketModelReady();
+  const countries = await prisma.country.findMany({
+    where: { id: { in: Object.values(gameSettings.markets.marketById).map((market) => market.ownerCountryId) } },
+    select: { id: true, name: true, flagUrl: true },
+  });
+  const countryById = new Map(countries.map((country) => [country.id, country] as const));
+  const markets = Object.values(gameSettings.markets.marketById)
+    .map((market) => {
+      const owner = countryById.get(market.ownerCountryId);
+      const isMember = market.memberCountryIds.includes(auth.countryId);
+      const pendingRequest = Object.values(gameSettings.markets.marketInvitesById).some(
+        (invite) =>
+          invite.marketId === market.id &&
+          invite.kind === "join-request" &&
+          invite.fromCountryId === auth.countryId &&
+          invite.status === "pending",
+      );
+      return {
+        id: market.id,
+        name: getMarketDisplayName({
+          marketId: market.id,
+          marketName: market.name,
+          ownerCountryName: owner?.name ?? market.ownerCountryId,
+        }),
+        logoUrl: market.logoUrl,
+        ownerCountryId: market.ownerCountryId,
+        ownerCountryName: owner?.name ?? market.ownerCountryId,
+        ownerCountryFlagUrl: owner?.flagUrl ?? null,
+        visibility: market.visibility,
+        membersCount: market.memberCountryIds.length,
+        isMember,
+        canJoinDirectly: !isMember && market.visibility === "public",
+        canRequestJoin: !isMember && market.visibility === "private" && !pendingRequest,
+        hasPendingJoinRequest: pendingRequest,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  return res.json({ markets });
+});
+
+app.patch("/markets/:marketId", upload.single("marketLogo"), async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketPatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    removeUploadedFile(req.file as Express.Multer.File | undefined);
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const logoFile = req.file as Express.Multer.File | undefined;
+  if (logoFile && !validateImageDimensions(logoFile)) {
+    removeUploadedFile(logoFile);
+    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "marketLogo", max: "256x256" });
+  }
+
+  if (typeof parsed.data.name === "string") {
+    market.name = parsed.data.name.trim();
+  }
+  if (typeof parsed.data.visibility === "string") {
+    market.visibility = normalizeMarketVisibility(parsed.data.visibility);
+  }
+  if (parsed.data.capitalProvinceId !== undefined) {
+    const nextCapital =
+      typeof parsed.data.capitalProvinceId === "string" && parsed.data.capitalProvinceId.trim().length > 0
+        ? parsed.data.capitalProvinceId.trim()
+        : null;
+    if (nextCapital == null) {
+      market.capitalProvinceId = null;
+    } else {
+      const provinceOwnerId = worldBase.provinceOwner[nextCapital] ?? null;
+      if (!provinceOwnerId || provinceOwnerId !== market.ownerCountryId) {
+        removeUploadedFile(logoFile);
+        return res.status(400).json({ error: "INVALID_MARKET_CAPITAL_PROVINCE" });
+      }
+      market.capitalProvinceId = nextCapital;
+    }
+  }
+  if (logoFile) {
+    const previous = market.logoUrl;
+    market.logoUrl = makeVersionedUploadUrl(`markets/${logoFile.filename}`);
+    if (previous) {
+      removeUploadedByUrl(previous);
+    }
+  }
+  market.id = marketId;
+  savePersistentState();
+  return res.json(await buildMarketDetailsResponse(marketId));
+});
+
+app.get("/markets/:marketId/corridors", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (!market.memberCountryIds.includes(auth.countryId)) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  return res.json({
+    marketId,
+    capitalProvinceId: market.capitalProvinceId ?? null,
+    corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
+  });
+});
+
+app.post("/markets/:marketId/corridors", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketTransportCorridorCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const fromProvinceId = parsed.data.fromProvinceId.trim();
+  const toProvinceId = parsed.data.toProvinceId.trim();
+  if (fromProvinceId === toProvinceId) {
+    return res.status(400).json({ error: "CORRIDOR_PROVINCES_MUST_DIFFER" });
+  }
+  const validMemberProvinceIds = new Set(getMarketMemberProvinceIds(market));
+  if (!validMemberProvinceIds.has(fromProvinceId) || !validMemberProvinceIds.has(toProvinceId)) {
+    return res.status(400).json({ error: "CORRIDOR_PROVINCE_OUTSIDE_MARKET" });
+  }
+  const normalized = normalizeTransportCorridorShape({
+    categories: parsed.data.categories,
+    capacityByCategory: parsed.data.capacityByCategory,
+  });
+  if (normalized.categories.length === 0) {
+    return res.status(400).json({ error: "CORRIDOR_NO_CATEGORIES" });
+  }
+  const corridorId = randomUUID();
+  const corridor: TransportCorridorEntry = {
+    id: corridorId,
+    marketId,
+    fromProvinceId,
+    toProvinceId,
+    categories: normalized.categories,
+    capacityByCategory: normalized.capacityByCategory,
+    enabled: parsed.data.enabled ?? true,
+    createdAt: new Date().toISOString(),
+  };
+  gameSettings.markets.transportCorridorsById[corridorId] = corridor;
+  savePersistentState();
+  return res.status(201).json({
+    corridor,
+    corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
+  });
+});
+
+app.patch("/markets/:marketId/corridors/:corridorId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const corridorId = String(req.params.corridorId || "").trim();
+  const corridor = gameSettings.markets.transportCorridorsById[corridorId];
+  if (!corridor || corridor.marketId !== marketId) {
+    return res.status(404).json({ error: "CORRIDOR_NOT_FOUND" });
+  }
+  const parsed = marketTransportCorridorPatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const nextCategories = parsed.data.categories ?? corridor.categories;
+  const nextCapacity = parsed.data.capacityByCategory ?? corridor.capacityByCategory;
+  const normalized = normalizeTransportCorridorShape({
+    categories: nextCategories,
+    capacityByCategory: nextCapacity,
+  });
+  if (normalized.categories.length === 0) {
+    return res.status(400).json({ error: "CORRIDOR_NO_CATEGORIES" });
+  }
+  corridor.categories = normalized.categories;
+  corridor.capacityByCategory = normalized.capacityByCategory;
+  if (typeof parsed.data.enabled === "boolean") {
+    corridor.enabled = parsed.data.enabled;
+  }
+  savePersistentState();
+  return res.json({
+    corridor,
+    corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }),
+  });
+});
+
+app.delete("/markets/:marketId/corridors/:corridorId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const corridorId = String(req.params.corridorId || "").trim();
+  const corridor = gameSettings.markets.transportCorridorsById[corridorId];
+  if (!corridor || corridor.marketId !== marketId) {
+    return res.status(404).json({ error: "CORRIDOR_NOT_FOUND" });
+  }
+  delete gameSettings.markets.transportCorridorsById[corridorId];
+  savePersistentState();
+  return res.json({ ok: true, corridorId, corridors: getMarketTransportCorridors(marketId, { includeDisabled: true }) });
+});
+
+app.post("/markets/:marketId/invites", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketInviteCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const toCountryId = parsed.data.toCountryId;
+  const target = await prisma.country.findUnique({ where: { id: toCountryId }, select: { id: true, name: true } });
+  if (!target) {
+    return res.status(404).json({ error: "COUNTRY_NOT_FOUND" });
+  }
+  if (market.memberCountryIds.includes(toCountryId)) {
+    return res.status(400).json({ error: "COUNTRY_ALREADY_IN_MARKET" });
+  }
+  const hasPending = Object.values(gameSettings.markets.marketInvitesById).some(
+    (invite) => invite.marketId === marketId && invite.toCountryId === toCountryId && invite.status === "pending",
+  );
+  if (hasPending) {
+    return res.status(409).json({ error: "INVITE_ALREADY_PENDING" });
+  }
+  const now = new Date();
+  const expiresInDays = parsed.data.expiresInDays ?? 14;
+  const expiresAt = new Date(now.getTime() + expiresInDays * 24 * 60 * 60 * 1000).toISOString();
+  const inviteId = randomUUID();
+  gameSettings.markets.marketInvitesById[inviteId] = {
+    id: inviteId,
+    marketId,
+    fromCountryId: auth.countryId,
+    toCountryId,
+    kind: "invite",
+    status: "pending",
+    expiresAt,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  savePersistentState();
+  return res.status(201).json({ invite: gameSettings.markets.marketInvitesById[inviteId] });
+});
+
+app.get("/markets/:marketId/invites", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const invites = Object.values(gameSettings.markets.marketInvitesById)
+    .filter((invite) => invite.marketId === marketId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return res.json({ invites: await enrichMarketInvites(invites) });
+});
+
+app.get("/markets/:marketId/sanctions", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  const isOwner = market.ownerCountryId === auth.countryId;
+  const isMember = market.memberCountryIds.includes(auth.countryId);
+  if (!isOwner && !isMember) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  const sanctions = Object.values(gameSettings.markets.sanctionsById ?? {})
+    .filter((sanction) => sanction.initiatorCountryId === market.ownerCountryId)
+    .sort((a, b) => b.startTurn - a.startTurn || a.id.localeCompare(b.id));
+  return res.json({
+    sanctions: await enrichMarketSanctions(sanctions),
+    ownerCountryId: market.ownerCountryId,
+    turnId,
+  });
+});
+
+app.post("/markets/:marketId/sanctions", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketSanctionCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const payload = parsed.data;
+  if (payload.targetType === "country") {
+    const countryExists = await prisma.country.findUnique({
+      where: { id: payload.targetId },
+      select: { id: true },
+    });
+    if (!countryExists) {
+      return res.status(404).json({ error: "TARGET_COUNTRY_NOT_FOUND" });
+    }
+  } else {
+    const targetMarket = getMarketById(payload.targetId);
+    if (!targetMarket) {
+      return res.status(404).json({ error: "TARGET_MARKET_NOT_FOUND" });
+    }
+  }
+  const validGoods = new Set(gameSettings.content.goods.map((good) => good.id));
+  const goods = [...new Set((payload.goods ?? []).map((goodId) => goodId.trim()).filter(Boolean))].filter((goodId) =>
+    validGoods.has(goodId),
+  );
+  if ((payload.goods ?? []).length > 0 && goods.length === 0) {
+    return res.status(400).json({ error: "NO_VALID_GOODS" });
+  }
+  if (payload.mode === "cap" && (payload.capAmountPerTurn == null || payload.capAmountPerTurn <= 0)) {
+    return res.status(400).json({ error: "CAP_AMOUNT_REQUIRED" });
+  }
+  const sanctionId = randomUUID();
+  const sanction: MarketSanctionEntry = {
+    id: sanctionId,
+    initiatorCountryId: market.ownerCountryId,
+    direction: payload.direction,
+    targetType: payload.targetType,
+    targetId: payload.targetId,
+    goods,
+    mode: payload.mode,
+    capAmountPerTurn: payload.mode === "cap" ? round3(Math.max(0, Number(payload.capAmountPerTurn ?? 0))) : null,
+    startTurn: payload.startTurn ?? turnId,
+    durationTurns: payload.durationTurns,
+    enabled: payload.enabled ?? true,
+  };
+  gameSettings.markets.sanctionsById[sanctionId] = sanction;
+  savePersistentState();
+  return res.status(201).json({ sanction: (await enrichMarketSanctions([sanction]))[0] });
+});
+
+app.patch("/markets/:marketId/sanctions/:sanctionId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const sanctionId = String(req.params.sanctionId || "").trim();
+  const sanction = gameSettings.markets.sanctionsById[sanctionId];
+  if (!sanction || sanction.initiatorCountryId !== market.ownerCountryId) {
+    return res.status(404).json({ error: "SANCTION_NOT_FOUND" });
+  }
+  const parsed = marketSanctionPatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const payload = parsed.data;
+  const nextTargetType = payload.targetType ?? sanction.targetType;
+  const nextTargetId = payload.targetId ?? sanction.targetId;
+  if (nextTargetType === "country") {
+    const countryExists = await prisma.country.findUnique({ where: { id: nextTargetId }, select: { id: true } });
+    if (!countryExists) return res.status(404).json({ error: "TARGET_COUNTRY_NOT_FOUND" });
+  } else {
+    const targetMarket = getMarketById(nextTargetId);
+    if (!targetMarket) return res.status(404).json({ error: "TARGET_MARKET_NOT_FOUND" });
+  }
+  if (Array.isArray(payload.goods)) {
+    const validGoods = new Set(gameSettings.content.goods.map((good) => good.id));
+    const goods = [...new Set(payload.goods.map((goodId) => goodId.trim()).filter(Boolean))].filter((goodId) =>
+      validGoods.has(goodId),
+    );
+    if (payload.goods.length > 0 && goods.length === 0) {
+      return res.status(400).json({ error: "NO_VALID_GOODS" });
+    }
+    sanction.goods = goods;
+  }
+  sanction.direction = payload.direction ?? sanction.direction;
+  sanction.targetType = nextTargetType;
+  sanction.targetId = nextTargetId;
+  sanction.mode = payload.mode ?? sanction.mode;
+  sanction.startTurn = payload.startTurn ?? sanction.startTurn;
+  sanction.durationTurns = payload.durationTurns ?? sanction.durationTurns;
+  sanction.enabled = payload.enabled ?? sanction.enabled;
+  if (sanction.mode === "cap") {
+    const cap = payload.capAmountPerTurn ?? sanction.capAmountPerTurn;
+    if (cap == null || cap <= 0) {
+      return res.status(400).json({ error: "CAP_AMOUNT_REQUIRED" });
+    }
+    sanction.capAmountPerTurn = round3(Math.max(0, Number(cap)));
+  } else {
+    sanction.capAmountPerTurn = null;
+  }
+  savePersistentState();
+  return res.json({ sanction: (await enrichMarketSanctions([sanction]))[0] });
+});
+
+app.delete("/markets/:marketId/sanctions/:sanctionId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const sanctionId = String(req.params.sanctionId || "").trim();
+  const sanction = gameSettings.markets.sanctionsById[sanctionId];
+  if (!sanction || sanction.initiatorCountryId !== market.ownerCountryId) {
+    return res.status(404).json({ error: "SANCTION_NOT_FOUND" });
+  }
+  delete gameSettings.markets.sanctionsById[sanctionId];
+  savePersistentState();
+  return res.json({ ok: true });
+});
+
+app.get("/country/market-invites", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const nowMs = Date.now();
+  const invites = Object.values(gameSettings.markets.marketInvitesById)
+    .filter((invite) => invite.toCountryId === auth.countryId && invite.status === "pending")
+    .filter((invite) => new Date(invite.expiresAt).getTime() > nowMs)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return res.json({ invites: await enrichMarketInvites(invites) });
+});
+
+app.patch("/market-invites/:inviteId", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const parsed = marketInviteActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const inviteId = String(req.params.inviteId || "").trim();
+  const invite = gameSettings.markets.marketInvitesById[inviteId];
+  if (!invite) {
+    return res.status(404).json({ error: "INVITE_NOT_FOUND" });
+  }
+  if (invite.status !== "pending") {
+    return res.status(409).json({ error: "INVITE_ALREADY_RESOLVED" });
+  }
+  const market = getMarketById(invite.marketId);
+  const isRecipient = invite.toCountryId === auth.countryId;
+  const isMarketOwner = market?.ownerCountryId === auth.countryId;
+  const isSender = invite.fromCountryId === auth.countryId;
+  if (parsed.data.action === "cancel") {
+    if (!isSender && !isMarketOwner) {
+      return res.status(403).json({ error: "FORBIDDEN" });
+    }
+    invite.status = "canceled";
+    invite.updatedAt = new Date().toISOString();
+    savePersistentState();
+    return res.json({ invite });
+  }
+  if (!isRecipient) {
+    return res.status(403).json({ error: "FORBIDDEN" });
+  }
+  if (new Date(invite.expiresAt).getTime() <= Date.now()) {
+    invite.status = "canceled";
+    invite.updatedAt = new Date().toISOString();
+    savePersistentState();
+    return res.status(409).json({ error: "INVITE_EXPIRED" });
+  }
+  invite.status = parsed.data.action === "accept" ? "accepted" : "rejected";
+  invite.updatedAt = new Date().toISOString();
+  if (parsed.data.action === "accept") {
+    const targetCountryId = invite.kind === "join-request" ? invite.fromCountryId : invite.toCountryId;
+    upsertMarketMembership(targetCountryId, invite.marketId);
+    rebuildCountryMarketIndexFromMembers();
+  }
+  savePersistentState();
+  return res.json({ invite });
+});
+
+app.post("/markets/:marketId/leave", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (!market.memberCountryIds.includes(auth.countryId)) {
+    return res.status(403).json({ error: "NOT_MARKET_MEMBER" });
+  }
+  if (market.ownerCountryId === auth.countryId) {
+    return res.status(400).json({ error: "OWNER_CANNOT_LEAVE" });
+  }
+  upsertMarketMembership(auth.countryId, auth.countryId);
+  rebuildCountryMarketIndexFromMembers();
+  savePersistentState();
+  return res.json({ ok: true, marketIdLeft: marketId, newMarketId: getCountryMarketId(auth.countryId) });
+});
+
+app.post("/markets/:marketId/join", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.memberCountryIds.includes(auth.countryId)) {
+    return res.status(409).json({ error: "COUNTRY_ALREADY_IN_MARKET" });
+  }
+  if (market.visibility === "public") {
+    upsertMarketMembership(auth.countryId, marketId);
+    rebuildCountryMarketIndexFromMembers();
+    savePersistentState();
+    return res.json({ mode: "joined", ...(await buildMarketDetailsResponse(marketId)) });
+  }
+  const hasPending = Object.values(gameSettings.markets.marketInvitesById).some(
+    (invite) =>
+      invite.marketId === marketId &&
+      invite.kind === "join-request" &&
+      invite.fromCountryId === auth.countryId &&
+      invite.toCountryId === market.ownerCountryId &&
+      invite.status === "pending",
+  );
+  if (hasPending) {
+    return res.status(409).json({ error: "JOIN_REQUEST_ALREADY_PENDING" });
+  }
+  const now = new Date();
+  const inviteId = randomUUID();
+  gameSettings.markets.marketInvitesById[inviteId] = {
+    id: inviteId,
+    marketId,
+    fromCountryId: auth.countryId,
+    toCountryId: market.ownerCountryId,
+    kind: "join-request",
+    status: "pending",
+    expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  savePersistentState();
+  return res.json({ mode: "requested", invite: gameSettings.markets.marketInvitesById[inviteId] });
+});
+
+app.post("/markets/:marketId/transfer-owner", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const marketId = String(req.params.marketId || "").trim();
+  const market = getMarketById(marketId);
+  if (!market) {
+    return res.status(404).json({ error: "MARKET_NOT_FOUND" });
+  }
+  if (market.ownerCountryId !== auth.countryId) {
+    return res.status(403).json({ error: "MARKET_OWNER_ONLY" });
+  }
+  const parsed = marketTransferOwnerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const nextOwnerCountryId = parsed.data.nextOwnerCountryId;
+  if (!market.memberCountryIds.includes(nextOwnerCountryId)) {
+    return res.status(400).json({ error: "NEXT_OWNER_NOT_MARKET_MEMBER" });
+  }
+  market.ownerCountryId = nextOwnerCountryId;
+  savePersistentState();
+  return res.json(await buildMarketDetailsResponse(marketId));
 });
 
 app.get("/admin/ws-delta-metrics", async (req, res) => {
@@ -3703,6 +7900,33 @@ const gameSettingsSchema = z.object({
       baseDucatsPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       baseGoldPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       demolitionCostConstructionPercent: z.coerce.number().int().min(0).max(100).optional(),
+      marketPriceSmoothing: z.coerce.number().min(0).max(1).optional(),
+      explorationBaseEmptyChancePct: z.coerce.number().min(0).max(100).optional(),
+      explorationDepletionPerAttemptPct: z.coerce.number().min(0).max(100).optional(),
+      explorationDurationTurns: z.coerce.number().int().min(1).max(3650).optional(),
+      explorationRollsPerExpedition: z.coerce.number().int().min(1).max(100).optional(),
+    })
+    .optional(),
+  markets: z
+    .object({
+      countryMarketByCountryId: z.record(z.string().trim().min(1).max(120)).optional(),
+      sanctionsById: z
+        .record(
+          z.object({
+            id: z.string().trim().min(1).max(120).optional(),
+            initiatorCountryId: z.string().trim().min(1).max(120),
+            direction: z.enum(["import", "export", "both"]),
+            targetType: z.enum(["country", "market"]),
+            targetId: z.string().trim().min(1).max(120),
+            goods: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
+            mode: z.enum(["ban", "cap"]),
+            capAmountPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).nullable().optional(),
+            startTurn: z.coerce.number().int().min(1),
+            durationTurns: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER),
+            enabled: z.boolean().optional(),
+          }),
+        )
+        .optional(),
     })
     .optional(),
   colonization: z
@@ -3736,6 +7960,7 @@ const gameSettingsSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       secondsPerTurn: z.coerce.number().int().min(10).max(2_592_000).optional(),
+      pauseWhenNoPlayersOnline: z.boolean().optional(),
     })
     .optional(),
   map: z
@@ -3844,7 +8069,7 @@ app.patch("/admin/civilopedia/image", upload.single("civilopediaImage"), async (
     removeUploadedFile(file);
     return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "64x64" });
   }
-  return res.json({ imageUrl: `/uploads/civilopedia/${file.filename}` });
+  return res.json({ imageUrl: makeVersionedUploadUrl(`civilopedia/${file.filename}`) });
 });
 
 app.patch("/admin/civilopedia/inline-image", upload.single("civilopediaImage"), async (req, res) => {
@@ -3861,7 +8086,7 @@ app.patch("/admin/civilopedia/inline-image", upload.single("civilopediaImage"), 
     removeUploadedFile(file);
     return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", max: "64x64" });
   }
-  return res.json({ imageUrl: `/uploads/civilopedia/${file.filename}` });
+  return res.json({ imageUrl: makeVersionedUploadUrl(`civilopedia/${file.filename}`) });
 });
 
 app.patch(
@@ -3910,7 +8135,7 @@ app.patch(
     for (const [key, file] of Object.entries(nextFiles) as Array<[keyof GameSettings["resourceIcons"], Express.Multer.File | undefined]>) {
       if (!file) continue;
       const previousUrl = gameSettings.resourceIcons[key];
-      gameSettings.resourceIcons[key] = `/uploads/resource-icons/${file.filename}`;
+      gameSettings.resourceIcons[key] = makeVersionedUploadUrl(`resource-icons/${file.filename}`);
       if (previousUrl) {
         removeUploadedByUrl(previousUrl);
       }
@@ -3952,7 +8177,7 @@ app.patch("/admin/ui-background", upload.single("uiBackground"), async (req, res
   }
 
   const previousUrl = gameSettings.map.backgroundImageUrl;
-  gameSettings.map.backgroundImageUrl = `/uploads/ui-backgrounds/${file.filename}`;
+  gameSettings.map.backgroundImageUrl = makeVersionedUploadUrl(`ui-backgrounds/${file.filename}`);
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
   }
@@ -3978,9 +8203,30 @@ const culturePayloadSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().trim().max(5000).optional().default(""),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+  resourceCategoryId: z.string().trim().min(1).max(120).nullable().optional(),
+  isResourceDiscoverable: z.boolean().optional(),
   basePrice: z.number().finite().min(0).optional(),
+  minPrice: z.number().finite().min(0).optional(),
+  maxPrice: z.number().finite().min(0).optional(),
+  infraPerUnit: z.number().finite().min(0).optional(),
+  infrastructureCostPerUnit: z.number().finite().min(0).optional(),
+  explorationBaseWeight: z.number().finite().min(0).optional(),
+  explorationSmallVeinChancePct: z.number().finite().min(0).optional(),
+  explorationMediumVeinChancePct: z.number().finite().min(0).optional(),
+  explorationLargeVeinChancePct: z.number().finite().min(0).optional(),
+  explorationSmallVeinMin: z.number().finite().min(0).optional(),
+  explorationSmallVeinMax: z.number().finite().min(0).optional(),
+  explorationMediumVeinMin: z.number().finite().min(0).optional(),
+  explorationMediumVeinMax: z.number().finite().min(0).optional(),
+  explorationLargeVeinMin: z.number().finite().min(0).optional(),
+  explorationLargeVeinMax: z.number().finite().min(0).optional(),
+  baseWage: z.number().finite().min(0).optional(),
   costConstruction: z.number().int().min(1).optional(),
   costDucats: z.number().finite().min(0).optional(),
+  startingDucats: z.number().finite().min(0).optional(),
+  extractionGoodId: z.string().trim().min(1).max(120).nullable().optional(),
+  extractionAmountPerTurn: z.number().finite().min(0).optional(),
+  extractionRequiresDeposit: z.boolean().optional(),
   inputs: z
     .array(
       z.object({
@@ -4005,20 +8251,23 @@ const culturePayloadSchema = z.object({
       }),
     )
     .optional(),
+  infrastructureUse: z.number().finite().min(0).optional(),
+  marketInfrastructureByCategory: z.record(z.string().trim().min(1).max(120), z.number().finite().min(0)).optional(),
   allowedCountryIds: z.array(z.string().trim().min(1).max(120)).optional(),
   deniedCountryIds: z.array(z.string().trim().min(1).max(120)).optional(),
   countryBuildLimits: z
     .array(
       z.object({
         countryId: z.string().trim().min(1).max(120),
-        limit: z.number().int().min(1),
+        limit: z.number().int().min(1).nullable(),
       }),
     )
     .optional(),
-  globalBuildLimit: z.number().int().min(1).nullable().optional(),
+  globalBuildLimit: z.number().int().min(0).nullable().optional(),
 });
 const contentEntryKindSchema = z.enum([
   "cultures",
+  "resourceCategories",
   "religions",
   "professions",
   "ideologies",
@@ -4045,22 +8294,87 @@ function sanitizeContentEntryByKind(
   payload: z.infer<typeof culturePayloadSchema>,
 ): Partial<GameContentEntry & GoodContentEntry & BuildingContentEntry> {
   if (kind === "goods") {
+    const basePrice = Number((payload.basePrice ?? DEFAULT_RESOURCE_BASE_PRICE).toFixed(3));
+    const minPrice = Number(Math.max(0, payload.minPrice ?? basePrice * 0.1).toFixed(3));
+    const maxPrice = Number(Math.max(minPrice, payload.maxPrice ?? basePrice * 10).toFixed(3));
+    const infraRaw = payload.infrastructureCostPerUnit ?? payload.infraPerUnit ?? 1;
+    const infraPerUnit = Number(Math.max(0.01, Math.max(0, infraRaw)).toFixed(3));
+    const resourceCategoryId =
+      payload.resourceCategoryId === undefined
+        ? undefined
+        : typeof payload.resourceCategoryId === "string" && payload.resourceCategoryId.trim().length > 0
+          ? payload.resourceCategoryId.trim()
+          : null;
+    const isResourceDiscoverable = payload.isResourceDiscoverable ?? false;
+    const explorationBaseWeight = Number(Math.max(0, payload.explorationBaseWeight ?? 1).toFixed(3));
+    const smallChanceRaw = Math.max(0, Number(payload.explorationSmallVeinChancePct ?? 60));
+    const mediumChanceRaw = Math.max(0, Number(payload.explorationMediumVeinChancePct ?? 30));
+    const largeChanceRaw = Math.max(0, Number(payload.explorationLargeVeinChancePct ?? 10));
+    const chanceSum = smallChanceRaw + mediumChanceRaw + largeChanceRaw;
+    const chanceDiv = chanceSum > 0 ? chanceSum / 100 : 1;
+    const explorationSmallVeinChancePct = Number((chanceSum > 0 ? smallChanceRaw / chanceDiv : 60).toFixed(3));
+    const explorationMediumVeinChancePct = Number((chanceSum > 0 ? mediumChanceRaw / chanceDiv : 30).toFixed(3));
+    const explorationLargeVeinChancePct = Number((chanceSum > 0 ? largeChanceRaw / chanceDiv : 10).toFixed(3));
+    const explorationSmallVeinMin = Number(Math.max(0, payload.explorationSmallVeinMin ?? 10).toFixed(3));
+    const explorationSmallVeinMax = Number(
+      Math.max(explorationSmallVeinMin, payload.explorationSmallVeinMax ?? 100).toFixed(3),
+    );
+    const explorationMediumVeinMin = Number(Math.max(0, payload.explorationMediumVeinMin ?? 100).toFixed(3));
+    const explorationMediumVeinMax = Number(
+      Math.max(explorationMediumVeinMin, payload.explorationMediumVeinMax ?? 500).toFixed(3),
+    );
+    const explorationLargeVeinMin = Number(Math.max(0, payload.explorationLargeVeinMin ?? 500).toFixed(3));
+    const explorationLargeVeinMax = Number(
+      Math.max(explorationLargeVeinMin, payload.explorationLargeVeinMax ?? 2000).toFixed(3),
+    );
     return {
-      basePrice: Number((payload.basePrice ?? 1).toFixed(3)),
+      resourceCategoryId,
+      isResourceDiscoverable,
+      basePrice,
+      minPrice,
+      maxPrice,
+      infraPerUnit,
+      infrastructureCostPerUnit: infraPerUnit,
+      explorationBaseWeight,
+      explorationSmallVeinChancePct,
+      explorationMediumVeinChancePct,
+      explorationLargeVeinChancePct,
+      explorationSmallVeinMin,
+      explorationSmallVeinMax,
+      explorationMediumVeinMin,
+      explorationMediumVeinMax,
+      explorationLargeVeinMin,
+      explorationLargeVeinMax,
+    };
+  }
+  if (kind === "professions") {
+    return {
+      baseWage: Number(Math.max(0, payload.baseWage ?? 1).toFixed(3)),
     };
   }
   if (kind === "buildings") {
     return {
       costConstruction: Math.max(1, Math.floor(payload.costConstruction ?? 100)),
       costDucats: Number(Math.max(0, payload.costDucats ?? 10).toFixed(3)),
+      startingDucats: Number(Math.max(0, payload.startingDucats ?? 0).toFixed(3)),
+      extractionGoodId:
+        payload.extractionGoodId === undefined
+          ? undefined
+          : typeof payload.extractionGoodId === "string" && payload.extractionGoodId.trim().length > 0
+            ? payload.extractionGoodId.trim()
+            : null,
+      extractionAmountPerTurn: Number(Math.max(0, payload.extractionAmountPerTurn ?? 0).toFixed(3)),
+      extractionRequiresDeposit: payload.extractionRequiresDeposit ?? true,
       inputs: normalizeGoodFlows(payload.inputs),
       outputs: normalizeGoodFlows(payload.outputs),
       workforceRequirements: normalizeWorkforceRequirements(payload.workforceRequirements),
+      infrastructureUse: Number(Math.max(0, payload.infrastructureUse ?? 0).toFixed(3)),
+      marketInfrastructureByCategory: normalizeCategoryAmountMap(payload.marketInfrastructureByCategory),
       allowedCountryIds: normalizeCountryIdList(payload.allowedCountryIds),
       deniedCountryIds: normalizeCountryIdList(payload.deniedCountryIds),
       countryBuildLimits: normalizeBuildingCountryLimits(payload.countryBuildLimits),
       globalBuildLimit:
-        payload.globalBuildLimit == null
+        payload.globalBuildLimit == null || Number(payload.globalBuildLimit) <= 0
           ? null
           : Math.max(1, Math.floor(Number(payload.globalBuildLimit))),
     };
@@ -4196,9 +8510,10 @@ app.patch("/admin/content/entries/:kind/:entryId/logo", upload.single("cultureLo
     return res.status(400).json({ error: "IMAGE_INVALID" });
   }
   const previousUrl = items[index].logoUrl;
+  const uploadUrlSegment = resolveContentUploadUrlSegment(kind);
   items[index] = {
     ...items[index],
-    logoUrl: `/uploads/${kind}/${file.filename}`,
+    logoUrl: makeVersionedUploadUrl(`${uploadUrlSegment}/${file.filename}`),
   };
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
@@ -4263,7 +8578,7 @@ app.patch("/admin/content/entries/races/:entryId/portraits/:slot", upload.single
   const previousUrl = gameSettings.content.races[index][key] ?? null;
   gameSettings.content.races[index] = {
     ...gameSettings.content.races[index],
-    [key]: `/uploads/races/${file.filename}`,
+    [key]: makeVersionedUploadUrl(`races/${file.filename}`),
   };
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
@@ -4424,7 +8739,7 @@ app.patch("/admin/content/cultures/:cultureId/logo", upload.single("cultureLogo"
   const previousUrl = gameSettings.content.cultures[index].logoUrl;
   gameSettings.content.cultures[index] = {
     ...gameSettings.content.cultures[index],
-    logoUrl: `/uploads/cultures/${file.filename}`,
+    logoUrl: makeVersionedUploadUrl(`cultures/${file.filename}`),
   };
   if (previousUrl) {
     removeUploadedByUrl(previousUrl);
@@ -4510,6 +8825,32 @@ app.patch("/admin/game-settings", async (req, res) => {
     if (typeof nextEconomy.demolitionCostConstructionPercent === "number") {
       gameSettings.economy.demolitionCostConstructionPercent = nextEconomy.demolitionCostConstructionPercent;
     }
+    if (typeof nextEconomy.marketPriceSmoothing === "number") {
+      gameSettings.economy.marketPriceSmoothing = nextEconomy.marketPriceSmoothing;
+    }
+    if (typeof nextEconomy.explorationBaseEmptyChancePct === "number") {
+      gameSettings.economy.explorationBaseEmptyChancePct = nextEconomy.explorationBaseEmptyChancePct;
+    }
+    if (typeof nextEconomy.explorationDepletionPerAttemptPct === "number") {
+      gameSettings.economy.explorationDepletionPerAttemptPct = nextEconomy.explorationDepletionPerAttemptPct;
+    }
+    if (typeof nextEconomy.explorationDurationTurns === "number") {
+      gameSettings.economy.explorationDurationTurns = nextEconomy.explorationDurationTurns;
+    }
+    if (typeof nextEconomy.explorationRollsPerExpedition === "number") {
+      gameSettings.economy.explorationRollsPerExpedition = nextEconomy.explorationRollsPerExpedition;
+    }
+  }
+  const nextMarkets = parsed.data.markets;
+  if (nextMarkets?.countryMarketByCountryId && typeof nextMarkets.countryMarketByCountryId === "object") {
+    gameSettings.markets.countryMarketByCountryId = Object.fromEntries(
+      Object.entries(nextMarkets.countryMarketByCountryId)
+        .map(([countryId, marketId]) => [countryId, normalizeMarketId(marketId)])
+        .filter((row): row is [string, string] => Boolean(row[0] && row[1])),
+    );
+  }
+  if (nextMarkets?.sanctionsById && typeof nextMarkets.sanctionsById === "object") {
+    gameSettings.markets.sanctionsById = normalizeMarketSanctionsMap(nextMarkets.sanctionsById);
   }
 
   const nextColonization = parsed.data.colonization;
@@ -4592,6 +8933,9 @@ app.patch("/admin/game-settings", async (req, res) => {
       }
       gameSettings.turnTimer.secondsPerTurn = nextSeconds;
     }
+    if (typeof nextTurnTimer.pauseWhenNoPlayersOnline === "boolean") {
+      gameSettings.turnTimer.pauseWhenNoPlayersOnline = nextTurnTimer.pauseWhenNoPlayersOnline;
+    }
     if (turnTimerConfigChanged) {
       resetTurnTimerAnchor();
     }
@@ -4615,6 +8959,7 @@ app.patch("/admin/game-settings", async (req, res) => {
 
   const changedSections = [
     parsed.data.economy ? "экономика" : null,
+    parsed.data.markets ? "рынки" : null,
     parsed.data.colonization ? "колонизация" : null,
     parsed.data.customization ? "кастомизация" : null,
     parsed.data.eventLog ? "журнал событий" : null,
@@ -4670,6 +9015,9 @@ const buildDemolishSchema = z.object({
 const provinceRenameSchema = z.object({
   provinceId: z.string().min(1),
   provinceName: z.string().trim().min(1).max(64),
+});
+const explorationActionSchema = z.object({
+  provinceId: z.string().min(1),
 });
 
 app.post("/country/colonization/start", async (req, res) => {
@@ -4816,6 +9164,40 @@ app.post("/country/colonization/cancel", async (req, res) => {
   return res.json({ ok: true, worldBase, turnId });
 });
 
+app.post("/country/exploration/start", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  const parsed = explorationActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+  const { provinceId } = parsed.data;
+  if ((worldBase.provinceOwner[provinceId] ?? null) !== auth.countryId) {
+    return res.status(403).json({ error: "PROVINCE_NOT_OWNED" });
+  }
+  const queue = [...(worldBase.provinceResourceExplorationQueueByProvince[provinceId] ?? [])];
+  if (queue.some((project) => project.requestedByCountryId === auth.countryId)) {
+    return res.status(409).json({ error: "EXPLORATION_ALREADY_QUEUED" });
+  }
+  const durationTurns = Math.max(
+    1,
+    Math.floor(Number(gameSettings.economy.explorationDurationTurns ?? DEFAULT_EXPLORATION_DURATION_TURNS)),
+  );
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceResourceExplorationQueueByProvince);
+  queue.push({
+    queueId: randomUUID(),
+    requestedByCountryId: auth.countryId,
+    startedTurnId: turnId,
+    turnsRemaining: durationTurns,
+  });
+  worldBase.provinceResourceExplorationQueueByProvince[provinceId] = queue;
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+  return res.json({ ok: true, provinceId, queue: worldBase.provinceResourceExplorationQueueByProvince[provinceId] });
+});
+
 app.post("/country/build/cancel", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth) {
@@ -4951,7 +9333,19 @@ app.post("/country/build/demolish", async (req, res) => {
       WORLD_DELTA_MASK.provinceBuildingDucatsByProvince,
   );
   countryResource.construction = Math.max(0, countryResource.construction - demolitionCostConstruction);
-  const nextInstances = instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
+  const previousTotalLevel = matchingInstances.reduce(
+    (sum, instance) => sum + Math.max(1, Math.floor(Number(instance.level ?? 1))),
+    0,
+  );
+  const targetLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
+  const nextInstances =
+    targetLevel > 1
+      ? instances.map((instance) =>
+          instance.instanceId === targetInstance.instanceId
+            ? { ...instance, level: targetLevel - 1 }
+            : instance,
+        )
+      : instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
   worldBase.provinceBuildingsByProvince[provinceId] = nextInstances;
   const buildingDucats = worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {};
   const remainingByType = nextInstances.some((instance) => instance.buildingId === buildingId);
@@ -4968,8 +9362,8 @@ app.post("/country/build/demolish", async (req, res) => {
     provinceId,
     buildingId,
     removedInstanceId: targetInstance.instanceId,
-    previousCount: matchingInstances.length,
-    newCount: Math.max(0, matchingInstances.length - 1),
+    previousCount: previousTotalLevel,
+    newCount: Math.max(0, previousTotalLevel - 1),
     demolitionCostConstruction,
     demolitionPercent,
     constructionLeft: countryResource.construction,
@@ -5063,6 +9457,7 @@ app.patch("/country/province-rename", async (req, res) => {
 
 const adminProvinceColonizationSchema = z.object({
   colonizationCost: z.coerce.number().int().min(1).max(SETTINGS_MAX_NUMBER).optional(),
+  infrastructureCapacity: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).optional(),
   colonizationDisabled: z.boolean().optional(),
   ownerCountryId: z.string().min(1).nullable().optional(),
   resetColonizationCostToAuto: z.boolean().optional(),
@@ -5158,12 +9553,16 @@ app.get("/admin/provinces", async (req, res) => {
     const provinceName = province.name;
     const cfg = getProvinceColonizationConfig(provinceId);
     const population = worldBase.provincePopulationByProvince[provinceId] ?? null;
+    const infrastructureCapacity = round3(
+      Math.max(0, Number(worldBase.provinceInfrastructureByProvince[provinceId] ?? DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY)),
+    );
     return {
       id: provinceId,
       name: provinceName,
       areaKm2: province.areaKm2,
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
+      infrastructureCapacity,
       colonizationDisabled: cfg.disabled,
       manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
@@ -5384,7 +9783,8 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
     WORLD_DELTA_MASK.resourcesByCountry |
       WORLD_DELTA_MASK.provinceOwner |
       WORLD_DELTA_MASK.colonyProgressByProvince |
-      WORLD_DELTA_MASK.provinceColonizationByProvince,
+      WORLD_DELTA_MASK.provinceColonizationByProvince |
+      WORLD_DELTA_MASK.provinceInfrastructureByProvince,
   );
   let clearedProgress = false;
 
@@ -5404,6 +9804,9 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
     }
   }
   worldBase.provinceColonizationByProvince[provinceId] = cfg;
+  if (typeof parsed.data.infrastructureCapacity === "number") {
+    worldBase.provinceInfrastructureByProvince[provinceId] = round3(Math.max(0, parsed.data.infrastructureCapacity));
+  }
 
   if (parsed.data.ownerCountryId !== undefined) {
     const nextOwner = parsed.data.ownerCountryId;
@@ -5445,6 +9848,9 @@ app.patch("/admin/provinces/:provinceId", async (req, res) => {
       areaKm2: provinceIndexEntry.areaKm2,
       ownerCountryId: worldBase.provinceOwner[provinceId] ?? null,
       colonizationCost: cfg.cost,
+      infrastructureCapacity: round3(
+        Math.max(0, Number(worldBase.provinceInfrastructureByProvince[provinceId] ?? DEFAULT_PROVINCE_INFRASTRUCTURE_CAPACITY)),
+      ),
       colonizationDisabled: cfg.disabled,
       manualCost: cfg.manualCost,
       colonyProgressByCountry: worldBase.colonyProgressByProvince[provinceId] ?? {},
@@ -5517,6 +9923,15 @@ const adminCountryUpdateSchema = z.object({
       const n = Number(v);
       return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : undefined;
     }),
+  marketId: z
+    .string()
+    .optional()
+    .transform((v) => {
+      if (v == null) return undefined;
+      const next = v.trim();
+      if (!next) return null;
+      return next;
+    }),
 });
 
 app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount: 1 }, { name: "crest", maxCount: 1 }]), async (req, res) => {
@@ -5540,16 +9955,20 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
   const flagFile = files?.flag?.[0];
   const crestFile = files?.crest?.[0];
 
-  if (flagFile && !validateImageDimensions(flagFile)) {
+  if (flagFile && !validateImageRule(flagFile, FLAG_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "192x128", ratio: "3:2" });
   }
 
-  if (crestFile && !validateImageDimensions(crestFile)) {
+  if (crestFile && !validateImageRule(crestFile, CREST_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "128x192", ratio: "2:3" });
   }
 
   const data: { name?: string; color?: string; isAdmin?: boolean; ignoreUntilTurn?: number | null; flagUrl?: string | null; crestUrl?: string | null } = {};
@@ -5566,10 +9985,10 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
     data.ignoreUntilTurn = parsed.data.ignoreUntilTurn === 0 ? null : parsed.data.ignoreUntilTurn;
   }
   if (flagFile) {
-    data.flagUrl = `/uploads/flags/${flagFile.filename}`;
+    data.flagUrl = makeVersionedUploadUrl(`flags/${flagFile.filename}`);
   }
   if (crestFile) {
-    data.crestUrl = `/uploads/crests/${crestFile.filename}`;
+    data.crestUrl = makeVersionedUploadUrl(`crests/${crestFile.filename}`);
   }
 
   try {
@@ -5578,6 +9997,9 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
       data,
       select: countrySelect,
     });
+    if (parsed.data.marketId !== undefined) {
+      setCountryMarketId(target.id, parsed.data.marketId);
+    }
 
     if (flagFile) {
       removeUploadedByUrl(target.flagUrl);
@@ -5586,6 +10008,7 @@ app.patch("/admin/countries/:countryId", upload.fields([{ name: "flag", maxCount
       removeUploadedByUrl(target.crestUrl);
     }
     invalidateCountryQueryCache();
+    savePersistentState();
     return res.json(countryFromDb(updated));
   } catch {
     removeUploadedFile(flagFile);
@@ -5648,6 +10071,7 @@ app.delete("/admin/countries/:countryId", async (req, res) => {
       return true;
     });
   }
+  cleanupMarketsAfterCountryRemoval(countryIdParam);
 
   savePersistentState();
   broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
@@ -5709,16 +10133,20 @@ app.patch("/country/customization", upload.fields([{ name: "flag", maxCount: 1 }
   const flagFile = files?.flag?.[0];
   const crestFile = files?.crest?.[0];
 
-  if (flagFile && !validateImageDimensions(flagFile)) {
+  if (flagFile && !validateImageRule(flagFile, FLAG_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "192x128", ratio: "3:2" });
   }
 
-  if (crestFile && !validateImageDimensions(crestFile)) {
+  if (crestFile && !validateImageRule(crestFile, CREST_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "128x192", ratio: "2:3" });
   }
 
   const normalizedName = parsed.data.countryName?.trim();
@@ -5773,10 +10201,10 @@ app.patch("/country/customization", upload.fields([{ name: "flag", maxCount: 1 }
     data.color = normalizedColor;
   }
   if (flagFile) {
-    data.flagUrl = `/uploads/flags/${flagFile.filename}`;
+    data.flagUrl = makeVersionedUploadUrl(`flags/${flagFile.filename}`);
   }
   if (crestFile) {
-    data.crestUrl = `/uploads/crests/${crestFile.filename}`;
+    data.crestUrl = makeVersionedUploadUrl(`crests/${crestFile.filename}`);
   }
 
   try {
@@ -5904,16 +10332,20 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
   const flagFile = files?.flag?.[0];
   const crestFile = files?.crest?.[0];
 
-  if (flagFile && !validateImageDimensions(flagFile)) {
+  if (flagFile && !validateImageRule(flagFile, FLAG_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "flag", max: "192x128", ratio: "3:2" });
   }
 
-  if (crestFile && !validateImageDimensions(crestFile)) {
+  if (crestFile && !validateImageRule(crestFile, CREST_IMAGE_RULE)) {
     removeUploadedFile(flagFile);
     removeUploadedFile(crestFile);
-    return res.status(400).json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "256x256" });
+    return res
+      .status(400)
+      .json({ error: "IMAGE_DIMENSIONS_TOO_LARGE", field: "crest", max: "128x192", ratio: "2:3" });
   }
 
   const { countryName, countryColor, password } = parsed.data;
@@ -5927,8 +10359,8 @@ app.post("/auth/register", upload.fields([{ name: "flag", maxCount: 1 }, { name:
       data: {
         name: countryName,
         color: countryColor,
-        flagUrl: flagFile ? `/uploads/flags/${flagFile.filename}` : null,
-        crestUrl: crestFile ? `/uploads/crests/${crestFile.filename}` : null,
+        flagUrl: flagFile ? makeVersionedUploadUrl(`flags/${flagFile.filename}`) : null,
+        crestUrl: crestFile ? makeVersionedUploadUrl(`crests/${crestFile.filename}`) : null,
         passwordHash,
         isAdmin: isAdminCountry,
         isRegistrationApproved: !requiresApproval,
@@ -6241,19 +10673,47 @@ wss.on("connection", (socket) => {
         }
         onlinePlayers.add(payload.id);
         ensureCountryInWorldBase(payload.countryId);
-        send({
-          type: "AUTH_OK",
-          playerId: payload.id,
-          countryId: payload.countryId,
-          isAdmin,
-          worldBase: {
-            ...worldBase,
+
+        const requestedResumeVersionRaw = (msg as Extract<WsInMessage, { type: "AUTH" }>).lastKnownWorldStateVersion;
+        const requestedResumeVersion =
+          typeof requestedResumeVersionRaw === "number" && Number.isFinite(requestedResumeVersionRaw)
+            ? Math.max(0, Math.floor(requestedResumeVersionRaw))
+            : null;
+        const resumeReplay = requestedResumeVersion != null ? getReplayDeltasFromVersion(requestedResumeVersion) : null;
+
+        if (requestedResumeVersion != null) {
+          lastAckedWorldStateVersion = Math.max(lastAckedWorldStateVersion, Math.min(requestedResumeVersion, worldStateVersion));
+        }
+
+        if (requestedResumeVersion != null && resumeReplay?.ok) {
+          send({
+            type: "AUTH_OK",
+            playerId: payload.id,
+            countryId: payload.countryId,
+            isAdmin,
             turnId,
-          },
-          turnId,
-          worldStateVersion,
-          clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
-        });
+            worldStateVersion,
+            replayFromWorldStateVersion: requestedResumeVersion,
+            clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
+          });
+          for (const delta of resumeReplay.deltas) {
+            send(delta);
+          }
+        } else {
+          send({
+            type: "AUTH_OK",
+            playerId: payload.id,
+            countryId: payload.countryId,
+            isAdmin,
+            worldBase: {
+              ...worldBase,
+              turnId,
+            },
+            turnId,
+            worldStateVersion,
+            clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
+          });
+        }
         if (isAdmin) {
           await sendPendingRegistrationNotificationsToAdminSocket(socket, country.id);
         }
@@ -6400,11 +10860,12 @@ wss.on("connection", (socket) => {
         }
         const counts = countBuildingOccurrences(buildingId, delta.order.countryId, { includePendingOrders: true });
         const countryLimit = getCountryBuildLimit(building, delta.order.countryId);
+        const hasCountryLimitOverride = countryLimit !== undefined;
         const globalLimit =
           typeof building.globalBuildLimit === "number" && Number.isFinite(building.globalBuildLimit)
             ? Math.max(1, Math.floor(building.globalBuildLimit))
             : null;
-        if (countryLimit != null && counts.byCountry >= countryLimit) {
+        if (typeof countryLimit === "number" && counts.byCountry >= countryLimit) {
           send({
             type: "ERROR",
             code: "BUILD_LIMIT_COUNTRY",
@@ -6412,7 +10873,7 @@ wss.on("connection", (socket) => {
           });
           return;
         }
-        if (globalLimit != null && counts.global >= globalLimit) {
+        if (!hasCountryLimitOverride && globalLimit != null && counts.global >= globalLimit) {
           send({
             type: "ERROR",
             code: "BUILD_LIMIT_GLOBAL",
@@ -6514,8 +10975,14 @@ wss.on("connection", (socket) => {
 });
 
 async function startServer(): Promise<void> {
+  await ensureCorePrismaTables();
   await ensureWorldDeltaLogTable();
   await loadPersistentState();
+  persistContentLibraryFromSettings();
+  await cleanupOrphanUploadsOnServerStart();
+  if (await migratePersistedMarketNamesToReadable()) {
+    savePersistentState();
+  }
   rebuildTurnOrderIndexes();
   rebuildActiveColonizationIndexFromWorldBase();
   rebuildEconomyTickCountryIndexFromWorldBase();
@@ -6526,6 +10993,10 @@ async function startServer(): Promise<void> {
   setInterval(() => {
     try {
       if (!gameSettings.turnTimer.enabled) return;
+      if (gameSettings.turnTimer.pauseWhenNoPlayersOnline && onlinePlayers.size === 0) {
+        resetTurnTimerAnchor();
+        return;
+      }
       const seconds = Math.max(10, Math.floor(gameSettings.turnTimer.secondsPerTurn || 0));
       if (seconds <= 0) return;
       const elapsedMs = Date.now() - currentTurnStartedAtMs;

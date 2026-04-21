@@ -49,6 +49,11 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [baseDucatsPerTurn, setBaseDucatsPerTurn] = useState(5);
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [demolitionCostConstructionPercent, setDemolitionCostConstructionPercent] = useState(20);
+  const [marketPriceSmoothing, setMarketPriceSmoothing] = useState(0.2);
+  const [explorationBaseEmptyChancePct, setExplorationBaseEmptyChancePct] = useState(50);
+  const [explorationDepletionPerAttemptPct, setExplorationDepletionPerAttemptPct] = useState(7.5);
+  const [explorationDurationTurns, setExplorationDurationTurns] = useState(3);
+  const [explorationRollsPerExpedition, setExplorationRollsPerExpedition] = useState(3);
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationPointsPerTurn, setColonizationPointsPerTurn] = useState(30);
   const [colonizationPointsCostPer1000Km2, setColonizationPointsCostPer1000Km2] = useState(5);
@@ -62,6 +67,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [requireAdminApprovalForRegistration, setRequireAdminApprovalForRegistration] = useState(false);
   const [turnTimerEnabled, setTurnTimerEnabled] = useState(false);
   const [turnTimerSeconds, setTurnTimerSeconds] = useState(300);
+  const [turnTimerPauseWhenNoPlayersOnline, setTurnTimerPauseWhenNoPlayersOnline] = useState(false);
   const [showAntarctica, setShowAntarctica] = useState(true);
   const [resourceIcons, setResourceIcons] = useState<ResourceIconsMap>({
     culture: null,
@@ -91,6 +97,11 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setBaseDucatsPerTurn(settings.economy.baseDucatsPerTurn);
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
         setDemolitionCostConstructionPercent(settings.economy.demolitionCostConstructionPercent ?? 20);
+        setMarketPriceSmoothing(settings.economy.marketPriceSmoothing ?? 0.2);
+        setExplorationBaseEmptyChancePct(settings.economy.explorationBaseEmptyChancePct ?? 50);
+        setExplorationDepletionPerAttemptPct(settings.economy.explorationDepletionPerAttemptPct ?? 7.5);
+        setExplorationDurationTurns(settings.economy.explorationDurationTurns ?? 3);
+        setExplorationRollsPerExpedition(settings.economy.explorationRollsPerExpedition ?? 3);
         setMaxActiveColonizations(settings.colonization.maxActiveColonizations);
         setColonizationPointsPerTurn(settings.colonization.pointsPerTurn);
         setColonizationPointsCostPer1000Km2(settings.colonization.pointsCostPer1000Km2);
@@ -104,6 +115,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setRequireAdminApprovalForRegistration(settings.registration?.requireAdminApproval ?? false);
         setTurnTimerEnabled(settings.turnTimer?.enabled ?? false);
         setTurnTimerSeconds(settings.turnTimer?.secondsPerTurn ?? 300);
+        setTurnTimerPauseWhenNoPlayersOnline(settings.turnTimer?.pauseWhenNoPlayersOnline ?? false);
         setShowAntarctica(settings.map?.showAntarctica ?? true);
         setUiBackgroundImageUrl(settings.map?.backgroundImageUrl ?? null);
         setUiBackgroundFile(null);
@@ -131,12 +143,22 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
           baseDucatsPerTurn: Math.max(0, Math.floor(baseDucatsPerTurn)),
           baseGoldPerTurn: Math.max(0, Math.floor(baseGoldPerTurn)),
           demolitionCostConstructionPercent: Math.min(100, Math.max(0, Math.floor(demolitionCostConstructionPercent))),
+          marketPriceSmoothing: Math.min(1, Math.max(0, Number(marketPriceSmoothing || 0))),
+          explorationBaseEmptyChancePct: Math.min(100, Math.max(0, Number(explorationBaseEmptyChancePct || 0))),
+          explorationDepletionPerAttemptPct: Math.min(100, Math.max(0, Number(explorationDepletionPerAttemptPct || 0))),
+          explorationDurationTurns: Math.max(1, Math.floor(explorationDurationTurns || 1)),
+          explorationRollsPerExpedition: Math.max(1, Math.floor(explorationRollsPerExpedition || 1)),
         },
       });
       setBaseConstructionPerTurn(updated.economy.baseConstructionPerTurn);
       setBaseDucatsPerTurn(updated.economy.baseDucatsPerTurn);
       setBaseGoldPerTurn(updated.economy.baseGoldPerTurn);
       setDemolitionCostConstructionPercent(updated.economy.demolitionCostConstructionPercent ?? 20);
+      setMarketPriceSmoothing(updated.economy.marketPriceSmoothing ?? 0.2);
+      setExplorationBaseEmptyChancePct(updated.economy.explorationBaseEmptyChancePct ?? 50);
+      setExplorationDepletionPerAttemptPct(updated.economy.explorationDepletionPerAttemptPct ?? 7.5);
+      setExplorationDurationTurns(updated.economy.explorationDurationTurns ?? 3);
+      setExplorationRollsPerExpedition(updated.economy.explorationRollsPerExpedition ?? 3);
       onSettingsUpdated?.(updated);
       toast.success("Настройки экономики сохранены");
     } catch {
@@ -251,10 +273,12 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         turnTimer: {
           enabled: turnTimerEnabled,
           secondsPerTurn: Math.min(2_592_000, Math.max(10, Math.floor(turnTimerSeconds || 10))),
+          pauseWhenNoPlayersOnline: turnTimerPauseWhenNoPlayersOnline,
         },
       });
       setTurnTimerEnabled(updated.turnTimer.enabled);
       setTurnTimerSeconds(updated.turnTimer.secondsPerTurn);
+      setTurnTimerPauseWhenNoPlayersOnline(updated.turnTimer.pauseWhenNoPlayersOnline ?? false);
       onSettingsUpdated?.(updated);
       toast.success("Таймер хода сохранён");
     } catch (error) {
@@ -413,7 +437,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <Coins size={15} className="text-arc-accent" />
                         Базовый доход за каждый резолв хода
                       </div>
-                      <div className="grid gap-3 md:grid-cols-4">
+                      <div className="grid gap-3 md:grid-cols-5">
                         <div>
                           <label className="mb-1 block text-xs text-slate-300">Очки строительства / ход</label>
                           <input type="number" min={0} value={baseConstructionPerTurn} onChange={(e) => setBaseConstructionPerTurn(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
@@ -437,8 +461,70 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                             className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
                           />
                         </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Сглаживание цены рынка (0..1)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={marketPriceSmoothing}
+                            onChange={(e) => setMarketPriceSmoothing(Math.min(1, Math.max(0, Number(e.target.value) || 0)))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
                       </div>
-                      <button onClick={saveEconomy} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <div className="grid gap-3 md:grid-cols-4">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Базовый шанс пустой разведки (%)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={0.1}
+                            value={explorationBaseEmptyChancePct}
+                            onChange={(e) => setExplorationBaseEmptyChancePct(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Рост шанса пусто за попытку (%)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={0.1}
+                            value={explorationDepletionPerAttemptPct}
+                            onChange={(e) =>
+                              setExplorationDepletionPerAttemptPct(Math.min(100, Math.max(0, Number(e.target.value) || 0)))
+                            }
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Длительность разведки (ходы)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={explorationDurationTurns}
+                            onChange={(e) => setExplorationDurationTurns(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Роллов за разведку</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={explorationRollsPerExpedition}
+                            onChange={(e) =>
+                              setExplorationRollsPerExpedition(Math.max(1, Math.floor(Number(e.target.value) || 1)))
+                            }
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <button onClick={() => void saveEconomy()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -492,7 +578,34 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           Диапазон: 10–2 592 000 секунд (до 30 дней). Таймер сбрасывается после каждого резолва хода.
                         </div>
                       </div>
-                      <button onClick={saveTurnTimer} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                        <div>
+                          <div className="text-sm text-slate-100">Пауза таймера без игроков онлайн</div>
+                          <div className="text-xs text-slate-500">Если включено, авто-таймер не тикает, пока онлайн 0 игроков.</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setTurnTimerPauseWhenNoPlayersOnline((v) => !v)}
+                          className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
+                            turnTimerPauseWhenNoPlayersOnline ? "border-emerald-400/50 bg-emerald-500/20" : "border-white/10 bg-white/5"
+                          }`}
+                          aria-pressed={turnTimerPauseWhenNoPlayersOnline}
+                          aria-label={
+                            turnTimerPauseWhenNoPlayersOnline
+                              ? "Выключить паузу таймера без игроков"
+                              : "Включить паузу таймера без игроков"
+                          }
+                        >
+                          <span
+                            className={`h-5 w-5 rounded-full transition ${
+                              turnTimerPauseWhenNoPlayersOnline
+                                ? "translate-x-6 bg-emerald-500 shadow-[0_0_12px_rgba(110,231,183,0.45)]"
+                                : "translate-x-1 bg-white/60"
+                            }`}
+                          />
+                        </button>
+                      </label>
+                      <button onClick={() => void saveTurnTimer()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -550,7 +663,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         Базовая стоимость провинции рассчитывается от площади: `ставка за 1000 км² × площадь / 1000`. Ручная стоимость провинции в админ-редакторе остаётся как override.
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <button onClick={saveColonization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                        <button onClick={() => void saveColonization()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                           <Save size={14} />
                           Сохранить
                         </button>
@@ -580,7 +693,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <div><label className="mb-1 block text-xs text-slate-300">Смена герба</label><input type="number" min={0} value={crestDucats} onChange={(e) => setCrestDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                         <div><label className="mb-1 block text-xs text-slate-300">Переименование провинции</label><input type="number" min={0} value={provinceRenameDucats} onChange={(e) => setProvinceRenameDucats(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" /></div>
                       </div>
-                      <button onClick={saveCustomization} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveCustomization()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -616,7 +729,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                           />
                         </button>
                       </label>
-                      <button onClick={saveRegistrationSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveRegistrationSettings()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>
@@ -633,7 +746,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <label className="mb-1 block text-xs text-slate-300">Хранить события за последние (ходов)</label>
                         <input type="number" min={1} max={100} value={eventLogRetentionTurns} onChange={(e) => setEventLogRetentionTurns(Math.max(1, Number(e.target.value) || 1))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
                       </div>
-                      <button onClick={saveEventLogSettings} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
+                      <button onClick={() => void saveEventLogSettings()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-arc-accent px-4 py-2 text-sm font-semibold text-black disabled:opacity-60">
                         <Save size={14} />
                         Сохранить
                       </button>

@@ -13,19 +13,43 @@ export type ContentCulture = {
   malePortraitUrl?: string | null;
   femalePortraitUrl?: string | null;
   basePrice?: number | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  infraPerUnit?: number | null;
+  infrastructureCostPerUnit?: number | null;
+  resourceCategoryId?: string | null;
+  isResourceDiscoverable?: boolean | null;
+  explorationBaseWeight?: number | null;
+  explorationSmallVeinChancePct?: number | null;
+  explorationMediumVeinChancePct?: number | null;
+  explorationLargeVeinChancePct?: number | null;
+  explorationSmallVeinMin?: number | null;
+  explorationSmallVeinMax?: number | null;
+  explorationMediumVeinMin?: number | null;
+  explorationMediumVeinMax?: number | null;
+  explorationLargeVeinMin?: number | null;
+  explorationLargeVeinMax?: number | null;
+  baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
+  startingDucats?: number | null;
+  extractionGoodId?: string | null;
+  extractionAmountPerTurn?: number | null;
+  extractionRequiresDeposit?: boolean | null;
+  infrastructureUse?: number | null;
+  marketInfrastructureByCategory?: Record<string, number> | null;
   inputs?: Array<{ goodId: string; amount: number }> | null;
   outputs?: Array<{ goodId: string; amount: number }> | null;
   workforceRequirements?: Array<{ professionId: string; workers: number }> | null;
   allowedCountryIds?: string[] | null;
   deniedCountryIds?: string[] | null;
-  countryBuildLimits?: Array<{ countryId: string; limit: number }> | null;
+  countryBuildLimits?: Array<{ countryId: string; limit: number | null }> | null;
   globalBuildLimit?: number | null;
 };
 export type ContentEntry = ContentCulture;
 export type ContentEntryKind =
   | "cultures"
+  | "resourceCategories"
   | "religions"
   | "professions"
   | "ideologies"
@@ -40,14 +64,37 @@ type ContentEntryUpsertPayload = {
   description?: string;
   color: string;
   basePrice?: number | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  infraPerUnit?: number | null;
+  infrastructureCostPerUnit?: number | null;
+  resourceCategoryId?: string | null;
+  isResourceDiscoverable?: boolean | null;
+  explorationBaseWeight?: number | null;
+  explorationSmallVeinChancePct?: number | null;
+  explorationMediumVeinChancePct?: number | null;
+  explorationLargeVeinChancePct?: number | null;
+  explorationSmallVeinMin?: number | null;
+  explorationSmallVeinMax?: number | null;
+  explorationMediumVeinMin?: number | null;
+  explorationMediumVeinMax?: number | null;
+  explorationLargeVeinMin?: number | null;
+  explorationLargeVeinMax?: number | null;
+  baseWage?: number | null;
   costConstruction?: number | null;
   costDucats?: number | null;
+  startingDucats?: number | null;
+  extractionGoodId?: string | null;
+  extractionAmountPerTurn?: number | null;
+  extractionRequiresDeposit?: boolean | null;
+  infrastructureUse?: number | null;
+  marketInfrastructureByCategory?: Record<string, number>;
   inputs?: Array<{ goodId: string; amount: number }>;
   outputs?: Array<{ goodId: string; amount: number }>;
   workforceRequirements?: Array<{ professionId: string; workers: number }>;
   allowedCountryIds?: string[];
   deniedCountryIds?: string[];
-  countryBuildLimits?: Array<{ countryId: string; limit: number }>;
+  countryBuildLimits?: Array<{ countryId: string; limit: number | null }>;
   globalBuildLimit?: number | null;
 };
 
@@ -114,6 +161,493 @@ export async function fetchWorldSnapshot(token: string): Promise<{ worldBase: Wo
     throw new Error(err?.error ?? "WORLD_SNAPSHOT_FAILED");
   }
   return response.json();
+}
+
+export type MarketOverviewItem = {
+  goodId: string;
+  goodName: string;
+  countryPrice: number;
+  globalPrice: number;
+  countryDemand: number;
+  countryOffer: number;
+  countryCoveragePct: number;
+  globalDemand: number;
+  globalOffer: number;
+  globalCoveragePct: number;
+  countryPriceHistory?: number[];
+  globalPriceHistory?: number[];
+  countryDemandHistory?: number[];
+  countryOfferHistory?: number[];
+  globalDemandHistory?: number[];
+  globalOfferHistory?: number[];
+  countryProductionFactHistory?: number[];
+  countryProductionMaxHistory?: number[];
+  globalProductionFactHistory?: number[];
+  globalProductionMaxHistory?: number[];
+};
+
+export type MarketOverviewAlert = {
+  id: string;
+  severity: "warning" | "critical";
+  kind: "critical-deficit" | "infra-overload" | "building-inactive";
+  message: string;
+  provinceId?: string;
+  buildingId?: string;
+  instanceId?: string;
+  goodId?: string;
+};
+
+export type MarketOverviewResponse = {
+  turnId: number;
+  countryId: string;
+  marketId: string;
+  goods: MarketOverviewItem[];
+  tradeByGood?: Record<
+    string,
+    {
+      countryImportsByCountry?: Record<string, number>;
+      countryExportsByCountry?: Record<string, number>;
+      globalImportsByMarket?: Record<string, number>;
+      globalExportsByMarket?: Record<string, number>;
+    }
+  >;
+  infraByProvince: Record<string, { capacity: number; required: number; coverage: number }>;
+  sharedInfrastructureByMarket?: Array<{
+    marketId: string;
+    marketName: string;
+    capacity: number;
+    consumed: number;
+    available: number;
+    capacityByCategory?: Record<string, number>;
+    consumedByCategory?: Record<string, number>;
+    availableByCategory?: Record<string, number>;
+  }>;
+  alerts: MarketOverviewAlert[];
+};
+
+export type MarketMember = {
+  countryId: string;
+  countryName: string;
+  flagUrl: string | null;
+  isOwner: boolean;
+};
+
+export type MarketDetails = {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+  ownerCountryId: string;
+  ownerCountryName: string;
+  memberCountryIds: string[];
+  visibility: "public" | "private";
+  createdAt: string;
+  members: MarketMember[];
+};
+
+export type MarketInvite = {
+  id: string;
+  marketId: string;
+  fromCountryId: string;
+  toCountryId: string;
+  kind?: "invite" | "join-request";
+  status: "pending" | "accepted" | "rejected" | "canceled";
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  marketName?: string;
+  marketLogoUrl?: string | null;
+  fromCountryName?: string;
+  fromCountryFlagUrl?: string | null;
+  toCountryName?: string;
+  toCountryFlagUrl?: string | null;
+};
+
+export type MarketCatalogItem = {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+  ownerCountryId: string;
+  ownerCountryName: string;
+  ownerCountryFlagUrl: string | null;
+  visibility: "public" | "private";
+  membersCount: number;
+  isMember: boolean;
+  canJoinDirectly: boolean;
+  canRequestJoin: boolean;
+  hasPendingJoinRequest: boolean;
+};
+
+export type MarketSanction = {
+  id: string;
+  initiatorCountryId: string;
+  initiatorCountryName?: string;
+  direction: "import" | "export" | "both";
+  targetType: "country" | "market";
+  targetId: string;
+  targetName?: string;
+  goods?: string[];
+  goodsNamed?: Array<{ id: string; name: string }>;
+  mode: "ban" | "cap";
+  capAmountPerTurn?: number | null;
+  startTurn: number;
+  durationTurns: number;
+  enabled?: boolean;
+  activeNow?: boolean;
+  expiresAtTurn?: number;
+};
+
+export async function fetchMarketOverview(token: string): Promise<MarketOverviewResponse> {
+  const response = await fetch(`${API}/economy/market-overview`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_OVERVIEW_FAILED");
+  }
+  return (await response.json()) as MarketOverviewResponse;
+}
+
+export async function fetchMarketDetails(token: string, marketId: string): Promise<{ market: MarketDetails }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_DETAILS_FAILED");
+  }
+  const data = (await response.json()) as { market: MarketDetails };
+  return {
+    market: {
+      ...data.market,
+      logoUrl: withAssetBase(data.market.logoUrl) ?? null,
+      members: (data.market.members ?? []).map((member) => ({
+        ...member,
+        flagUrl: withAssetBase(member.flagUrl) ?? null,
+      })),
+    },
+  };
+}
+
+export async function fetchMarketsCatalog(token: string): Promise<{ markets: MarketCatalogItem[] }> {
+  const response = await fetch(`${API}/markets`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKETS_CATALOG_FAILED");
+  }
+  const data = (await response.json()) as { markets: MarketCatalogItem[] };
+  return {
+    markets: (data.markets ?? []).map((market) => ({
+      ...market,
+      logoUrl: withAssetBase(market.logoUrl) ?? null,
+      ownerCountryFlagUrl: withAssetBase(market.ownerCountryFlagUrl) ?? null,
+    })),
+  };
+}
+
+export async function updateMarket(
+  token: string,
+  marketId: string,
+  payload: { name?: string; visibility?: "public" | "private"; logoFile?: File | null },
+): Promise<{ market: MarketDetails }> {
+  const formData = new FormData();
+  if (typeof payload.name === "string") {
+    formData.set("name", payload.name);
+  }
+  if (payload.visibility) {
+    formData.set("visibility", payload.visibility);
+  }
+  if (payload.logoFile) {
+    formData.set("marketLogo", payload.logoFile);
+  }
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_UPDATE_FAILED");
+  }
+  const data = (await response.json()) as { market: MarketDetails };
+  return {
+    market: {
+      ...data.market,
+      logoUrl: withAssetBase(data.market.logoUrl) ?? null,
+      members: (data.market.members ?? []).map((member) => ({
+        ...member,
+        flagUrl: withAssetBase(member.flagUrl) ?? null,
+      })),
+    },
+  };
+}
+
+export async function createMarketInvite(
+  token: string,
+  marketId: string,
+  payload: { toCountryId: string; expiresInDays?: number },
+): Promise<{ invite: MarketInvite }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/invites`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_INVITE_CREATE_FAILED");
+  }
+  const data = (await response.json()) as { invite: MarketInvite };
+  return {
+    invite: {
+      ...data.invite,
+      marketLogoUrl: withAssetBase(data.invite.marketLogoUrl) ?? null,
+      fromCountryFlagUrl: withAssetBase(data.invite.fromCountryFlagUrl) ?? null,
+    },
+  };
+}
+
+export async function fetchCountryMarketInvites(token: string): Promise<{ invites: MarketInvite[] }> {
+  const response = await fetch(`${API}/country/market-invites`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_INVITES_FAILED");
+  }
+  const data = (await response.json()) as { invites: MarketInvite[] };
+  return {
+    invites: (data.invites ?? []).map((invite) => ({
+      ...invite,
+      marketLogoUrl: withAssetBase(invite.marketLogoUrl) ?? null,
+      fromCountryFlagUrl: withAssetBase(invite.fromCountryFlagUrl) ?? null,
+      toCountryFlagUrl: withAssetBase(invite.toCountryFlagUrl) ?? null,
+    })),
+  };
+}
+
+export async function respondMarketInvite(
+  token: string,
+  inviteId: string,
+  action: "accept" | "reject" | "cancel",
+): Promise<{ invite: MarketInvite }> {
+  const response = await fetch(`${API}/market-invites/${encodeURIComponent(inviteId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ action }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_INVITE_ACTION_FAILED");
+  }
+  const data = (await response.json()) as { invite: MarketInvite };
+  return {
+    invite: {
+      ...data.invite,
+      marketLogoUrl: withAssetBase(data.invite.marketLogoUrl) ?? null,
+      fromCountryFlagUrl: withAssetBase(data.invite.fromCountryFlagUrl) ?? null,
+      toCountryFlagUrl: withAssetBase(data.invite.toCountryFlagUrl) ?? null,
+    },
+  };
+}
+
+export async function fetchMarketInvites(token: string, marketId: string): Promise<{ invites: MarketInvite[] }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/invites`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_OUTGOING_INVITES_FAILED");
+  }
+  const data = (await response.json()) as { invites: MarketInvite[] };
+  return {
+    invites: (data.invites ?? []).map((invite) => ({
+      ...invite,
+      marketLogoUrl: withAssetBase(invite.marketLogoUrl) ?? null,
+      fromCountryFlagUrl: withAssetBase(invite.fromCountryFlagUrl) ?? null,
+      toCountryFlagUrl: withAssetBase(invite.toCountryFlagUrl) ?? null,
+    })),
+  };
+}
+
+export async function transferMarketOwner(
+  token: string,
+  marketId: string,
+  nextOwnerCountryId: string,
+): Promise<{ market: MarketDetails }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/transfer-owner`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ nextOwnerCountryId }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_TRANSFER_OWNER_FAILED");
+  }
+  const data = (await response.json()) as { market: MarketDetails };
+  return {
+    market: {
+      ...data.market,
+      logoUrl: withAssetBase(data.market.logoUrl) ?? null,
+      members: (data.market.members ?? []).map((member) => ({
+        ...member,
+        flagUrl: withAssetBase(member.flagUrl) ?? null,
+      })),
+    },
+  };
+}
+
+export async function fetchMarketSanctions(
+  token: string,
+  marketId: string,
+): Promise<{ sanctions: MarketSanction[]; ownerCountryId: string; turnId: number }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/sanctions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTIONS_FETCH_FAILED");
+  }
+  return (await response.json()) as { sanctions: MarketSanction[]; ownerCountryId: string; turnId: number };
+}
+
+export async function createMarketSanction(
+  token: string,
+  marketId: string,
+  payload: {
+    direction: "import" | "export" | "both";
+    targetType: "country" | "market";
+    targetId: string;
+    goods?: string[];
+    mode: "ban" | "cap";
+    capAmountPerTurn?: number | null;
+    startTurn?: number;
+    durationTurns: number;
+    enabled?: boolean;
+  },
+): Promise<{ sanction: MarketSanction }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/sanctions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTION_CREATE_FAILED");
+  }
+  return (await response.json()) as { sanction: MarketSanction };
+}
+
+export async function updateMarketSanction(
+  token: string,
+  marketId: string,
+  sanctionId: string,
+  payload: Partial<{
+    direction: "import" | "export" | "both";
+    targetType: "country" | "market";
+    targetId: string;
+    goods: string[];
+    mode: "ban" | "cap";
+    capAmountPerTurn: number | null;
+    startTurn: number;
+    durationTurns: number;
+    enabled: boolean;
+  }>,
+): Promise<{ sanction: MarketSanction }> {
+  const response = await fetch(
+    `${API}/markets/${encodeURIComponent(marketId)}/sanctions/${encodeURIComponent(sanctionId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTION_UPDATE_FAILED");
+  }
+  return (await response.json()) as { sanction: MarketSanction };
+}
+
+export async function deleteMarketSanction(token: string, marketId: string, sanctionId: string): Promise<{ ok: true }> {
+  const response = await fetch(
+    `${API}/markets/${encodeURIComponent(marketId)}/sanctions/${encodeURIComponent(sanctionId)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_SANCTION_DELETE_FAILED");
+  }
+  return (await response.json()) as { ok: true };
+}
+
+export async function leaveMarket(token: string, marketId: string): Promise<{ ok: boolean; marketIdLeft: string; newMarketId: string }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/leave`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_LEAVE_FAILED");
+  }
+  return (await response.json()) as { ok: boolean; marketIdLeft: string; newMarketId: string };
+}
+
+export async function joinMarket(token: string, marketId: string): Promise<{ mode: "joined" | "requested"; market?: MarketDetails; invite?: MarketInvite }> {
+  const response = await fetch(`${API}/markets/${encodeURIComponent(marketId)}/join`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error ?? "MARKET_JOIN_FAILED");
+  }
+  const data = (await response.json()) as { mode: "joined" | "requested"; market?: MarketDetails; invite?: MarketInvite };
+  return data.mode === "joined" && data.market
+    ? {
+        mode: "joined",
+        market: {
+          ...data.market,
+          logoUrl: withAssetBase(data.market.logoUrl) ?? null,
+          members: (data.market.members ?? []).map((member) => ({
+            ...member,
+            flagUrl: withAssetBase(member.flagUrl) ?? null,
+          })),
+        },
+      }
+    : {
+        mode: "requested",
+        invite: data.invite
+          ? {
+              ...data.invite,
+              marketLogoUrl: withAssetBase(data.invite.marketLogoUrl) ?? null,
+              fromCountryFlagUrl: withAssetBase(data.invite.fromCountryFlagUrl) ?? null,
+              toCountryFlagUrl: withAssetBase(data.invite.toCountryFlagUrl) ?? null,
+            }
+          : undefined,
+      };
 }
 
 export async function fetchCurrentTurnOrders(token: string): Promise<{ turnId: number; orders: Order[] }> {
@@ -362,6 +896,7 @@ export async function adminUpdateCountry(
     countryColor?: string;
     isAdmin?: boolean;
     ignoreUntilTurn?: number | null;
+    marketId?: string | null;
     flagFile?: File | null;
     crestFile?: File | null;
   },
@@ -379,6 +914,9 @@ export async function adminUpdateCountry(
   }
   if (payload.ignoreUntilTurn !== undefined) {
     formData.set("ignoreUntilTurn", payload.ignoreUntilTurn == null ? "0" : String(payload.ignoreUntilTurn));
+  }
+  if (payload.marketId !== undefined) {
+    formData.set("marketId", payload.marketId ?? "");
   }
   if (payload.flagFile) {
     formData.set("flag", payload.flagFile);
@@ -497,6 +1035,30 @@ export type GameSettings = {
     baseDucatsPerTurn: number;
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
+    marketPriceSmoothing: number;
+    explorationBaseEmptyChancePct: number;
+    explorationDepletionPerAttemptPct: number;
+    explorationDurationTurns: number;
+    explorationRollsPerExpedition: number;
+  };
+  markets?: {
+    countryMarketByCountryId: Record<string, string>;
+    sanctionsById?: Record<
+      string,
+      {
+        id: string;
+        initiatorCountryId: string;
+        direction: "import" | "export" | "both";
+        targetType: "country" | "market";
+        targetId: string;
+        goods?: string[];
+        mode: "ban" | "cap";
+        capAmountPerTurn?: number | null;
+        startTurn: number;
+        durationTurns: number;
+        enabled?: boolean;
+      }
+    >;
   };
   colonization: {
     maxActiveColonizations: number;
@@ -520,6 +1082,7 @@ export type GameSettings = {
   turnTimer: {
     enabled: boolean;
     secondsPerTurn: number;
+    pauseWhenNoPlayersOnline?: boolean;
     currentTurnStartedAtMs?: number;
   };
   map: {
@@ -722,12 +1285,36 @@ export async function updateGameSettings(
       baseDucatsPerTurn?: number;
       baseGoldPerTurn?: number;
       demolitionCostConstructionPercent?: number;
+      marketPriceSmoothing?: number;
+      explorationBaseEmptyChancePct?: number;
+      explorationDepletionPerAttemptPct?: number;
+      explorationDurationTurns?: number;
+      explorationRollsPerExpedition?: number;
+    };
+    markets?: {
+      countryMarketByCountryId?: Record<string, string>;
+      sanctionsById?: Record<
+        string,
+        {
+          id?: string;
+          initiatorCountryId: string;
+          direction: "import" | "export" | "both";
+          targetType: "country" | "market";
+          targetId: string;
+          goods?: string[];
+          mode: "ban" | "cap";
+          capAmountPerTurn?: number | null;
+          startTurn: number;
+          durationTurns: number;
+          enabled?: boolean;
+        }
+      >;
     };
     colonization?: { maxActiveColonizations?: number; pointsPerTurn?: number; pointsCostPer1000Km2?: number; ducatsCostPer1000Km2?: number };
     customization?: { renameDucats?: number; recolorDucats?: number; flagDucats?: number; crestDucats?: number; provinceRenameDucats?: number };
     registration?: { requireAdminApproval?: boolean };
     eventLog?: { retentionTurns?: number };
-    turnTimer?: { enabled?: boolean; secondsPerTurn?: number };
+    turnTimer?: { enabled?: boolean; secondsPerTurn?: number; pauseWhenNoPlayersOnline?: boolean };
     map?: { showAntarctica?: boolean; backgroundImageUrl?: string | null };
   },
 ): Promise<GameSettings> {
@@ -930,6 +1517,7 @@ export type AdminProvinceItem = {
   areaKm2: number;
   ownerCountryId: string | null;
   colonizationCost: number;
+  infrastructureCapacity: number;
   colonizationDisabled: boolean;
   manualCost?: boolean;
   colonyProgressByCountry: Record<string, number>;
@@ -967,6 +1555,21 @@ export async function cancelCountryColonization(token: string, provinceId: strin
   if (!response.ok) {
     const err = await response.json();
     throw new Error(err.error ?? "COLONIZATION_CANCEL_FAILED");
+  }
+}
+
+export async function startCountryExploration(token: string, provinceId: string): Promise<void> {
+  const response = await fetch(`${API}/country/exploration/start`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ provinceId }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "EXPLORATION_START_FAILED");
   }
 }
 
@@ -1025,6 +1628,7 @@ export async function adminUpdateProvince(
   provinceId: string,
   payload: {
     colonizationCost?: number;
+    infrastructureCapacity?: number;
     colonizationDisabled?: boolean;
     ownerCountryId?: string | null;
     resetColonizationCostToAuto?: boolean;

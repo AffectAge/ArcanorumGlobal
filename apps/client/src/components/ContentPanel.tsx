@@ -1,6 +1,6 @@
 import { Dialog } from "@headlessui/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Briefcase, Building2, ChevronDown, ChevronRight, Factory, FileText, Flame, Package, Palette, Plus, ScrollText, Sticker, Trash2, Upload, UserRound, X } from "lucide-react";
+import { Briefcase, Building2, ChevronDown, ChevronRight, Factory, FileText, Flame, Package, Palette, Plus, ScrollText, Sticker, Telescope, Trash2, Upload, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
@@ -59,12 +59,23 @@ const CONTENT_UI_SCHEMA = {
       ] as const,
     },
     {
+      id: "resourceCategories",
+      label: "Категории инфраструктуры",
+      icon: Package,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
+      ] as const,
+    },
+    {
       id: "professions",
       label: "Профессии",
       icon: Briefcase,
       enabled: true,
       sections: [
         { id: "general", label: "Основная информация", icon: FileText },
+        { id: "economy", label: "Экономика профессии", icon: Factory },
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
@@ -98,6 +109,7 @@ const CONTENT_UI_SCHEMA = {
       sections: [
         { id: "general", label: "Основная информация", icon: FileText },
         { id: "economy", label: "Экономика товара", icon: Factory },
+        { id: "exploration", label: "Георазведка", icon: Telescope },
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
@@ -124,10 +136,11 @@ const CONTENT_UI_SCHEMA = {
   ] as const,
 } as const;
 type PanelCategory = ContentEntryKind;
-type PanelSection = "general" | "economy" | "criteria" | "branding";
+type PanelSection = "general" | "economy" | "exploration" | "criteria" | "branding";
 type GoodFlowDraft = { goodId: string; amount: string };
 type WorkforceRequirementDraft = { professionId: string; workers: string };
 type CountryBuildLimitDraft = { countryId: string; limit: string };
+type CategoryAmountDraft = { categoryId: string; amount: string };
 
 const CATEGORY_META: Record<
   PanelCategory,
@@ -148,6 +161,14 @@ const CATEGORY_META: Record<
     namePlaceholder: "Название расы",
     descriptionPlaceholder: "Краткое описание расы",
     sectionTitle: "Раздел создания и редактирования рас",
+  },
+  resourceCategories: {
+    singular: "категория инфраструктуры",
+    createBaseName: "Новая категория инфраструктуры",
+    createLabel: "Создать категорию",
+    namePlaceholder: "Название категории инфраструктуры",
+    descriptionPlaceholder: "Краткое описание категории инфраструктуры",
+    sectionTitle: "Раздел создания и редактирования категорий инфраструктуры",
   },
   religions: {
     singular: "религия",
@@ -275,15 +296,35 @@ function normalizeCountryIdsDraft(rows: string[]): string[] {
 
 function normalizeCountryBuildLimitsDraft(
   rows: CountryBuildLimitDraft[],
-): Array<{ countryId: string; limit: number }> {
-  const dedup = new Map<string, number>();
+): Array<{ countryId: string; limit: number | null }> {
+  const dedup = new Map<string, number | null>();
   for (const row of rows) {
     const countryId = row.countryId.trim();
-    const limit = Number(row.limit);
-    if (!countryId || !Number.isFinite(limit) || limit <= 0) continue;
+    if (!countryId) continue;
+    const rawLimit = row.limit.trim();
+    if (rawLimit.length === 0) {
+      dedup.set(countryId, null);
+      continue;
+    }
+    const limit = Number(rawLimit);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      dedup.set(countryId, null);
+      continue;
+    }
     dedup.set(countryId, Math.max(1, Math.floor(limit)));
   }
   return [...dedup.entries()].map(([countryId, limit]) => ({ countryId, limit }));
+}
+
+function normalizeCategoryAmountDraft(rows: CategoryAmountDraft[]): Record<string, number> {
+  const dedup = new Map<string, number>();
+  for (const row of rows) {
+    const categoryId = row.categoryId.trim();
+    const amount = Number(row.amount);
+    if (!categoryId || !Number.isFinite(amount) || amount <= 0) continue;
+    dedup.set(categoryId, Number(amount.toFixed(3)));
+  }
+  return Object.fromEntries(dedup.entries());
 }
 
 export function ContentPanel({ open, token, onClose }: Props) {
@@ -303,11 +344,33 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftMalePortraitUrl, setDraftMalePortraitUrl] = useState<string | null>(null);
   const [draftFemalePortraitUrl, setDraftFemalePortraitUrl] = useState<string | null>(null);
   const [draftBasePrice, setDraftBasePrice] = useState("1");
+  const [draftMinPrice, setDraftMinPrice] = useState("0.1");
+  const [draftMaxPrice, setDraftMaxPrice] = useState("10");
+  const [draftInfraPerUnit, setDraftInfraPerUnit] = useState("1");
+  const [draftResourceCategoryId, setDraftResourceCategoryId] = useState("");
+  const [draftIsResourceDiscoverable, setDraftIsResourceDiscoverable] = useState(false);
+  const [draftExplorationBaseWeight, setDraftExplorationBaseWeight] = useState("1");
+  const [draftExplorationSmallChance, setDraftExplorationSmallChance] = useState("60");
+  const [draftExplorationMediumChance, setDraftExplorationMediumChance] = useState("30");
+  const [draftExplorationLargeChance, setDraftExplorationLargeChance] = useState("10");
+  const [draftExplorationSmallMin, setDraftExplorationSmallMin] = useState("10");
+  const [draftExplorationSmallMax, setDraftExplorationSmallMax] = useState("100");
+  const [draftExplorationMediumMin, setDraftExplorationMediumMin] = useState("100");
+  const [draftExplorationMediumMax, setDraftExplorationMediumMax] = useState("500");
+  const [draftExplorationLargeMin, setDraftExplorationLargeMin] = useState("500");
+  const [draftExplorationLargeMax, setDraftExplorationLargeMax] = useState("2000");
+  const [draftBaseWage, setDraftBaseWage] = useState("1");
   const [draftCostConstruction, setDraftCostConstruction] = useState("100");
   const [draftCostDucats, setDraftCostDucats] = useState("10");
+  const [draftStartingDucats, setDraftStartingDucats] = useState("0");
+  const [draftExtractionGoodId, setDraftExtractionGoodId] = useState("");
+  const [draftExtractionAmountPerTurn, setDraftExtractionAmountPerTurn] = useState("0");
+  const [draftExtractionRequiresDeposit, setDraftExtractionRequiresDeposit] = useState(true);
+  const [draftInfrastructureUse, setDraftInfrastructureUse] = useState("0");
   const [draftInputs, setDraftInputs] = useState<GoodFlowDraft[]>([]);
   const [draftOutputs, setDraftOutputs] = useState<GoodFlowDraft[]>([]);
   const [draftWorkforceRequirements, setDraftWorkforceRequirements] = useState<WorkforceRequirementDraft[]>([]);
+  const [draftMarketInfrastructureByCategory, setDraftMarketInfrastructureByCategory] = useState<CategoryAmountDraft[]>([]);
   const [draftAllowedCountryIds, setDraftAllowedCountryIds] = useState<string[]>([]);
   const [draftDeniedCountryIds, setDraftDeniedCountryIds] = useState<string[]>([]);
   const [draftCountryBuildLimits, setDraftCountryBuildLimits] = useState<CountryBuildLimitDraft[]>([]);
@@ -317,11 +380,15 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [criteriaCountriesOpen, setCriteriaCountriesOpen] = useState(false);
   const [criteriaLimitsOpen, setCriteriaLimitsOpen] = useState(false);
   const [goodsEconomyOpen, setGoodsEconomyOpen] = useState(false);
+  const [goodsExplorationOpen, setGoodsExplorationOpen] = useState(false);
   const [buildingCostOpen, setBuildingCostOpen] = useState(false);
+  const [buildingExtractionOpen, setBuildingExtractionOpen] = useState(false);
   const [buildingInputsOpen, setBuildingInputsOpen] = useState(false);
   const [buildingOutputsOpen, setBuildingOutputsOpen] = useState(false);
   const [buildingWorkforceOpen, setBuildingWorkforceOpen] = useState(false);
+  const [buildingMarketInfraOpen, setBuildingMarketInfraOpen] = useState(false);
   const [goodsOptions, setGoodsOptions] = useState<ContentEntry[]>([]);
+  const [resourceCategoryOptions, setResourceCategoryOptions] = useState<ContentEntry[]>([]);
   const [professionOptions, setProfessionOptions] = useState<ContentEntry[]>([]);
   const [countryOptions, setCountryOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [worldBuildingUsage, setWorldBuildingUsage] = useState<{
@@ -339,22 +406,212 @@ export function ContentPanel({ open, token, onClose }: Props) {
       malePortraitUrl: entry.malePortraitUrl ?? null,
       femalePortraitUrl: entry.femalePortraitUrl ?? null,
       basePrice: entry.basePrice ?? null,
+      minPrice: entry.minPrice ?? null,
+      maxPrice: entry.maxPrice ?? null,
+      infraPerUnit: entry.infraPerUnit ?? null,
+      infrastructureCostPerUnit: entry.infrastructureCostPerUnit ?? null,
+      resourceCategoryId: entry.resourceCategoryId ?? null,
+      isResourceDiscoverable: Boolean(entry.isResourceDiscoverable),
+      explorationBaseWeight: entry.explorationBaseWeight ?? null,
+      explorationSmallVeinChancePct: entry.explorationSmallVeinChancePct ?? null,
+      explorationMediumVeinChancePct: entry.explorationMediumVeinChancePct ?? null,
+      explorationLargeVeinChancePct: entry.explorationLargeVeinChancePct ?? null,
+      explorationSmallVeinMin: entry.explorationSmallVeinMin ?? null,
+      explorationSmallVeinMax: entry.explorationSmallVeinMax ?? null,
+      explorationMediumVeinMin: entry.explorationMediumVeinMin ?? null,
+      explorationMediumVeinMax: entry.explorationMediumVeinMax ?? null,
+      explorationLargeVeinMin: entry.explorationLargeVeinMin ?? null,
+      explorationLargeVeinMax: entry.explorationLargeVeinMax ?? null,
+      baseWage: entry.baseWage ?? null,
       costConstruction: entry.costConstruction ?? null,
       costDucats: entry.costDucats ?? null,
+      startingDucats: entry.startingDucats ?? null,
+      extractionGoodId: entry.extractionGoodId ?? null,
+      extractionAmountPerTurn: entry.extractionAmountPerTurn ?? null,
+      extractionRequiresDeposit:
+        typeof entry.extractionRequiresDeposit === "boolean" ? entry.extractionRequiresDeposit : true,
+      infrastructureUse: entry.infrastructureUse ?? null,
       inputs: (entry.inputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
       outputs: (entry.outputs ?? []).map((row) => ({ goodId: row.goodId, amount: Number(row.amount.toFixed(3)) })),
       workforceRequirements: (entry.workforceRequirements ?? []).map((row) => ({
         professionId: row.professionId,
         workers: Math.floor(row.workers),
       })),
+      marketInfrastructureByCategory: Object.fromEntries(
+        Object.entries(entry.marketInfrastructureByCategory ?? {}).map(([categoryId, amount]) => [
+          categoryId,
+          Number(Number(amount).toFixed(3)),
+        ]),
+      ),
       allowedCountryIds: normalizeCountryIdsDraft(entry.allowedCountryIds ?? []),
       deniedCountryIds: normalizeCountryIdsDraft(entry.deniedCountryIds ?? []),
       countryBuildLimits: normalizeCountryBuildLimitsDraft(
-        (entry.countryBuildLimits ?? []).map((row) => ({ countryId: row.countryId, limit: String(row.limit) })),
+        (entry.countryBuildLimits ?? []).map((row) => ({
+          countryId: row.countryId,
+          limit: row.limit == null ? "" : String(row.limit),
+        })),
       ),
       globalBuildLimit:
-        typeof entry.globalBuildLimit === "number" && Number.isFinite(entry.globalBuildLimit)
+        typeof entry.globalBuildLimit === "number" &&
+        Number.isFinite(entry.globalBuildLimit) &&
+        entry.globalBuildLimit > 0
           ? Math.max(1, Math.floor(entry.globalBuildLimit))
+          : null,
+    });
+  const buildDraftSnapshot = () =>
+    JSON.stringify({
+      id: selectedEntry?.id ?? "",
+      name: draftName.trim(),
+      description: draftDescription.trim(),
+      color: draftColor,
+      logoUrl: draftLogoUrl,
+      malePortraitUrl: draftMalePortraitUrl,
+      femalePortraitUrl: draftFemalePortraitUrl,
+      basePrice:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftBasePrice))
+            ? Number(Number(draftBasePrice).toFixed(3))
+            : null
+          : null,
+      minPrice:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftMinPrice))
+            ? Number(Number(draftMinPrice).toFixed(3))
+            : null
+          : null,
+      maxPrice:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftMaxPrice))
+            ? Number(Number(draftMaxPrice).toFixed(3))
+            : null
+          : null,
+      infraPerUnit:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftInfraPerUnit))
+            ? Number(Math.max(0, Number(draftInfraPerUnit)).toFixed(3))
+            : null
+          : null,
+      infrastructureCostPerUnit:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftInfraPerUnit))
+            ? Number(Math.max(0.01, Number(draftInfraPerUnit)).toFixed(3))
+            : null
+          : null,
+      resourceCategoryId: activeCategory === "goods" ? draftResourceCategoryId.trim() || null : null,
+      isResourceDiscoverable: activeCategory === "goods" ? Boolean(draftIsResourceDiscoverable) : null,
+      explorationBaseWeight:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationBaseWeight))
+            ? Number(Math.max(0, Number(draftExplorationBaseWeight)).toFixed(3))
+            : null
+          : null,
+      explorationSmallVeinChancePct:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationSmallChance))
+            ? Number(Math.max(0, Number(draftExplorationSmallChance)).toFixed(3))
+            : null
+          : null,
+      explorationMediumVeinChancePct:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationMediumChance))
+            ? Number(Math.max(0, Number(draftExplorationMediumChance)).toFixed(3))
+            : null
+          : null,
+      explorationLargeVeinChancePct:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationLargeChance))
+            ? Number(Math.max(0, Number(draftExplorationLargeChance)).toFixed(3))
+            : null
+          : null,
+      explorationSmallVeinMin:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationSmallMin))
+            ? Number(Math.max(0, Number(draftExplorationSmallMin)).toFixed(3))
+            : null
+          : null,
+      explorationSmallVeinMax:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationSmallMax))
+            ? Number(Math.max(0, Number(draftExplorationSmallMax)).toFixed(3))
+            : null
+          : null,
+      explorationMediumVeinMin:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationMediumMin))
+            ? Number(Math.max(0, Number(draftExplorationMediumMin)).toFixed(3))
+            : null
+          : null,
+      explorationMediumVeinMax:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationMediumMax))
+            ? Number(Math.max(0, Number(draftExplorationMediumMax)).toFixed(3))
+            : null
+          : null,
+      explorationLargeVeinMin:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationLargeMin))
+            ? Number(Math.max(0, Number(draftExplorationLargeMin)).toFixed(3))
+            : null
+          : null,
+      explorationLargeVeinMax:
+        activeCategory === "goods"
+          ? Number.isFinite(Number(draftExplorationLargeMax))
+            ? Number(Math.max(0, Number(draftExplorationLargeMax)).toFixed(3))
+            : null
+          : null,
+      baseWage:
+        activeCategory === "professions"
+          ? Number.isFinite(Number(draftBaseWage))
+            ? Number(Number(draftBaseWage).toFixed(3))
+            : null
+          : null,
+      costConstruction:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftCostConstruction))
+            ? Math.max(1, Math.floor(Number(draftCostConstruction)))
+            : null
+          : null,
+      costDucats:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftCostDucats))
+            ? Number(Math.max(0, Number(draftCostDucats)).toFixed(3))
+            : null
+          : null,
+      startingDucats:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftStartingDucats))
+            ? Number(Math.max(0, Number(draftStartingDucats)).toFixed(3))
+            : null
+          : null,
+      extractionGoodId: activeCategory === "buildings" ? draftExtractionGoodId.trim() || null : null,
+      extractionAmountPerTurn:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftExtractionAmountPerTurn))
+            ? Number(Math.max(0, Number(draftExtractionAmountPerTurn)).toFixed(3))
+            : null
+          : null,
+      extractionRequiresDeposit: activeCategory === "buildings" ? Boolean(draftExtractionRequiresDeposit) : null,
+      infrastructureUse:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftInfrastructureUse))
+            ? Number(Math.max(0, Number(draftInfrastructureUse)).toFixed(3))
+            : null
+          : null,
+      inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
+      outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : [],
+      workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : [],
+      marketInfrastructureByCategory:
+        activeCategory === "buildings" ? normalizeCategoryAmountDraft(draftMarketInfrastructureByCategory) : {},
+      allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : [],
+      deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : [],
+      countryBuildLimits: activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : [],
+      globalBuildLimit:
+        activeCategory === "buildings"
+          ? draftGlobalBuildLimit.trim().length > 0 &&
+            Number.isFinite(Number(draftGlobalBuildLimit)) &&
+            Number(draftGlobalBuildLimit) > 0
+            ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
+            : null
           : null,
     });
 
@@ -439,16 +696,23 @@ export function ContentPanel({ open, token, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    Promise.all([adminFetchContentEntries(token, "goods"), adminFetchContentEntries(token, "professions"), fetchCountries()])
-      .then(([goods, professions, countries]) => {
+    Promise.all([
+      adminFetchContentEntries(token, "goods"),
+      adminFetchContentEntries(token, "resourceCategories"),
+      adminFetchContentEntries(token, "professions"),
+      fetchCountries(),
+    ])
+      .then(([goods, resourceCategories, professions, countries]) => {
         if (cancelled) return;
         setGoodsOptions(goods);
+        setResourceCategoryOptions(resourceCategories);
         setProfessionOptions(professions);
         setCountryOptions(countries.map((country) => ({ id: country.id, name: country.name })));
       })
       .catch(() => {
         if (cancelled) return;
         setGoodsOptions([]);
+        setResourceCategoryOptions([]);
         setProfessionOptions([]);
         setCountryOptions([]);
       });
@@ -519,11 +783,29 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftMalePortraitUrl(null);
       setDraftFemalePortraitUrl(null);
       setDraftBasePrice("1");
+      setDraftMinPrice("0.1");
+      setDraftMaxPrice("10");
+      setDraftInfraPerUnit("1");
+      setDraftResourceCategoryId("");
+      setDraftExplorationBaseWeight("1");
+      setDraftExplorationSmallChance("60");
+      setDraftExplorationMediumChance("30");
+      setDraftExplorationLargeChance("10");
+      setDraftExplorationSmallMin("10");
+      setDraftExplorationSmallMax("100");
+      setDraftExplorationMediumMin("100");
+      setDraftExplorationMediumMax("500");
+      setDraftExplorationLargeMin("500");
+      setDraftExplorationLargeMax("2000");
+      setDraftBaseWage("1");
       setDraftCostConstruction("100");
       setDraftCostDucats("10");
+      setDraftStartingDucats("0");
+      setDraftInfrastructureUse("0");
       setDraftInputs([]);
       setDraftOutputs([]);
       setDraftWorkforceRequirements([]);
+      setDraftMarketInfrastructureByCategory([]);
       setDraftAllowedCountryIds([]);
       setDraftDeniedCountryIds([]);
       setDraftCountryBuildLimits([]);
@@ -542,6 +824,87 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(selectedEntry.basePrice)
         : "1",
     );
+    setDraftMinPrice(
+      typeof selectedEntry.minPrice === "number" && Number.isFinite(selectedEntry.minPrice)
+        ? String(selectedEntry.minPrice)
+        : "0.1",
+    );
+    setDraftMaxPrice(
+      typeof selectedEntry.maxPrice === "number" && Number.isFinite(selectedEntry.maxPrice)
+        ? String(selectedEntry.maxPrice)
+        : "10",
+    );
+    setDraftInfraPerUnit(
+      typeof selectedEntry.infrastructureCostPerUnit === "number" && Number.isFinite(selectedEntry.infrastructureCostPerUnit)
+        ? String(selectedEntry.infrastructureCostPerUnit)
+        : typeof selectedEntry.infraPerUnit === "number" && Number.isFinite(selectedEntry.infraPerUnit)
+          ? String(selectedEntry.infraPerUnit)
+        : "1",
+    );
+    setDraftResourceCategoryId(
+      typeof selectedEntry.resourceCategoryId === "string" ? selectedEntry.resourceCategoryId : "",
+    );
+    setDraftIsResourceDiscoverable(Boolean(selectedEntry.isResourceDiscoverable));
+    setDraftExplorationBaseWeight(
+      typeof selectedEntry.explorationBaseWeight === "number" && Number.isFinite(selectedEntry.explorationBaseWeight)
+        ? String(Math.max(0, selectedEntry.explorationBaseWeight))
+        : "1",
+    );
+    setDraftExplorationSmallChance(
+      typeof selectedEntry.explorationSmallVeinChancePct === "number" &&
+        Number.isFinite(selectedEntry.explorationSmallVeinChancePct)
+        ? String(Math.max(0, selectedEntry.explorationSmallVeinChancePct))
+        : "60",
+    );
+    setDraftExplorationMediumChance(
+      typeof selectedEntry.explorationMediumVeinChancePct === "number" &&
+        Number.isFinite(selectedEntry.explorationMediumVeinChancePct)
+        ? String(Math.max(0, selectedEntry.explorationMediumVeinChancePct))
+        : "30",
+    );
+    setDraftExplorationLargeChance(
+      typeof selectedEntry.explorationLargeVeinChancePct === "number" &&
+        Number.isFinite(selectedEntry.explorationLargeVeinChancePct)
+        ? String(Math.max(0, selectedEntry.explorationLargeVeinChancePct))
+        : "10",
+    );
+    setDraftExplorationSmallMin(
+      typeof selectedEntry.explorationSmallVeinMin === "number" && Number.isFinite(selectedEntry.explorationSmallVeinMin)
+        ? String(Math.max(0, selectedEntry.explorationSmallVeinMin))
+        : "10",
+    );
+    setDraftExplorationSmallMax(
+      typeof selectedEntry.explorationSmallVeinMax === "number" && Number.isFinite(selectedEntry.explorationSmallVeinMax)
+        ? String(Math.max(0, selectedEntry.explorationSmallVeinMax))
+        : "100",
+    );
+    setDraftExplorationMediumMin(
+      typeof selectedEntry.explorationMediumVeinMin === "number" &&
+        Number.isFinite(selectedEntry.explorationMediumVeinMin)
+        ? String(Math.max(0, selectedEntry.explorationMediumVeinMin))
+        : "100",
+    );
+    setDraftExplorationMediumMax(
+      typeof selectedEntry.explorationMediumVeinMax === "number" &&
+        Number.isFinite(selectedEntry.explorationMediumVeinMax)
+        ? String(Math.max(0, selectedEntry.explorationMediumVeinMax))
+        : "500",
+    );
+    setDraftExplorationLargeMin(
+      typeof selectedEntry.explorationLargeVeinMin === "number" && Number.isFinite(selectedEntry.explorationLargeVeinMin)
+        ? String(Math.max(0, selectedEntry.explorationLargeVeinMin))
+        : "500",
+    );
+    setDraftExplorationLargeMax(
+      typeof selectedEntry.explorationLargeVeinMax === "number" && Number.isFinite(selectedEntry.explorationLargeVeinMax)
+        ? String(Math.max(0, selectedEntry.explorationLargeVeinMax))
+        : "2000",
+    );
+    setDraftBaseWage(
+      typeof selectedEntry.baseWage === "number" && Number.isFinite(selectedEntry.baseWage)
+        ? String(selectedEntry.baseWage)
+        : "1",
+    );
     setDraftCostConstruction(
       typeof selectedEntry.costConstruction === "number" && Number.isFinite(selectedEntry.costConstruction)
         ? String(Math.max(1, Math.floor(selectedEntry.costConstruction)))
@@ -552,6 +915,29 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(Math.max(0, selectedEntry.costDucats))
         : "10",
     );
+    setDraftStartingDucats(
+      typeof selectedEntry.startingDucats === "number" && Number.isFinite(selectedEntry.startingDucats)
+        ? String(Math.max(0, selectedEntry.startingDucats))
+        : "0",
+    );
+    setDraftExtractionGoodId(
+      typeof selectedEntry.extractionGoodId === "string" && selectedEntry.extractionGoodId.trim().length > 0
+        ? selectedEntry.extractionGoodId.trim()
+        : "",
+    );
+    setDraftExtractionAmountPerTurn(
+      typeof selectedEntry.extractionAmountPerTurn === "number" && Number.isFinite(selectedEntry.extractionAmountPerTurn)
+        ? String(Math.max(0, selectedEntry.extractionAmountPerTurn))
+        : "0",
+    );
+    setDraftExtractionRequiresDeposit(
+      typeof selectedEntry.extractionRequiresDeposit === "boolean" ? selectedEntry.extractionRequiresDeposit : true,
+    );
+    setDraftInfrastructureUse(
+      typeof selectedEntry.infrastructureUse === "number" && Number.isFinite(selectedEntry.infrastructureUse)
+        ? String(Math.max(0, selectedEntry.infrastructureUse))
+        : "0",
+    );
     setDraftInputs((selectedEntry.inputs ?? []).map((row) => ({ goodId: row.goodId, amount: String(row.amount) })));
     setDraftOutputs((selectedEntry.outputs ?? []).map((row) => ({ goodId: row.goodId, amount: String(row.amount) })));
     setDraftWorkforceRequirements(
@@ -560,16 +946,27 @@ export function ContentPanel({ open, token, onClose }: Props) {
         workers: String(row.workers),
       })),
     );
+    setDraftMarketInfrastructureByCategory(
+      Object.entries(selectedEntry.marketInfrastructureByCategory ?? {}).map(([categoryId, amount]) => ({
+        categoryId,
+        amount: String(amount),
+      })),
+    );
     setDraftAllowedCountryIds(normalizeCountryIdsDraft(selectedEntry.allowedCountryIds ?? []));
     setDraftDeniedCountryIds(normalizeCountryIdsDraft(selectedEntry.deniedCountryIds ?? []));
     setDraftCountryBuildLimits(
       (selectedEntry.countryBuildLimits ?? []).map((row) => ({
         countryId: row.countryId,
-        limit: String(Math.max(1, Math.floor(row.limit))),
+        limit:
+          typeof row.limit === "number" && Number.isFinite(row.limit) && row.limit > 0
+            ? String(Math.max(1, Math.floor(row.limit)))
+            : "",
       })),
     );
     setDraftGlobalBuildLimit(
-      typeof selectedEntry.globalBuildLimit === "number" && Number.isFinite(selectedEntry.globalBuildLimit)
+      typeof selectedEntry.globalBuildLimit === "number" &&
+        Number.isFinite(selectedEntry.globalBuildLimit) &&
+        selectedEntry.globalBuildLimit > 0
         ? String(Math.max(1, Math.floor(selectedEntry.globalBuildLimit)))
         : "",
     );
@@ -577,9 +974,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
     setCriteriaLimitsOpen(false);
     setGoodsEconomyOpen(false);
     setBuildingCostOpen(false);
+    setBuildingExtractionOpen(false);
     setBuildingInputsOpen(false);
     setBuildingOutputsOpen(false);
     setBuildingWorkforceOpen(false);
+    setBuildingMarketInfraOpen(false);
     setAllowCountrySearch("");
     setDenyCountrySearch("");
     setSavedSnapshot(buildSnapshot(selectedEntry));
@@ -587,53 +986,34 @@ export function ContentPanel({ open, token, onClose }: Props) {
 
   const hasUnsavedChanges = useMemo(() => {
     if (!selectedEntry) return false;
-    return (
-      JSON.stringify({
-        id: selectedEntry.id,
-        name: draftName.trim(),
-        description: draftDescription.trim(),
-        color: draftColor,
-        logoUrl: draftLogoUrl,
-        malePortraitUrl: draftMalePortraitUrl,
-        femalePortraitUrl: draftFemalePortraitUrl,
-        basePrice:
-          activeCategory === "goods"
-            ? Number.isFinite(Number(draftBasePrice))
-              ? Number(Number(draftBasePrice).toFixed(3))
-              : null
-            : null,
-        costConstruction:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftCostConstruction))
-              ? Math.max(1, Math.floor(Number(draftCostConstruction)))
-              : null
-            : null,
-        costDucats:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftCostDucats))
-              ? Number(Math.max(0, Number(draftCostDucats)).toFixed(3))
-              : null
-            : null,
-        inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : [],
-        outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : [],
-        workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : [],
-        allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : [],
-        deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : [],
-        countryBuildLimits:
-          activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : [],
-        globalBuildLimit:
-          activeCategory === "buildings"
-            ? Number.isFinite(Number(draftGlobalBuildLimit))
-              ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
-              : null
-            : null,
-      }) !== savedSnapshot
-    );
+    return buildDraftSnapshot() !== savedSnapshot;
   }, [
     activeCategory,
     draftBasePrice,
+    draftMinPrice,
+    draftMaxPrice,
+    draftInfraPerUnit,
+    draftResourceCategoryId,
+    draftIsResourceDiscoverable,
+    draftExplorationBaseWeight,
+    draftExplorationSmallChance,
+    draftExplorationMediumChance,
+    draftExplorationLargeChance,
+    draftExplorationSmallMin,
+    draftExplorationSmallMax,
+    draftExplorationMediumMin,
+    draftExplorationMediumMax,
+    draftExplorationLargeMin,
+    draftExplorationLargeMax,
+    draftBaseWage,
     draftCostConstruction,
     draftCostDucats,
+    draftStartingDucats,
+    draftExtractionGoodId,
+    draftExtractionAmountPerTurn,
+    draftExtractionRequiresDeposit,
+    draftInfrastructureUse,
+    draftMarketInfrastructureByCategory,
     draftColor,
     draftDescription,
     draftFemalePortraitUrl,
@@ -675,11 +1055,34 @@ export function ContentPanel({ open, token, onClose }: Props) {
         description: "",
         color: "#a78bfa",
         basePrice: activeCategory === "goods" ? 1 : undefined,
+        minPrice: activeCategory === "goods" ? 0.1 : undefined,
+        maxPrice: activeCategory === "goods" ? 10 : undefined,
+        infraPerUnit: activeCategory === "goods" ? 1 : undefined,
+        infrastructureCostPerUnit: activeCategory === "goods" ? 1 : undefined,
+        resourceCategoryId: activeCategory === "goods" ? null : undefined,
+        isResourceDiscoverable: activeCategory === "goods" ? false : undefined,
+        explorationBaseWeight: activeCategory === "goods" ? 1 : undefined,
+        explorationSmallVeinChancePct: activeCategory === "goods" ? 60 : undefined,
+        explorationMediumVeinChancePct: activeCategory === "goods" ? 30 : undefined,
+        explorationLargeVeinChancePct: activeCategory === "goods" ? 10 : undefined,
+        explorationSmallVeinMin: activeCategory === "goods" ? 10 : undefined,
+        explorationSmallVeinMax: activeCategory === "goods" ? 100 : undefined,
+        explorationMediumVeinMin: activeCategory === "goods" ? 100 : undefined,
+        explorationMediumVeinMax: activeCategory === "goods" ? 500 : undefined,
+        explorationLargeVeinMin: activeCategory === "goods" ? 500 : undefined,
+        explorationLargeVeinMax: activeCategory === "goods" ? 2000 : undefined,
+        baseWage: activeCategory === "professions" ? 1 : undefined,
         costConstruction: activeCategory === "buildings" ? 100 : undefined,
         costDucats: activeCategory === "buildings" ? 10 : undefined,
+        startingDucats: activeCategory === "buildings" ? 0 : undefined,
+        extractionGoodId: activeCategory === "buildings" ? null : undefined,
+        extractionAmountPerTurn: activeCategory === "buildings" ? 0 : undefined,
+        extractionRequiresDeposit: activeCategory === "buildings" ? true : undefined,
+        infrastructureUse: activeCategory === "buildings" ? 0 : undefined,
         inputs: activeCategory === "buildings" ? [] : undefined,
         outputs: activeCategory === "buildings" ? [] : undefined,
         workforceRequirements: activeCategory === "buildings" ? [] : undefined,
+        marketInfrastructureByCategory: activeCategory === "buildings" ? {} : undefined,
         allowedCountryIds: activeCategory === "buildings" ? [] : undefined,
         deniedCountryIds: activeCategory === "buildings" ? [] : undefined,
         countryBuildLimits: activeCategory === "buildings" ? [] : undefined,
@@ -689,6 +1092,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setSelectedEntryId(result.item.id);
       if (activeCategory === "goods") {
         setGoodsOptions(result.items);
+      }
+      if (activeCategory === "resourceCategories") {
+        setResourceCategoryOptions(result.items);
       }
       if (activeCategory === "professions") {
         setProfessionOptions(result.items);
@@ -720,31 +1126,101 @@ export function ContentPanel({ open, token, onClose }: Props) {
       description: draftDescription.trim(),
       color,
       basePrice: activeCategory === "goods" ? Math.max(0, Number(draftBasePrice || "0")) : undefined,
+      minPrice: activeCategory === "goods" ? Math.max(0, Number(draftMinPrice || "0")) : undefined,
+      maxPrice: activeCategory === "goods" ? Math.max(0, Number(draftMaxPrice || "0")) : undefined,
+      infraPerUnit: activeCategory === "goods" ? Math.max(0, Number(draftInfraPerUnit || "0")) : undefined,
+      infrastructureCostPerUnit: activeCategory === "goods" ? Math.max(0.01, Number(draftInfraPerUnit || "0.01")) : undefined,
+      resourceCategoryId: activeCategory === "goods" ? (draftResourceCategoryId.trim() || null) : undefined,
+      isResourceDiscoverable: activeCategory === "goods" ? Boolean(draftIsResourceDiscoverable) : undefined,
+      explorationBaseWeight: activeCategory === "goods" ? Math.max(0, Number(draftExplorationBaseWeight || "1")) : undefined,
+      explorationSmallVeinChancePct:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationSmallChance || "0")) : undefined,
+      explorationMediumVeinChancePct:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationMediumChance || "0")) : undefined,
+      explorationLargeVeinChancePct:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationLargeChance || "0")) : undefined,
+      explorationSmallVeinMin: activeCategory === "goods" ? Math.max(0, Number(draftExplorationSmallMin || "0")) : undefined,
+      explorationSmallVeinMax: activeCategory === "goods" ? Math.max(0, Number(draftExplorationSmallMax || "0")) : undefined,
+      explorationMediumVeinMin:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationMediumMin || "0")) : undefined,
+      explorationMediumVeinMax:
+        activeCategory === "goods" ? Math.max(0, Number(draftExplorationMediumMax || "0")) : undefined,
+      explorationLargeVeinMin: activeCategory === "goods" ? Math.max(0, Number(draftExplorationLargeMin || "0")) : undefined,
+      explorationLargeVeinMax: activeCategory === "goods" ? Math.max(0, Number(draftExplorationLargeMax || "0")) : undefined,
+      baseWage: activeCategory === "professions" ? Math.max(0, Number(draftBaseWage || "0")) : undefined,
       costConstruction: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftCostConstruction || "100"))) : undefined,
       costDucats: activeCategory === "buildings" ? Math.max(0, Number(draftCostDucats || "10")) : undefined,
+      startingDucats: activeCategory === "buildings" ? Math.max(0, Number(draftStartingDucats || "0")) : undefined,
+      extractionGoodId: activeCategory === "buildings" ? (draftExtractionGoodId.trim() || null) : undefined,
+      extractionAmountPerTurn:
+        activeCategory === "buildings" ? Math.max(0, Number(draftExtractionAmountPerTurn || "0")) : undefined,
+      extractionRequiresDeposit: activeCategory === "buildings" ? Boolean(draftExtractionRequiresDeposit) : undefined,
+      infrastructureUse: activeCategory === "buildings" ? Math.max(0, Number(draftInfrastructureUse || "0")) : undefined,
       inputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftInputs) : undefined,
       outputs: activeCategory === "buildings" ? normalizeGoodFlowsDraft(draftOutputs) : undefined,
       workforceRequirements: activeCategory === "buildings" ? normalizeWorkforceDraft(draftWorkforceRequirements) : undefined,
+      marketInfrastructureByCategory:
+        activeCategory === "buildings" ? normalizeCategoryAmountDraft(draftMarketInfrastructureByCategory) : undefined,
       allowedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftAllowedCountryIds) : undefined,
       deniedCountryIds: activeCategory === "buildings" ? normalizeCountryIdsDraft(draftDeniedCountryIds) : undefined,
       countryBuildLimits:
         activeCategory === "buildings" ? normalizeCountryBuildLimitsDraft(draftCountryBuildLimits) : undefined,
       globalBuildLimit:
         activeCategory === "buildings"
-          ? Number.isFinite(Number(draftGlobalBuildLimit))
+          ? draftGlobalBuildLimit.trim().length > 0 &&
+            Number.isFinite(Number(draftGlobalBuildLimit)) &&
+            Number(draftGlobalBuildLimit) > 0
             ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
             : null
           : undefined,
     };
-    if (activeCategory === "goods" && !Number.isFinite(payload.basePrice ?? Number.NaN)) {
-      toast.error("Базовая цена товара должна быть числом");
+    if (
+      activeCategory === "goods" &&
+      (!Number.isFinite(payload.basePrice ?? Number.NaN) ||
+        !Number.isFinite(payload.minPrice ?? Number.NaN) ||
+        !Number.isFinite(payload.maxPrice ?? Number.NaN) ||
+        !Number.isFinite(payload.infraPerUnit ?? Number.NaN) ||
+        !Number.isFinite(payload.infrastructureCostPerUnit ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationBaseWeight ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationSmallVeinChancePct ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationMediumVeinChancePct ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationLargeVeinChancePct ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationSmallVeinMin ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationSmallVeinMax ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationMediumVeinMin ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationMediumVeinMax ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationLargeVeinMin ?? Number.NaN) ||
+        !Number.isFinite(payload.explorationLargeVeinMax ?? Number.NaN))
+    ) {
+      toast.error("Параметры экономики товара должны быть числами");
+      return;
+    }
+    if (activeCategory === "goods" && (payload.maxPrice ?? 0) < (payload.minPrice ?? 0)) {
+      toast.error("Максимальная цена не может быть меньше минимальной");
+      return;
+    }
+    if (
+      activeCategory === "goods" &&
+      ((payload.explorationSmallVeinMax ?? 0) < (payload.explorationSmallVeinMin ?? 0) ||
+        (payload.explorationMediumVeinMax ?? 0) < (payload.explorationMediumVeinMin ?? 0) ||
+        (payload.explorationLargeVeinMax ?? 0) < (payload.explorationLargeVeinMin ?? 0))
+    ) {
+      toast.error("Макс. количество жилы не может быть меньше мин. значения");
+      return;
+    }
+    if (activeCategory === "professions" && !Number.isFinite(payload.baseWage ?? Number.NaN)) {
+      toast.error("Базовая зарплата должна быть числом");
       return;
     }
     if (
       activeCategory === "buildings" &&
-      (!Number.isFinite(payload.costConstruction ?? Number.NaN) || !Number.isFinite(payload.costDucats ?? Number.NaN))
+      (!Number.isFinite(payload.costConstruction ?? Number.NaN) ||
+        !Number.isFinite(payload.costDucats ?? Number.NaN) ||
+        !Number.isFinite(payload.startingDucats ?? Number.NaN) ||
+        !Number.isFinite(payload.extractionAmountPerTurn ?? Number.NaN) ||
+        !Number.isFinite(payload.infrastructureUse ?? Number.NaN))
     ) {
-      toast.error("Стоимость строительства должна быть числом");
+      toast.error("Параметры строительства должны быть числами");
       return;
     }
     setSaving(true);
@@ -754,6 +1230,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setSavedSnapshot(buildSnapshot(result.item));
       if (activeCategory === "goods") {
         setGoodsOptions(result.items);
+      }
+      if (activeCategory === "resourceCategories") {
+        setResourceCategoryOptions(result.items);
       }
       if (activeCategory === "professions") {
         setProfessionOptions(result.items);
@@ -777,6 +1256,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setSelectedEntryId(result.items[0]?.id ?? "");
       if (activeCategory === "goods") {
         setGoodsOptions(result.items);
+      }
+      if (activeCategory === "resourceCategories") {
+        setResourceCategoryOptions(result.items);
       }
       if (activeCategory === "professions") {
         setProfessionOptions(result.items);
@@ -946,7 +1428,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                           style={{ boxShadow: `0 0 0 1px ${entry.color}33 inset` }}
                         >
                           {entry.logoUrl ? (
-                            <img src={entry.logoUrl} alt="" className="h-full w-full object-cover" />
+                            <img src={entry.logoUrl} alt="" className="h-full w-full object-contain p-1" />
                           ) : (
                             <span className="text-xs font-semibold" style={{ color: entry.color }}>
                               {entry.name.slice(0, 1).toUpperCase()}
@@ -1108,9 +1590,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
-                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 pt-1">
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-4">
                               <label className="block">
                                 <Tooltip content="Сколько очков строительства требуется на завершение проекта.">
                                   <span className="mb-1 block text-xs text-white/60">Очки строительства</span>
@@ -1134,6 +1616,105 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                   placeholder="10"
                                   className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
                                 />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Стартовый капитал здания, начисляемый сразу после завершения строительства.">
+                                  <span className="mb-1 block text-xs text-white/60">Стартовые дукаты</span>
+                                </Tooltip>
+                                <input
+                                  value={draftStartingDucats}
+                                  onChange={(e) => setDraftStartingDucats(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="0"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Нагрузка здания на инфраструктуру провинции. Влияет на доступный объем торговли и продуктивность.">
+                                  <span className="mb-1 block text-xs text-white/60">Инфраструктура</span>
+                                </Tooltip>
+                                <input
+                                  value={draftInfrastructureUse}
+                                  onChange={(e) => setDraftInfrastructureUse(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="0"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                            </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBuildingExtractionOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Параметры добычи ресурсов провинции. Если задан ресурс, здание будет пытаться добывать его каждый ход.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Добыча из залежей</div>
+                                </Tooltip>
+                                {buildingExtractionOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                            </div>
+                            <AnimatePresence initial={false}>
+                            {buildingExtractionOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-visible"
+                            >
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-3">
+                              <label className="block">
+                                <Tooltip content="Какой товар добывает здание напрямую из провинциальных залежей.">
+                                  <span className="mb-1 block text-xs text-white/60">Добываемый товар</span>
+                                </Tooltip>
+                                <CustomSelect
+                                  value={draftExtractionGoodId}
+                                  onChange={setDraftExtractionGoodId}
+                                  options={[
+                                    { value: "", label: "Не добывает" },
+                                    ...goodsOptions.map((option) => ({ value: option.id, label: option.name })),
+                                  ]}
+                                  buttonClassName="h-[42px]"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Сколько единиц добывается за ход при 100% продуктивности.">
+                                  <span className="mb-1 block text-xs text-white/60">Объем/ход</span>
+                                </Tooltip>
+                                <input
+                                  value={draftExtractionAmountPerTurn}
+                                  onChange={(e) => setDraftExtractionAmountPerTurn(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="0"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Если включено, добыча ограничена только существующими залежами в провинции.">
+                                  <span className="mb-1 block text-xs text-white/60">Требует залежь</span>
+                                </Tooltip>
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftExtractionRequiresDeposit((v) => !v)}
+                                  className={`h-[42px] w-full rounded-lg border px-3 text-sm font-semibold transition ${
+                                    draftExtractionRequiresDeposit
+                                      ? "border-emerald-400/35 bg-emerald-500/15 text-emerald-200"
+                                      : "border-white/15 bg-black/35 text-white/70"
+                                  }`}
+                                >
+                                  {draftExtractionRequiresDeposit ? "Да" : "Нет"}
+                                </button>
                               </label>
                             </div>
                             </motion.div>
@@ -1176,7 +1757,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="space-y-2 pt-1">
                               {draftInputs.map((row, index) => (
@@ -1252,7 +1833,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="space-y-2 pt-1">
                               {draftOutputs.map((row, index) => (
@@ -1333,7 +1914,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="space-y-2 pt-1">
                               {draftWorkforceRequirements.map((row, index) => (
@@ -1378,6 +1959,95 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             </AnimatePresence>
                           </div>
 
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBuildingMarketInfraOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Вклад здания в общую инфраструктуру рынка по категориям. Используется для внешней торговли между рынками.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Инфраструктура рынка</div>
+                                </Tooltip>
+                                {buildingMarketInfraOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                              {buildingMarketInfraOpen && (
+                                <Tooltip content="Добавить категорию инфраструктуры, которую генерирует это здание.">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDraftMarketInfrastructureByCategory((prev) => [
+                                        ...prev,
+                                        { categoryId: "", amount: "1" },
+                                      ])
+                                    }
+                                    className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+                                  >
+                                    Добавить
+                                  </button>
+                                </Tooltip>
+                              )}
+                            </div>
+                            <AnimatePresence initial={false}>
+                            {buildingMarketInfraOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-visible"
+                            >
+                            <div className="space-y-2 pt-1">
+                              {draftMarketInfrastructureByCategory.map((row, index) => (
+                                <div key={`market-infra-${index}`} className="grid grid-cols-[minmax(0,1fr)_110px_32px] gap-2">
+                                  <CustomSelect
+                                    value={row.categoryId}
+                                    onChange={(value) =>
+                                      setDraftMarketInfrastructureByCategory((prev) =>
+                                        prev.map((r, i) => (i === index ? { ...r, categoryId: value } : r)),
+                                      )
+                                    }
+                                    options={[
+                                      { value: "", label: "Выберите категорию" },
+                                      ...resourceCategoryOptions.map((option) => ({ value: option.id, label: option.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
+                                  />
+                                  <input
+                                    value={row.amount}
+                                    onChange={(e) =>
+                                      setDraftMarketInfrastructureByCategory((prev) =>
+                                        prev.map((r, i) => (i === index ? { ...r, amount: e.target.value } : r)),
+                                      )
+                                    }
+                                    inputMode="decimal"
+                                    placeholder="0"
+                                    className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDraftMarketInfrastructureByCategory((prev) => prev.filter((_, i) => i !== index))
+                                    }
+                                    className="rounded-lg border border-rose-400/30 bg-rose-500/10 text-xs text-rose-200"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                              {draftMarketInfrastructureByCategory.length === 0 && (
+                                <div className="text-xs text-white/45">Нет категорий инфраструктуры рынка</div>
+                              )}
+                            </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
+                          </div>
+
                         </div>
                       </section>
                     )}
@@ -1407,7 +2077,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="grid gap-3 md:grid-cols-2 pt-1">
                               <div>
@@ -1534,7 +2204,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
                             <div className="mb-3">
                               <label className="block">
@@ -1543,7 +2213,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                     Глобальный лимит (для всего мира):{" "}
                                     <span className="text-amber-300/90">
                                       {selectedBuildingGlobalUsage}/
-                                      {Number.isFinite(Number(draftGlobalBuildLimit))
+                                      {draftGlobalBuildLimit.trim().length > 0 &&
+                                      Number.isFinite(Number(draftGlobalBuildLimit)) &&
+                                      Number(draftGlobalBuildLimit) > 0
                                         ? Math.max(1, Math.floor(Number(draftGlobalBuildLimit)))
                                         : "∞"}
                                     </span>
@@ -1564,7 +2236,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               </Tooltip>
                               <button
                                 type="button"
-                                onClick={() => setDraftCountryBuildLimits((prev) => [...prev, { countryId: "", limit: "1" }])}
+                                onClick={() => setDraftCountryBuildLimits((prev) => [...prev, { countryId: "", limit: "" }])}
                                 className="rounded-md border border-emerald-400/35 bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
                               >
                                 Добавить лимит
@@ -1594,7 +2266,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                       )
                                     }
                                     inputMode="numeric"
-                                    placeholder="1"
+                                    placeholder="Пусто или 0 = без лимита"
                                     className="rounded-lg border border-white/10 bg-black/35 px-2 py-2 text-sm text-white outline-none"
                                   />
                                   <button
@@ -1608,9 +2280,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               ))}
                               {draftCountryBuildLimits.map((row, index) => {
                                 const used = row.countryId ? Math.max(0, Math.floor(selectedBuildingUsageByCountry[row.countryId] ?? 0)) : 0;
-                                const limit = Number.isFinite(Number(row.limit))
-                                  ? Math.max(1, Math.floor(Number(row.limit)))
-                                  : null;
+                                const parsedLimit = Number(row.limit);
+                                const limit =
+                                  row.limit.trim().length > 0 && Number.isFinite(parsedLimit) && parsedLimit > 0
+                                    ? Math.max(1, Math.floor(parsedLimit))
+                                    : null;
                                 return (
                                   <div key={`country-limit-usage-${index}`} className="text-[11px] text-white/50">
                                     {(countryOptions.find((country) => country.id === row.countryId)?.name ?? row.countryId ?? "Страна")}:
@@ -1655,26 +2329,259 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
                               transition={{ duration: 0.2, ease: "easeOut" }}
-                              className="overflow-hidden"
+                              className="overflow-visible"
                             >
-                              <label className="block">
-                                <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
-                                  <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
-                                </Tooltip>
-                                <input
-                                  value={draftBasePrice}
-                                  onChange={(e) => setDraftBasePrice(e.target.value)}
-                                  inputMode="decimal"
-                                  placeholder="1"
-                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
-                                />
-                              </label>
+                              <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
+                                <label className="block">
+                                  <Tooltip content="Базовая цена единицы товара. Сейчас используется как заглушка для расчетов.">
+                                    <span className="mb-1 block text-xs text-white/60">Базовая цена</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftBasePrice}
+                                    onChange={(e) => setDraftBasePrice(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Минимальная граница цены товара на рынке.">
+                                    <span className="mb-1 block text-xs text-white/60">Мин. цена</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftMinPrice}
+                                    onChange={(e) => setDraftMinPrice(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="0.1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Максимальная граница цены товара на рынке.">
+                                    <span className="mb-1 block text-xs text-white/60">Макс. цена</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftMaxPrice}
+                                    onChange={(e) => setDraftMaxPrice(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="10"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Сколько инфраструктуры расходуется на перевозку 1 единицы товара (покупка или продажа).">
+                                    <span className="mb-1 block text-xs text-white/60">Инфра за 1 ед.</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftInfraPerUnit}
+                                    onChange={(e) => setDraftInfraPerUnit(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Категория инфраструктуры для логистических лимитов. Если пусто, инфраструктура не ограничивает торговлю этим товаром.">
+                                    <span className="mb-1 block text-xs text-white/60">Категория инфраструктуры</span>
+                                  </Tooltip>
+                                  <CustomSelect
+                                    value={draftResourceCategoryId}
+                                    onChange={setDraftResourceCategoryId}
+                                    options={[
+                                      { value: "", label: "Без категории" },
+                                      ...resourceCategoryOptions.map((option) => ({ value: option.id, label: option.name })),
+                                    ]}
+                                    buttonClassName="h-[42px]"
+                                  />
+                                </label>
+                              </div>
                               <Tooltip content="После внедрения рынка это значение будет стартовой/референсной ценой.">
                                 <div className="mt-1 text-[11px] text-white/45">Используется как заглушка цены до внедрения рынка.</div>
                               </Tooltip>
                             </motion.div>
                           ) : null}
                           </AnimatePresence>
+                        </div>
+                      </section>
+                    )}
+
+                    {contentSection === "exploration" && activeCategory === "goods" && (
+                      <section className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <button
+                            type="button"
+                            onClick={() => setGoodsExplorationOpen((v) => !v)}
+                            className="mb-2 flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                          >
+                            <Tooltip content="Параметры генерации залежей этого товара при георазведке.">
+                              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Георазведка товара</div>
+                            </Tooltip>
+                            {goodsExplorationOpen ? (
+                              <ChevronDown size={14} className="text-white/60" />
+                            ) : (
+                              <ChevronRight size={14} className="text-white/60" />
+                            )}
+                          </button>
+                          <AnimatePresence initial={false}>
+                          {goodsExplorationOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-visible"
+                            >
+                              <label className="mb-3 flex items-center gap-2 rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+                                <input
+                                  type="checkbox"
+                                  checked={draftIsResourceDiscoverable}
+                                  onChange={(e) => setDraftIsResourceDiscoverable(e.target.checked)}
+                                  className="h-4 w-4 rounded border-white/20 bg-black/60 accent-emerald-400"
+                                />
+                                <span className="text-xs text-white/80">Можно найти в провинции как ресурс</span>
+                              </label>
+                              <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                                <label className="block">
+                                  <Tooltip content="Базовый вес товара при розыгрыше найденного ресурса. Чем выше, тем чаще выпадает.">
+                                    <span className="mb-1 block text-xs text-white/60">Базовый вес</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationBaseWeight}
+                                    onChange={(e) => setDraftExplorationBaseWeight(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="1"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Шанс маленькой жилы (в %). Нормализуется вместе с другими шансами.">
+                                    <span className="mb-1 block text-xs text-white/60">Малая жила, %</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationSmallChance}
+                                    onChange={(e) => setDraftExplorationSmallChance(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="60"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Шанс средней жилы (в %). Нормализуется вместе с другими шансами.">
+                                    <span className="mb-1 block text-xs text-white/60">Средняя жила, %</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationMediumChance}
+                                    onChange={(e) => setDraftExplorationMediumChance(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="30"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Шанс крупной жилы (в %). Нормализуется вместе с другими шансами.">
+                                    <span className="mb-1 block text-xs text-white/60">Крупная жила, %</span>
+                                  </Tooltip>
+                                  <input
+                                    value={draftExplorationLargeChance}
+                                    onChange={(e) => setDraftExplorationLargeChance(e.target.value)}
+                                    inputMode="decimal"
+                                    placeholder="10"
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                                <label className="block">
+                                  <Tooltip content="Диапазон количества для маленькой жилы.">
+                                    <span className="mb-1 block text-xs text-white/60">Малая: мин / макс</span>
+                                  </Tooltip>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                      value={draftExplorationSmallMin}
+                                      onChange={(e) => setDraftExplorationSmallMin(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="10"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                    <input
+                                      value={draftExplorationSmallMax}
+                                      onChange={(e) => setDraftExplorationSmallMax(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="100"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                  </div>
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Диапазон количества для средней жилы.">
+                                    <span className="mb-1 block text-xs text-white/60">Средняя: мин / макс</span>
+                                  </Tooltip>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                      value={draftExplorationMediumMin}
+                                      onChange={(e) => setDraftExplorationMediumMin(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="100"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                    <input
+                                      value={draftExplorationMediumMax}
+                                      onChange={(e) => setDraftExplorationMediumMax(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="500"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                  </div>
+                                </label>
+                                <label className="block">
+                                  <Tooltip content="Диапазон количества для крупной жилы.">
+                                    <span className="mb-1 block text-xs text-white/60">Крупная: мин / макс</span>
+                                  </Tooltip>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <input
+                                      value={draftExplorationLargeMin}
+                                      onChange={(e) => setDraftExplorationLargeMin(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="500"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                    <input
+                                      value={draftExplorationLargeMax}
+                                      onChange={(e) => setDraftExplorationLargeMax(e.target.value)}
+                                      inputMode="decimal"
+                                      placeholder="2000"
+                                      className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                    />
+                                  </div>
+                                </label>
+                              </div>
+                            </motion.div>
+                          ) : null}
+                          </AnimatePresence>
+                        </div>
+                      </section>
+                    )}
+
+                    {contentSection === "economy" && activeCategory === "professions" && (
+                      <section className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                          <Tooltip content="Базовая зарплата за одного работника профессии за ход. Используется при расчете затрат зданий.">
+                            <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                              Экономика профессии
+                            </span>
+                          </Tooltip>
+                          <label className="block">
+                            <Tooltip content="Базовая ставка оплаты труда для этой профессии.">
+                              <span className="mb-1 block text-xs text-white/60">Базовая зарплата</span>
+                            </Tooltip>
+                            <input
+                              value={draftBaseWage}
+                              onChange={(e) => setDraftBaseWage(e.target.value)}
+                              inputMode="decimal"
+                              placeholder="1"
+                              className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                            />
+                          </label>
                         </div>
                       </section>
                     )}
@@ -1687,7 +2594,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                         <div className="flex flex-wrap items-start gap-4">
                           <div className="flex h-[88px] w-[88px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-[#131a22]">
                             {draftLogoUrl ? (
-                              <img src={draftLogoUrl} alt="Логотип записи" className="h-full w-full object-cover" />
+                              <img src={draftLogoUrl} alt="Логотип записи" className="h-full w-full object-contain p-1" />
                             ) : (
                               <span className="text-xs font-semibold" style={{ color: draftColor }}>
                                 {draftName.trim().slice(0, 1).toUpperCase() || "К"}
@@ -1803,7 +2710,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                             style={{ backgroundColor: `${draftColor}22` }}
                           >
                             {draftLogoUrl ? (
-                              <img src={draftLogoUrl} alt="" className="h-full w-full object-cover" />
+                              <img src={draftLogoUrl} alt="" className="h-full w-full object-contain p-1" />
                             ) : (
                               <span className="text-xs font-semibold" style={{ color: draftColor }}>
                                 {draftName.trim().slice(0, 1).toUpperCase() || "К"}
@@ -1843,7 +2750,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               style={{ backgroundColor: `${draftColor}22` }}
                             >
                               {draftLogoUrl ? (
-                                <img src={draftLogoUrl} alt="" className="h-full w-full object-cover" />
+                                <img src={draftLogoUrl} alt="" className="h-full w-full object-contain p-1" />
                               ) : (
                                 <span className="text-xs font-semibold" style={{ color: draftColor }}>
                                   {draftName.trim().slice(0, 1).toUpperCase() || "К"}

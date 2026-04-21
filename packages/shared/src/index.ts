@@ -4,6 +4,7 @@ export type Country = {
   id: string;
   name: string;
   color: string;
+  marketId?: string | null;
   flagUrl?: string | null;
   crestUrl?: string | null;
   isAdmin?: boolean;
@@ -79,6 +80,27 @@ export type BuildingInstance = {
   buildingId: string;
   owner: BuildingOwner;
   createdTurnId: number;
+  level?: number;
+  ducats?: number;
+  warehouseByGoodId?: Record<string, number>;
+  lastLaborCoverage?: number;
+  lastInfraCoverage?: number;
+  lastInputCoverage?: number;
+  lastFinanceCoverage?: number;
+  lastProductivity?: number;
+  lastPurchaseByGoodId?: Record<string, number>;
+  lastPurchaseCostByGoodId?: Record<string, number>;
+  lastSalesByGoodId?: Record<string, number>;
+  lastSalesRevenueByGoodId?: Record<string, number>;
+  lastConsumptionByGoodId?: Record<string, number>;
+  lastProductionByGoodId?: Record<string, number>;
+  lastExtractionByGoodId?: Record<string, number>;
+  lastRevenueDucats?: number;
+  lastInputCostDucats?: number;
+  lastWagesDucats?: number;
+  lastNetDucats?: number;
+  isInactive?: boolean;
+  inactiveReason?: string | null;
 };
 
 export type ProvinceConstructionProject = {
@@ -92,6 +114,20 @@ export type ProvinceConstructionProject = {
   createdTurnId: number;
 };
 
+export type ProvinceResourceDeposit = {
+  goodId: string;
+  amount: number;
+  discoveredTurnId: number;
+  veinSize: "small" | "medium" | "large";
+};
+
+export type ProvinceResourceExplorationProject = {
+  queueId: string;
+  requestedByCountryId: string;
+  startedTurnId: number;
+  turnsRemaining: number;
+};
+
 export type WorldBase = {
   turnId: number;
   resourcesByCountry: Record<string, ResourceTotals>;
@@ -99,11 +135,15 @@ export type WorldBase = {
   provinceNameById: Record<string, string>;
   colonyProgressByProvince: Record<string, Record<string, number>>;
   provinceColonizationByProvince: Record<string, { cost: number; disabled: boolean; manualCost?: boolean }>;
+  provinceInfrastructureByProvince: Record<string, number>;
   provincePopulationByProvince: Record<string, ProvincePopulation>;
   provinceBuildingsByProvince: Record<string, BuildingInstance[]>;
   provinceBuildingDucatsByProvince: Record<string, Record<string, number>>;
   provincePopulationTreasuryByProvince: Record<string, number>;
   provinceConstructionQueueByProvince: Record<string, ProvinceConstructionProject[]>;
+  provinceResourceDepositsByProvince: Record<string, ProvinceResourceDeposit[]>;
+  provinceResourceExplorationQueueByProvince: Record<string, ProvinceResourceExplorationProject[]>;
+  provinceResourceExplorationCountByProvince: Record<string, number>;
 };
 
 export const WORLD_DELTA_MASK = {
@@ -117,6 +157,10 @@ export const WORLD_DELTA_MASK = {
   provincePopulationTreasuryByProvince: 1 << 7,
   provinceBuildingDucatsByProvince: 1 << 8,
   provinceConstructionQueueByProvince: 1 << 9,
+  provinceInfrastructureByProvince: 1 << 10,
+  provinceResourceDepositsByProvince: 1 << 11,
+  provinceResourceExplorationQueueByProvince: 1 << 12,
+  provinceResourceExplorationCountByProvince: 1 << 13,
 } as const;
 
 export type WorldDelta = {
@@ -129,16 +173,20 @@ export type WorldDelta = {
   n?: Record<string, string | null>;
   p?: Record<string, Record<string, number> | null>;
   z?: Record<string, { cost: number; disabled: boolean; manualCost?: boolean } | null>;
+  s?: Record<string, number | null>;
   u?: Record<string, ProvincePopulation | null>;
   b?: Record<string, BuildingInstance[] | null>;
   y?: Record<string, number | null>;
   q?: Record<string, Record<string, number> | null>;
   r?: Record<string, ProvinceConstructionProject[] | null>;
+  t?: Record<string, ProvinceResourceDeposit[] | null>;
+  e?: Record<string, ProvinceResourceExplorationProject[] | null>;
+  k?: Record<string, number | null>;
   rejectedOrders: Array<{ playerId: string; reason: string; tempOrderId?: string }>;
 };
 
 export type WsInMessage =
-  | { type: "AUTH"; token: string }
+  | { type: "AUTH"; token: string; lastKnownWorldStateVersion?: number }
   | OrderDelta
   | { type: "PING" }
   | { type: "WORLD_DELTA_ACK"; worldStateVersion: number }
@@ -148,7 +196,7 @@ export type WsInMessage =
 
 export type WsOutMessage =
   | { type: "CONNECTED"; serverTime: string }
-  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number; worldStateVersion: number; clientSettings?: { eventLogRetentionTurns: number } }
+  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase?: WorldBase; turnId: number; worldStateVersion: number; replayFromWorldStateVersion?: number; clientSettings?: { eventLogRetentionTurns: number } }
   | { type: "ORDER_BROADCAST"; order: Order }
   | { type: "TURN_RESOLVE_STARTED"; turnId: number; reason: "manual" | "admin" | "auto" }
   | { type: "NEWS_EVENT"; event: EventLogEntry }

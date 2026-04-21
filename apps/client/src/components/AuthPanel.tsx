@@ -76,10 +76,12 @@ function FieldError({ text }: { text?: string }) {
 function FileField({
   label,
   file,
+  hint,
   onChange,
 }: {
   label: string;
   file: File | null;
+  hint: string;
   onChange: (file: File | null) => void;
 }) {
   return (
@@ -95,17 +97,25 @@ function FileField({
           onChange={(event) => onChange(event.target.files?.[0] ?? null)}
         />
       </label>
-      <p className="mt-1 text-xs text-slate-500">PNG, JPG, WEBP до 4MB, максимум 256x256</p>
+      <p className="mt-1 text-xs text-slate-500">{hint}</p>
     </div>
   );
 }
 
-async function isImageWithinMaxSize(file: File, maxSize = 256): Promise<boolean> {
+async function isImageWithinRule(
+  file: File,
+  rule: { maxWidth: number; maxHeight: number; ratioWidth: number; ratioHeight: number },
+): Promise<boolean> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const ok = img.width <= maxSize && img.height <= maxSize;
+      const ratio = img.width / Math.max(1, img.height);
+      const targetRatio = rule.ratioWidth / rule.ratioHeight;
+      const ok =
+        img.width <= rule.maxWidth &&
+        img.height <= rule.maxHeight &&
+        Math.abs(ratio - targetRatio) <= 0.01;
       URL.revokeObjectURL(url);
       resolve(ok);
     };
@@ -305,13 +315,13 @@ export function AuthPanel({ onSuccess, onOpenCivilopedia }: Props) {
   });
 
   const submitRegister = registerForm.handleSubmit(async (values) => {
-    if (flagFile && !(await isImageWithinMaxSize(flagFile))) {
-      toast.error("Флаг должен быть максимум 256x256");
+    if (flagFile && !(await isImageWithinRule(flagFile, { maxWidth: 192, maxHeight: 128, ratioWidth: 3, ratioHeight: 2 }))) {
+      toast.error("Флаг: максимум 192x128, соотношение 3:2");
       return;
     }
 
-    if (crestFile && !(await isImageWithinMaxSize(crestFile))) {
-      toast.error("Герб должен быть максимум 256x256");
+    if (crestFile && !(await isImageWithinRule(crestFile, { maxWidth: 128, maxHeight: 192, ratioWidth: 2, ratioHeight: 3 }))) {
+      toast.error("Герб: максимум 128x192, соотношение 2:3");
       return;
     }
 
@@ -338,7 +348,7 @@ export function AuthPanel({ onSuccess, onOpenCivilopedia }: Props) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "REGISTER_FAILED";
       if (msg === "IMAGE_DIMENSIONS_TOO_LARGE") {
-        toast.error("Изображение должно быть максимум 256x256");
+        toast.error("Проверьте формат: флаг 192x128 (3:2), герб 128x192 (2:3)");
       } else if (msg === "FILE_TOO_LARGE") {
         toast.error("Файл слишком большой (до 4MB)");
       } else if (msg === "ONLY_IMAGES") {
@@ -593,8 +603,18 @@ export function AuthPanel({ onSuccess, onOpenCivilopedia }: Props) {
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">
-                  <FileField label="Флаг" file={flagFile} onChange={setFlagFile} />
-                  <FileField label="Герб" file={crestFile} onChange={setCrestFile} />
+                  <FileField
+                    label="Флаг"
+                    file={flagFile}
+                    hint="PNG/JPG/WEBP до 4MB, максимум 192x128, соотношение 3:2"
+                    onChange={setFlagFile}
+                  />
+                  <FileField
+                    label="Герб"
+                    file={crestFile}
+                    hint="PNG/JPG/WEBP до 4MB, максимум 128x192, соотношение 2:3"
+                    onChange={setCrestFile}
+                  />
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">

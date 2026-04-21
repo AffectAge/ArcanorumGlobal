@@ -2,13 +2,20 @@ import { Dialog, Listbox } from "@headlessui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, Coins, Crosshair, Edit3, Grid3X3, Lock, LockOpen, LocateFixed, Map as MapIcon, Minus, Move, Plus, Search, Sparkles, X } from "lucide-react";
+import { Building2, Check, ChevronDown, Coins, Crosshair, Edit3, Grid3X3, Info, Lock, LockOpen, LocateFixed, Map as MapIcon, Minus, Move, Pickaxe, Plus, Search, Sparkles, Workflow, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Country, WorldBase } from "@arcanorum/shared";
 import { Tooltip } from "./Tooltip";
 import { ColonizationModal } from "./ColonizationModal";
 import { ProvinceHoverTooltip } from "./ProvinceHoverTooltip";
-import { cancelCountryColonization, fetchProvinceIndex, renameOwnedProvince, startCountryColonization } from "../lib/api";
+import {
+  cancelCountryColonization,
+  fetchContentEntries,
+  fetchProvinceIndex,
+  renameOwnedProvince,
+  startCountryColonization,
+  startCountryExploration,
+} from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 
 type Props = {
@@ -52,6 +59,13 @@ const EMPTY_PROVINCE_OWNER: WorldBase["provinceOwner"] = {};
 const EMPTY_PROVINCE_NAMES: WorldBase["provinceNameById"] = {};
 const EMPTY_COLONY_PROGRESS: WorldBase["colonyProgressByProvince"] = {};
 const EMPTY_PROVINCE_COLONIZATION: WorldBase["provinceColonizationByProvince"] = {};
+const EMPTY_PROVINCE_INFRASTRUCTURE: Record<string, number> = {};
+const EMPTY_PROVINCE_LOGISTICS_CONSUMED: Record<string, Record<string, number>> = {};
+const EMPTY_PROVINCE_LOGISTICS_CAPACITY: Record<string, Record<string, number>> = {};
+const EMPTY_PROVINCE_BUILDINGS: Record<string, Array<{ buildingId?: string }>> = {};
+const EMPTY_PROVINCE_RESOURCE_DEPOSITS: Record<string, Array<{ goodId: string; amount: number; veinSize: "small" | "medium" | "large" }>> = {};
+const EMPTY_PROVINCE_EXPLORATION_QUEUE: Record<string, Array<{ queueId: string; turnsRemaining: number; requestedByCountryId: string }>> = {};
+const EMPTY_PROVINCE_EXPLORATION_COUNT: Record<string, number> = {};
 const EMPTY_COUNTRY_PROGRESS: Record<string, number> = {};
 
 function setInteractions(map: MapLibreMap, enabled: boolean) {
@@ -240,6 +254,7 @@ export function MapView({
     colonizers: Array<{ countryId: string; countryName: string; countryColor: string; percent: number; hasQueuedOrder: boolean }>;
   } | null>(null);
   const [countries, setCountries] = useState<Country[]>([]);
+  const [infrastructureCategoryNamesById, setInfrastructureCategoryNamesById] = useState<Record<string, string>>({});
   const [colonizationModalOpen, setColonizationModalOpen] = useState(false);
   const [provinceRenameModalOpen, setProvinceRenameModalOpen] = useState(false);
   const [provinceRenameInput, setProvinceRenameInput] = useState("");
@@ -258,6 +273,10 @@ export function MapView({
   const [colonizationLegendHovered, setColonizationLegendHovered] = useState(false);
   const [politicalLegendCountrySearch, setPoliticalLegendCountrySearch] = useState("");
   const [mapModeFadePulse, setMapModeFadePulse] = useState(0);
+  const [selectedProvincePanelTab, setSelectedProvincePanelTab] = useState<"main" | "infra" | "buildings" | "exploration">("main");
+  const [explorationActionPending, setExplorationActionPending] = useState(false);
+  const [buildingMetaById, setBuildingMetaById] = useState<Record<string, { name: string; logoUrl: string | null }>>({});
+  const [goodMetaById, setGoodMetaById] = useState<Record<string, { name: string; logoUrl: string | null }>>({});
 
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -265,8 +284,49 @@ export function MapView({
   const setSelectedProvince = useGameStore((s) => s.setSelectedProvince);
   const provinceOwnerById = useGameStore((s) => s.worldBase?.provinceOwner ?? EMPTY_PROVINCE_OWNER);
   const provinceNameById = useGameStore((s) => s.worldBase?.provinceNameById ?? EMPTY_PROVINCE_NAMES);
+  const provinceInfrastructureByProvince = useGameStore(
+    (s) => s.worldBase?.provinceInfrastructureByProvince ?? EMPTY_PROVINCE_INFRASTRUCTURE,
+  );
+  const provinceLogisticsConsumedByCategoryByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as { provinceLastLogisticsConsumedByCategoryByProvince?: Record<string, Record<string, number>> })
+        ?.provinceLastLogisticsConsumedByCategoryByProvince ?? EMPTY_PROVINCE_LOGISTICS_CONSUMED),
+  );
+  const provinceLogisticsCapacityByCategoryByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as { provinceLastLogisticsCapacityByCategoryByProvince?: Record<string, Record<string, number>> })
+        ?.provinceLastLogisticsCapacityByCategoryByProvince ?? EMPTY_PROVINCE_LOGISTICS_CAPACITY),
+  );
   const colonyProgressByProvince = useGameStore((s) => s.worldBase?.colonyProgressByProvince ?? EMPTY_COLONY_PROGRESS);
   const provinceColonizationByProvince = useGameStore((s) => s.worldBase?.provinceColonizationByProvince ?? EMPTY_PROVINCE_COLONIZATION);
+  const provinceBuildingsByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as { provinceBuildingsByProvince?: Record<string, Array<{ buildingId?: string }>> })
+        ?.provinceBuildingsByProvince ?? EMPTY_PROVINCE_BUILDINGS),
+  );
+  const provinceResourceDepositsByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as {
+        provinceResourceDepositsByProvince?: Record<
+          string,
+          Array<{ goodId: string; amount: number; discoveredTurnId: number; veinSize: "small" | "medium" | "large" }>
+        >;
+      })?.provinceResourceDepositsByProvince ?? EMPTY_PROVINCE_RESOURCE_DEPOSITS),
+  );
+  const provinceResourceExplorationQueueByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as {
+        provinceResourceExplorationQueueByProvince?: Record<
+          string,
+          Array<{ queueId: string; turnsRemaining: number; startedTurnId: number; requestedByCountryId: string }>
+        >;
+      })?.provinceResourceExplorationQueueByProvince ?? EMPTY_PROVINCE_EXPLORATION_QUEUE),
+  );
+  const provinceResourceExplorationCountByProvince = useGameStore(
+    (s) =>
+      ((s.worldBase as unknown as { provinceResourceExplorationCountByProvince?: Record<string, number> })
+        ?.provinceResourceExplorationCountByProvince ?? EMPTY_PROVINCE_EXPLORATION_COUNT),
+  );
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
   const addEvent = useGameStore((s) => s.addEvent);
   const updateCountryResources = useGameStore((s) => s.updateCountryResources);
@@ -452,6 +512,74 @@ export function MapView({
 
   useEffect(() => {
     let cancelled = false;
+    fetchContentEntries("resourceCategories")
+      .then((items) => {
+        if (cancelled) return;
+        setInfrastructureCategoryNamesById(
+          Object.fromEntries(items.map((item) => [item.id, item.name] as const)),
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInfrastructureCategoryNamesById({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchContentEntries("buildings")
+      .then((items) => {
+        if (cancelled) return;
+        const next: Record<string, { name: string; logoUrl: string | null }> = {};
+        for (const item of items) {
+          next[item.id] = {
+            name: item.name,
+            logoUrl: resolveAssetUrl(apiBase, item.logoUrl) ?? null,
+          };
+        }
+        setBuildingMetaById(next);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBuildingMetaById({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchContentEntries("goods")
+      .then((items) => {
+        if (cancelled) return;
+        const next: Record<string, { name: string; logoUrl: string | null }> = {};
+        for (const item of items) {
+          next[item.id] = {
+            name: item.name,
+            logoUrl: resolveAssetUrl(apiBase, item.logoUrl) ?? null,
+          };
+        }
+        setGoodMetaById(next);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGoodMetaById({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
+
+  useEffect(() => {
+    setSelectedProvincePanelTab("main");
+  }, [selectedProvinceId]);
+
+  useEffect(() => {
+    let cancelled = false;
     fetchProvinceIndex()
       .then((items) => {
         if (cancelled) return;
@@ -530,6 +658,82 @@ export function MapView({
   const selectedColonizationDucatsCost = selectedProvinceId ? getDerivedProvinceCosts(selectedProvinceId).ducats : 0;
   const selectedMyColonyProgress = auth?.countryId && selectedProvinceId ? (selectedColonyProgress[auth.countryId] ?? null) : null;
   const selectedCanCancelColonization = selectedProvinceId != null && selectedMyColonyProgress != null;
+  const selectedInfrastructureCapacity = selectedProvinceId
+    ? Math.max(0, Number(provinceInfrastructureByProvince[selectedProvinceId] ?? 0))
+    : 0;
+  const selectedInfrastructureConsumed = selectedProvinceId
+    ? Object.values(provinceLogisticsConsumedByCategoryByProvince[selectedProvinceId] ?? {}).reduce(
+        (sum, value) => sum + Math.max(0, Number(value)),
+        0,
+      )
+    : 0;
+  const selectedInfrastructureByCategory = useMemo(() => {
+    if (!selectedProvinceId) return [];
+    const consumed = provinceLogisticsConsumedByCategoryByProvince[selectedProvinceId] ?? {};
+    const capacity = provinceLogisticsCapacityByCategoryByProvince[selectedProvinceId] ?? {};
+    return [...new Set([...Object.keys(consumed), ...Object.keys(capacity)])]
+      .map((categoryId) => {
+        const c = Math.max(0, Number(consumed[categoryId] ?? 0));
+        const cap = Math.max(0, Number(capacity[categoryId] ?? 0));
+        return {
+          categoryId,
+          consumed: c,
+          capacity: cap,
+          available: Math.max(0, cap - c),
+        };
+      })
+      .sort((a, b) => a.available - b.available || a.categoryId.localeCompare(b.categoryId, "ru"));
+  }, [
+    selectedProvinceId,
+    provinceLogisticsConsumedByCategoryByProvince,
+    provinceLogisticsCapacityByCategoryByProvince,
+  ]);
+  const selectedBuiltBuildings = useMemo(() => {
+    if (!selectedProvinceId) return [] as Array<{ buildingId: string; buildingName: string; logoUrl: string | null; count: number }>;
+    const instances = provinceBuildingsByProvince[selectedProvinceId] ?? [];
+    const byId = new Map<string, number>();
+    for (const instance of instances) {
+      const bid = typeof instance?.buildingId === "string" ? instance.buildingId : "";
+      if (!bid) continue;
+      byId.set(bid, (byId.get(bid) ?? 0) + 1);
+    }
+    return [...byId.entries()]
+      .map(([buildingId, count]) => ({
+        buildingId,
+        buildingName: buildingMetaById[buildingId]?.name ?? buildingId,
+        logoUrl: buildingMetaById[buildingId]?.logoUrl ?? null,
+        count,
+      }))
+      .sort((a, b) => b.count - a.count || a.buildingName.localeCompare(b.buildingName));
+  }, [selectedProvinceId, provinceBuildingsByProvince, buildingMetaById]);
+  const selectedResourceDeposits = useMemo(() => {
+    if (!selectedProvinceId) {
+      return [] as Array<{ goodId: string; amount: number; veinSize: "small" | "medium" | "large"; goodName: string; logoUrl: string | null }>;
+    }
+    const deposits = provinceResourceDepositsByProvince[selectedProvinceId] ?? [];
+    return deposits
+      .map((row) => ({
+        goodId: row.goodId,
+        amount: Math.max(0, Number(row.amount ?? 0)),
+        veinSize: row.veinSize,
+        goodName: goodMetaById[row.goodId]?.name ?? row.goodId,
+        logoUrl: goodMetaById[row.goodId]?.logoUrl ?? null,
+      }))
+      .sort((a, b) => b.amount - a.amount || a.goodName.localeCompare(b.goodName));
+  }, [selectedProvinceId, provinceResourceDepositsByProvince, goodMetaById]);
+  const selectedExplorationQueue = selectedProvinceId
+    ? provinceResourceExplorationQueueByProvince[selectedProvinceId] ?? []
+    : [];
+  const selectedExplorationCount = selectedProvinceId
+    ? Math.max(0, Number(provinceResourceExplorationCountByProvince[selectedProvinceId] ?? 0))
+    : 0;
+  const selectedCanStartExploration = Boolean(
+    auth?.token &&
+      auth.countryId &&
+      selectedProvinceId &&
+      selectedOwnerId === auth.countryId &&
+      !selectedExplorationQueue.some((row) => row.requestedByCountryId === auth.countryId),
+  );
   const selectedCanStartColonization =
     Boolean(auth?.token) &&
     Boolean(selectedProvinceId) &&
@@ -1255,6 +1459,30 @@ export function MapView({
     }
   };
 
+  const handleStartExploration = async () => {
+    if (!auth?.token || !selectedProvinceId || !selectedCanStartExploration) {
+      return;
+    }
+    try {
+      setExplorationActionPending(true);
+      await startCountryExploration(auth.token, selectedProvinceId);
+      toast.success("Разведка запущена", {
+        description: `Провинция ${selectedProvinceDisplayName ?? selectedProvinceId}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "EXPLORATION_START_FAILED";
+      if (message === "EXPLORATION_ALREADY_QUEUED") {
+        toast.error("Разведка уже запущена");
+      } else if (message === "PROVINCE_NOT_OWNED") {
+        toast.error("Разведка доступна только в ваших провинциях");
+      } else {
+        toast.error("Не удалось запустить разведку");
+      }
+    } finally {
+      setExplorationActionPending(false);
+    }
+  };
+
   const handleRenameOwnedProvince = async () => {
     if (!auth?.token || !auth.countryId || !selectedProvinceId || !selectedCanRenameProvince) {
       return;
@@ -1455,59 +1683,280 @@ export function MapView({
       )}
 
       {selectedProvinceId && (
-        <div className="absolute right-4 top-24 z-30 w-80">
+        <div className="absolute right-4 top-24 z-30 w-[36rem] max-w-[calc(100vw-2rem)]">
           <Tooltip content="Данные провинции и pending-приказы">
-            <div className="glass panel-border rounded-xl p-3 text-sm">
-              <div className="mb-2 flex items-center gap-2 text-arc-accent">
-                <Crosshair size={15} />
-                <span className="font-semibold">{selectedProvinceDisplayName ?? selectedProvinceId}</span>
-              </div>
-              <div className="space-y-1 text-xs text-slate-300">
-                <div>ID: {selectedProvinceId}</div>
-                <div className="flex items-center gap-2">
-                  <span>Владелец:</span>
-                  {selectedOwnerFlagUrl && <img src={selectedOwnerFlagUrl} alt={selectedOwnerLabel} className="h-4 w-6 rounded-sm object-cover" />}
-                  <span>{selectedOwnerLabel}</span>
-                </div>
-                <div>Стоимость колонизации: {selectedColonizationCost}</div>
+            <div className="glass panel-border rounded-2xl p-4 text-sm shadow-2xl">
+              <div className="mb-4 flex items-start gap-2 text-arc-accent">
+                <Crosshair size={15} className="mt-0.5" />
                 <div>
-                  Статус колонизации: {selectedIsColonizationDisabled ? "Запрещена" : "Доступна"}
-                </div>
-                {selectedCanRenameProvince && (
-                  <div className="pt-1">
-                    <button
-                      onClick={() => {
-                        setProvinceRenameInput((getProvinceDisplayName(selectedProvinceId, selectedProvinceDisplayName) ?? "").slice(0, 64));
-                        setProvinceRenameModalOpen(true);
-                      }}
-                      className="w-full rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500/55 hover:bg-emerald-400/15"
-                    >
-                      Переименовать провинцию
-                    </button>
+                  <div className="text-base font-semibold leading-none text-arc-accent">
+                    {selectedProvinceDisplayName ?? selectedProvinceId}
                   </div>
-                )}
-              </div>
-
-              {selectedColonyProgressList.length > 0 && (
-                <div className="mt-2 rounded-md bg-black/25 p-2 text-xs text-slate-300">
-                  <div className="mb-1 text-slate-400">Прогресс колонизации</div>
-                  {selectedColonyProgressList.map(([countryId, points]) => (
-                    <div key={countryId} className="flex items-center justify-between">
-                      <span>{countryById.get(countryId)?.name ?? countryId}</span>
-                      <span>{points.toFixed(1)}/{selectedColonizationCost}</span>
-                    </div>
-                  ))}
+                  <div className="mt-1 text-[11px] text-white/45">ID: {selectedProvinceId}</div>
                 </div>
-              )}
+              </div>
+              <div className="grid gap-1 md:grid-cols-[64px_minmax(0,1fr)]">
+                <div className="rounded-xl border border-white/10 bg-black/30 p-2.5">
+                  <div className="flex flex-col items-center gap-2">
+                    <Tooltip content="Основная информация" placement="left">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProvincePanelTab("main")}
+                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border text-xs transition ${
+                          selectedProvincePanelTab === "main"
+                            ? "border-arc-accent/50 bg-arc-accent/15 text-arc-accent"
+                            : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                      >
+                        <Info size={16} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Детали инфраструктуры" placement="left">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProvincePanelTab("infra")}
+                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border text-xs transition ${
+                          selectedProvincePanelTab === "infra"
+                            ? "border-arc-accent/50 bg-arc-accent/15 text-arc-accent"
+                            : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                      >
+                        <Workflow size={16} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Построенные здания" placement="left">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProvincePanelTab("buildings")}
+                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border text-xs transition ${
+                          selectedProvincePanelTab === "buildings"
+                            ? "border-arc-accent/50 bg-arc-accent/15 text-arc-accent"
+                            : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                      >
+                        <Building2 size={16} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Разведка и залежи" placement="left">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProvincePanelTab("exploration")}
+                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border text-xs transition ${
+                          selectedProvincePanelTab === "exploration"
+                            ? "border-arc-accent/50 bg-arc-accent/15 text-arc-accent"
+                            : "border-white/10 bg-black/35 text-white/70 hover:border-white/30 hover:bg-white/10"
+                        }`}
+                      >
+                        <Pickaxe size={16} />
+                      </button>
+                    </Tooltip>
+                  </div>
+                </div>
 
-              {selectedIsNeutral && (
-                <button
-                  onClick={() => setColonizationModalOpen(true)}
-                  className="mt-3 w-full rounded-lg bg-emerald-500/80 px-3 py-2 text-xs font-semibold text-black transition hover:brightness-110"
-                >
-                  Колонизация...
-                </button>
-              )}
+                <div className="rounded-xl border border-white/10 bg-black/30 p-2.5 min-h-[290px]">
+                  <AnimatePresence mode="wait" initial={false}>
+                    {selectedProvincePanelTab === "main" && (
+                      <motion.div
+                        key="province-main"
+                        initial={{ opacity: 0, y: 6, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.995 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-2 text-xs text-slate-300"
+                      >
+                      <div className="flex items-center gap-2">
+                        <span>Владелец:</span>
+                        {selectedOwnerFlagUrl && <img src={selectedOwnerFlagUrl} alt={selectedOwnerLabel} className="h-4 w-6 rounded-sm object-cover" />}
+                        <span>{selectedOwnerLabel}</span>
+                      </div>
+                      <div>Стоимость колонизации: {selectedColonizationCost}</div>
+                      <div>Статус колонизации: {selectedIsColonizationDisabled ? "Запрещена" : "Доступна"}</div>
+                      {selectedCanRenameProvince && (
+                        <div className="pt-1">
+                          <button
+                            onClick={() => {
+                              setProvinceRenameInput((getProvinceDisplayName(selectedProvinceId, selectedProvinceDisplayName) ?? "").slice(0, 64));
+                              setProvinceRenameModalOpen(true);
+                            }}
+                            className="w-full rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500/55 hover:bg-emerald-400/15"
+                          >
+                            Переименовать провинцию
+                          </button>
+                        </div>
+                      )}
+
+                      {selectedColonyProgressList.length > 0 && (
+                        <div className="rounded-md bg-black/25 p-2.5 text-xs text-slate-300">
+                          <div className="mb-1 text-slate-400">Прогресс колонизации</div>
+                          {selectedColonyProgressList.map(([countryId, points]) => (
+                            <div
+                              key={countryId}
+                              className="flex items-center justify-between rounded-md px-1 py-0.5 transition-transform duration-150 hover:-translate-y-0.5"
+                            >
+                              <span>{countryById.get(countryId)?.name ?? countryId}</span>
+                              <span>
+                                {points.toFixed(1)}/{selectedColonizationCost}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {selectedIsNeutral && (
+                        <button
+                          onClick={() => setColonizationModalOpen(true)}
+                          className="mt-3 w-full rounded-lg bg-emerald-500/80 px-3 py-2 text-xs font-semibold text-black transition hover:brightness-110"
+                        >
+                          Колонизация...
+                        </button>
+                      )}
+                      </motion.div>
+                    )}
+
+                    {selectedProvincePanelTab === "infra" && (
+                      <motion.div
+                        key="province-infra"
+                        initial={{ opacity: 0, y: 6, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.995 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-2 text-xs text-slate-300"
+                      >
+                      <div>
+                        Инфраструктура: {Math.max(0, Math.floor(selectedInfrastructureCapacity - selectedInfrastructureConsumed)).toLocaleString("ru-RU")} /{" "}
+                        {Math.floor(selectedInfrastructureCapacity).toLocaleString("ru-RU")}
+                      </div>
+                      <div>Потреблено за ход: {Math.floor(selectedInfrastructureConsumed).toLocaleString("ru-RU")}</div>
+                      {selectedInfrastructureByCategory.length > 0 ? (
+                        <div className="rounded-md border border-white/10 bg-black/20 p-2.5">
+                          <div className="mb-1 text-[11px] text-white/55">По категориям инфраструктуры</div>
+                          <div className="space-y-1.5">
+                            {selectedInfrastructureByCategory.map((row) => (
+                              <div
+                                key={row.categoryId}
+                                className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1 text-[11px] transition-transform duration-150 hover:-translate-y-0.5"
+                              >
+                                <span className="text-white/75">{infrastructureCategoryNamesById[row.categoryId] ?? row.categoryId}</span>
+                                <span className="text-white/60">
+                                  {Math.floor(row.available).toLocaleString("ru-RU")} / {Math.floor(row.capacity).toLocaleString("ru-RU")}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-dashed border-white/15 bg-black/20 p-2 text-[11px] text-white/50">
+                          Категории инфраструктуры не заданы
+                        </div>
+                      )}
+                      </motion.div>
+                    )}
+
+                    {selectedProvincePanelTab === "buildings" && (
+                      <motion.div
+                        key="province-buildings"
+                        initial={{ opacity: 0, y: 6, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.995 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-2 text-xs text-slate-300"
+                      >
+                      <div>Построенные здания: {selectedBuiltBuildings.reduce((sum, row) => sum + row.count, 0)}</div>
+                      {selectedBuiltBuildings.length === 0 ? (
+                        <div className="rounded-md border border-dashed border-white/15 bg-black/20 p-2 text-[11px] text-white/50">
+                          В провинции нет построенных зданий
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {selectedBuiltBuildings.map((row) => (
+                            <div
+                              key={row.buildingId}
+                              className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/20 px-2.5 py-2 transition-transform duration-150 hover:-translate-y-0.5 hover:border-white/25"
+                            >
+                              <div className="flex min-w-0 items-center gap-2">
+                                {row.logoUrl ? (
+                                  <img src={row.logoUrl} alt="" className="h-4 w-4 rounded-sm object-contain" />
+                                ) : (
+                                  <Building2 size={13} className="text-white/50" />
+                                )}
+                                <span className="truncate text-white/80">{row.buildingName}</span>
+                              </div>
+                              <span className="text-white/60">x{row.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      </motion.div>
+                    )}
+
+                    {selectedProvincePanelTab === "exploration" && (
+                      <motion.div
+                        key="province-exploration"
+                        initial={{ opacity: 0, y: 6, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.995 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-2 text-xs text-slate-300"
+                      >
+                        <div>Проведено разведок: {Math.floor(selectedExplorationCount).toLocaleString("ru-RU")}</div>
+                        <div>В очереди: {selectedExplorationQueue.length}</div>
+                        {selectedExplorationQueue.length > 0 && (
+                          <div className="space-y-1.5 rounded-md border border-white/10 bg-black/20 p-2.5">
+                            {selectedExplorationQueue.map((project) => (
+                              <div
+                                key={project.queueId}
+                                className="flex items-center justify-between rounded-md border border-white/10 bg-black/25 px-2 py-1"
+                              >
+                                <span className="text-white/65">Разведка</span>
+                                <span className="font-semibold text-arc-accent">
+                                  {Math.max(0, Math.floor(project.turnsRemaining))} ход.
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {selectedCanStartExploration && (
+                          <button
+                            type="button"
+                            disabled={explorationActionPending}
+                            onClick={() => void handleStartExploration()}
+                            className="w-full rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500/55 hover:bg-emerald-400/15 disabled:opacity-60"
+                          >
+                            {explorationActionPending ? "Запуск..." : "Запустить разведку"}
+                          </button>
+                        )}
+                        {selectedResourceDeposits.length === 0 ? (
+                          <div className="rounded-md border border-dashed border-white/15 bg-black/20 p-2 text-[11px] text-white/50">
+                            Залежи не обнаружены
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {selectedResourceDeposits.map((row) => (
+                              <div
+                                key={row.goodId}
+                                className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/20 px-2.5 py-2"
+                              >
+                                <div className="flex min-w-0 items-center gap-2">
+                                  {row.logoUrl ? (
+                                    <img src={row.logoUrl} alt="" className="h-4 w-4 rounded-sm object-contain" />
+                                  ) : (
+                                    <Pickaxe size={13} className="text-white/50" />
+                                  )}
+                                  <span className="truncate text-white/80">{row.goodName}</span>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-white/70">{Math.floor(row.amount).toLocaleString("ru-RU")}</div>
+                                  <div className="text-[10px] uppercase tracking-wide text-white/45">{row.veinSize}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
 
             </div>
           </Tooltip>

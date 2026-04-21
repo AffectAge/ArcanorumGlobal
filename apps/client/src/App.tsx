@@ -20,6 +20,7 @@ import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
 import { PopulationStatsModal } from "./components/PopulationStatsModal";
 import { ProvinceBuildingsModal } from "./components/ProvinceBuildingsModal";
+import { MarketModal } from "./components/MarketModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
 import { RegistrationApprovalModal } from "./components/RegistrationApprovalModal";
@@ -44,7 +45,6 @@ const RESOLVE_START_TIMEOUT_MS = 12_000;
 export default function App() {
   const worldResyncInFlightRef = useRef(false);
   const replayRequestInFlightRef = useRef(false);
-  const autoResolveRequestedTurnRef = useRef<number | null>(null);
   const resolveStartTimeoutRef = useRef<number | null>(null);
   const [entryLoadingGate, setEntryLoadingGate] = useState<"hidden" | "loading" | "ready">("hidden");
   const [pendingDeltaAckVersion, setPendingDeltaAckVersion] = useState<number | null>(null);
@@ -77,6 +77,8 @@ export default function App() {
   const [contentPanelOpen, setContentPanelOpen] = useState(false);
   const [populationStatsOpen, setPopulationStatsOpen] = useState(false);
   const [provinceBuildingsOpen, setProvinceBuildingsOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
+  const [globalMarketOpen, setGlobalMarketOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
   const [turnStatusOpen, setTurnStatusOpen] = useState(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
@@ -139,6 +141,7 @@ export default function App() {
   });
 
   const auth = useGameStore((s) => s.auth);
+  const wsResumeFromWorldStateVersion = useGameStore((s) => (s.worldBase ? s.worldStateVersion : null));
   const turnId = useGameStore((s) => s.turnId);
   const worldBase = useGameStore((s) => s.worldBase);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
@@ -242,10 +245,14 @@ export default function App() {
       if (msg.type === "AUTH_OK") {
         clearResolveStartTimeout();
         setTurnResolveOverlay({ phase: "idle" });
-        setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
-        setPendingDeltaAckVersion(msg.worldStateVersion);
+        if (msg.worldBase) {
+          setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
+          setPendingDeltaAckVersion(msg.worldStateVersion);
+        } else if (!useGameStore.getState().worldBase) {
+          toast.warning("Локальный state отсутствует, выполняется snapshot-ресинк");
+          void resyncWorldState();
+        }
         replayRequestInFlightRef.current = false;
-        autoResolveRequestedTurnRef.current = null;
         const currentAuth = useGameStore.getState().auth;
         if (currentAuth?.token) {
           setAuth({ token: currentAuth.token, playerId: msg.playerId, countryId: msg.countryId, isAdmin: msg.isAdmin });
@@ -280,7 +287,11 @@ export default function App() {
       if (msg.type === "WORLD_DELTA") {
         clearResolveStartTimeout();
         const currentWorldStateVersion = useGameStore.getState().worldStateVersion;
-        if (msg.worldStateVersion !== currentWorldStateVersion + 1) {
+        if (msg.worldStateVersion <= currentWorldStateVersion) {
+          setPendingDeltaAckVersion(currentWorldStateVersion);
+          return;
+        }
+        if (msg.worldStateVersion > currentWorldStateVersion + 1) {
           if (!replayRequestInFlightRef.current) {
             replayRequestInFlightRef.current = true;
             setPendingReplayFromWorldStateVersion(currentWorldStateVersion);
@@ -378,7 +389,7 @@ export default function App() {
     [addEvent, addOrder, applyWorldDelta, clearResolveStartTimeout, hydrateCurrentTurnOrders, pruneLogEntries, resetOverlay, resyncWorldState, setEventLogRetentionTurns, setPresence, setWorldBase],
   );
 
-  const { send } = useWs(onWsMessage, auth?.token);
+  const { send } = useWs(onWsMessage, auth?.token, wsResumeFromWorldStateVersion);
 
   useEffect(() => {
     if (pendingDeltaAckVersion == null || !auth?.token) {
@@ -905,27 +916,8 @@ export default function App() {
   }, [eventLogRetentionTurns, pruneLogEntries, turnId]);
 
   useEffect(() => {
-    autoResolveRequestedTurnRef.current = null;
     clearResolveStartTimeout();
-  }, [turnId]);
-
-  useEffect(() => {
-    if (!auth) return;
-    if (turnResolveOverlay.phase !== "idle") return;
-    if (!turnTimerUi.enabled || !turnTimerUi.startedAtMs) return;
-
-    const dueAtMs = turnTimerUi.startedAtMs + Math.max(10, turnTimerUi.secondsPerTurn) * 1000;
-    const remainingMs = Math.max(0, dueAtMs - Date.now());
-    const timeoutId = window.setTimeout(() => {
-      if (autoResolveRequestedTurnRef.current === turnId) {
-        return;
-      }
-      autoResolveRequestedTurnRef.current = turnId;
-      send({ type: "REQUEST_RESOLVE" });
-      armResolveStartTimeout("auto");
-    }, remainingMs);
-    return () => window.clearTimeout(timeoutId);
-  }, [armResolveStartTimeout, auth, send, turnId, turnResolveOverlay.phase, turnTimerUi.enabled, turnTimerUi.secondsPerTurn, turnTimerUi.startedAtMs]);
+  }, [turnId, clearResolveStartTimeout]);
 
   useEffect(() => {
     if (!auth) {
@@ -1251,6 +1243,12 @@ export default function App() {
               if (key === "population") {
                 setPopulationStatsOpen(true);
               }
+              if (key === "market") {
+                setMarketOpen(true);
+              }
+              if (key === "globalMarket") {
+                setGlobalMarketOpen(true);
+              }
             }}
           />
           <EventLogPanel
@@ -1290,6 +1288,28 @@ export default function App() {
           countryId={auth.countryId}
           countryName={country?.name ?? auth.countryId}
           onQueueBuildOrder={queueBuildOrder}
+        />
+      )}
+      {auth?.token && (
+        <MarketModal
+          open={marketOpen}
+          onClose={() => setMarketOpen(false)}
+          token={auth.token}
+          countryId={auth.countryId}
+          countryName={country?.name ?? auth.countryId}
+          mode="country"
+          title="Рынок"
+        />
+      )}
+      {auth?.token && (
+        <MarketModal
+          open={globalMarketOpen}
+          onClose={() => setGlobalMarketOpen(false)}
+          token={auth.token}
+          countryId={auth.countryId}
+          countryName={country?.name ?? auth.countryId}
+          mode="global"
+          title="Глобальный рынок"
         />
       )}
 
@@ -1502,4 +1522,3 @@ export default function App() {
     </div>
   );
 }
-
