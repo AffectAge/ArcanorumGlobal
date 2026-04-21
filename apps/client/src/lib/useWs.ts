@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { WsInMessage, WsOutMessage } from "@arcanorum/shared";
 import { apiBase } from "./api";
 
-export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | null) {
+export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | null, resumeFromWorldStateVersion?: number | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const authedTokenRef = useRef<string | null>(null);
 
@@ -19,7 +19,13 @@ export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | n
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "AUTH", token } satisfies WsInMessage));
+      ws.send(JSON.stringify({
+        type: "AUTH",
+        token,
+        ...(typeof resumeFromWorldStateVersion === "number" && Number.isFinite(resumeFromWorldStateVersion)
+          ? { lastKnownWorldStateVersion: Math.max(0, Math.floor(resumeFromWorldStateVersion)) }
+          : {}),
+      } satisfies WsInMessage));
       authedTokenRef.current = token;
     };
 
@@ -32,7 +38,7 @@ export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | n
       ws.close();
       authedTokenRef.current = null;
     };
-  }, [onMessage, token]);
+  }, [onMessage, resumeFromWorldStateVersion, token]);
 
   const send = (message: WsInMessage) => {
     const ws = wsRef.current;
@@ -41,7 +47,13 @@ export function useWs(onMessage: (msg: WsOutMessage) => void, token?: string | n
     }
 
     if (authedTokenRef.current !== token) {
-      ws.send(JSON.stringify({ type: "AUTH", token } satisfies WsInMessage));
+      ws.send(JSON.stringify({
+        type: "AUTH",
+        token,
+        ...(typeof resumeFromWorldStateVersion === "number" && Number.isFinite(resumeFromWorldStateVersion)
+          ? { lastKnownWorldStateVersion: Math.max(0, Math.floor(resumeFromWorldStateVersion)) }
+          : {}),
+      } satisfies WsInMessage));
       authedTokenRef.current = token;
     }
     ws.send(JSON.stringify(message));

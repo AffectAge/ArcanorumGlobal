@@ -40,6 +40,7 @@ npm run dev
 
 ## Синхронизация мира
 - При авторизации клиент получает полный snapshot через `AUTH_OK` (`worldBase`, `turnId`, `worldStateVersion`).
+- При reconnect клиент передает `lastKnownWorldStateVersion`; если replay-окно доступно, сервер может выполнить bootstrap без полного `worldBase` (через `AUTH_OK` + replay-дельты).
 - Далее применяются только `WORLD_DELTA`.
 - Клиент отправляет `WORLD_DELTA_ACK` после применения дельт.
 - При разрыве последовательности запрашивается `WORLD_DELTA_REPLAY_REQUEST`.
@@ -69,6 +70,7 @@ npm run dev
 - `GET /admin/ws-delta-metrics` — метрики размера WS-дельт (compact vs baseline).
 - `POST /admin/ws-delta-metrics/reset` — сброс метрик.
 - `GET /admin/world-delta-log/status` — состояние персистентного журнала дельт (БД и in-memory replay window).
+- Подробный план дальнейшей оптимизации state-sync: `STATE_SYNC_OPTIMIZATION_PLAN.md` (phased rollout без big-bang миграции).
 - `GET /admin/provinces?q=...&limit=...&offset=...` — список провинций с поиском и опциональной пагинацией.
 - Админ-управление населением:
   - `POST /admin/population/generate` — генерация населения по scope (`province|country|world`) со стратегией `random|custom`,

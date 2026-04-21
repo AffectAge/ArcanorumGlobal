@@ -186,7 +186,7 @@ export type WorldDelta = {
 };
 
 export type WsInMessage =
-  | { type: "AUTH"; token: string }
+  | { type: "AUTH"; token: string; lastKnownWorldStateVersion?: number }
   | OrderDelta
   | { type: "PING" }
   | { type: "WORLD_DELTA_ACK"; worldStateVersion: number }
@@ -196,7 +196,7 @@ export type WsInMessage =
 
 export type WsOutMessage =
   | { type: "CONNECTED"; serverTime: string }
-  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase: WorldBase; turnId: number; worldStateVersion: number; clientSettings?: { eventLogRetentionTurns: number } }
+  | { type: "AUTH_OK"; playerId: string; countryId: string; isAdmin: boolean; worldBase?: WorldBase; turnId: number; worldStateVersion: number; replayFromWorldStateVersion?: number; clientSettings?: { eventLogRetentionTurns: number } }
   | { type: "ORDER_BROADCAST"; order: Order }
   | { type: "TURN_RESOLVE_STARTED"; turnId: number; reason: "manual" | "admin" | "auto" }
   | { type: "NEWS_EVENT"; event: EventLogEntry }

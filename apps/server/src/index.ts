@@ -10673,19 +10673,47 @@ wss.on("connection", (socket) => {
         }
         onlinePlayers.add(payload.id);
         ensureCountryInWorldBase(payload.countryId);
-        send({
-          type: "AUTH_OK",
-          playerId: payload.id,
-          countryId: payload.countryId,
-          isAdmin,
-          worldBase: {
-            ...worldBase,
+
+        const requestedResumeVersionRaw = (msg as Extract<WsInMessage, { type: "AUTH" }>).lastKnownWorldStateVersion;
+        const requestedResumeVersion =
+          typeof requestedResumeVersionRaw === "number" && Number.isFinite(requestedResumeVersionRaw)
+            ? Math.max(0, Math.floor(requestedResumeVersionRaw))
+            : null;
+        const resumeReplay = requestedResumeVersion != null ? getReplayDeltasFromVersion(requestedResumeVersion) : null;
+
+        if (requestedResumeVersion != null) {
+          lastAckedWorldStateVersion = Math.max(lastAckedWorldStateVersion, Math.min(requestedResumeVersion, worldStateVersion));
+        }
+
+        if (requestedResumeVersion != null && resumeReplay?.ok) {
+          send({
+            type: "AUTH_OK",
+            playerId: payload.id,
+            countryId: payload.countryId,
+            isAdmin,
             turnId,
-          },
-          turnId,
-          worldStateVersion,
-          clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
-        });
+            worldStateVersion,
+            replayFromWorldStateVersion: requestedResumeVersion,
+            clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
+          });
+          for (const delta of resumeReplay.deltas) {
+            send(delta);
+          }
+        } else {
+          send({
+            type: "AUTH_OK",
+            playerId: payload.id,
+            countryId: payload.countryId,
+            isAdmin,
+            worldBase: {
+              ...worldBase,
+              turnId,
+            },
+            turnId,
+            worldStateVersion,
+            clientSettings: { eventLogRetentionTurns: gameSettings.eventLog.retentionTurns },
+          });
+        }
         if (isAdmin) {
           await sendPendingRegistrationNotificationsToAdminSocket(socket, country.id);
         }
