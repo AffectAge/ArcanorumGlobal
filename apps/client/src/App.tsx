@@ -141,6 +141,7 @@ export default function App() {
   });
 
   const auth = useGameStore((s) => s.auth);
+  const wsResumeFromWorldStateVersion = useGameStore((s) => (s.worldBase ? s.worldStateVersion : null));
   const turnId = useGameStore((s) => s.turnId);
   const worldBase = useGameStore((s) => s.worldBase);
   const ordersByTurn = useGameStore((s) => s.ordersByTurn);
@@ -244,8 +245,13 @@ export default function App() {
       if (msg.type === "AUTH_OK") {
         clearResolveStartTimeout();
         setTurnResolveOverlay({ phase: "idle" });
-        setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
-        setPendingDeltaAckVersion(msg.worldStateVersion);
+        if (msg.worldBase) {
+          setWorldBase(msg.worldBase, msg.turnId, msg.worldStateVersion);
+          setPendingDeltaAckVersion(msg.worldStateVersion);
+        } else if (!useGameStore.getState().worldBase) {
+          toast.warning("Локальный state отсутствует, выполняется snapshot-ресинк");
+          void resyncWorldState();
+        }
         replayRequestInFlightRef.current = false;
         const currentAuth = useGameStore.getState().auth;
         if (currentAuth?.token) {
@@ -281,7 +287,11 @@ export default function App() {
       if (msg.type === "WORLD_DELTA") {
         clearResolveStartTimeout();
         const currentWorldStateVersion = useGameStore.getState().worldStateVersion;
-        if (msg.worldStateVersion !== currentWorldStateVersion + 1) {
+        if (msg.worldStateVersion <= currentWorldStateVersion) {
+          setPendingDeltaAckVersion(currentWorldStateVersion);
+          return;
+        }
+        if (msg.worldStateVersion > currentWorldStateVersion + 1) {
           if (!replayRequestInFlightRef.current) {
             replayRequestInFlightRef.current = true;
             setPendingReplayFromWorldStateVersion(currentWorldStateVersion);
@@ -379,7 +389,7 @@ export default function App() {
     [addEvent, addOrder, applyWorldDelta, clearResolveStartTimeout, hydrateCurrentTurnOrders, pruneLogEntries, resetOverlay, resyncWorldState, setEventLogRetentionTurns, setPresence, setWorldBase],
   );
 
-  const { send } = useWs(onWsMessage, auth?.token);
+  const { send } = useWs(onWsMessage, auth?.token, wsResumeFromWorldStateVersion);
 
   useEffect(() => {
     if (pendingDeltaAckVersion == null || !auth?.token) {

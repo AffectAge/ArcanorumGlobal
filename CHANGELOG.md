@@ -7,6 +7,7 @@
 ## [Unreleased]
 
 ### Добавлено
+- Документ `STATE_SYNC_OPTIMIZATION_PLAN.md` с roadmap оптимизации обмена состояния клиент↔сервер (envelope/versioning, range ACK, coalescing, entity-дельты, метрики/SLO).
 - Механика добычи ресурсов провинции зданиями в серверном экономическом тике:
   - настройки здания `extractionGoodId`, `extractionAmountPerTurn`, `extractionRequiresDeposit`,
   - уменьшение `provinceResourceDepositsByProvince` при добыче,
@@ -14,6 +15,8 @@
 - UI-настройки добычи в админ-панели контента (`ContentPanel`) для категории `Здания`.
 
 ### Изменено
+- WS-авторизация поддерживает resume-path: клиент передает `lastKnownWorldStateVersion`, а сервер при доступном replay отправляет `AUTH_OK` без полного `worldBase` и догоняющие `WORLD_DELTA`; при недоступном replay сохраняется fallback на полный snapshot-bootstrap.
+- Клиентская обработка `WORLD_DELTA` стала идемпотентной: дубликаты/устаревшие дельты (`version <= current`) больше не триггерят replay и не применяются повторно; replay запрашивается только при реальной дырке версий.
 - Контракты и серверная нормализация инстансов зданий расширены полем `lastExtractionByGoodId`.
 - README обновлен описанием механики добычи зданий из залежей провинции.
 
