@@ -50,9 +50,9 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [demolitionCostConstructionPercent, setDemolitionCostConstructionPercent] = useState(20);
   const [marketPriceSmoothing, setMarketPriceSmoothing] = useState(0.2);
-  const [explorationBaseEmptyChancePct, setExplorationBaseEmptyChancePct] = useState(50);
+  const [explorationBaseEmptyChancePct, setExplorationBaseEmptyChancePct] = useState(5);
   const [explorationDepletionPerAttemptPct, setExplorationDepletionPerAttemptPct] = useState(7.5);
-  const [explorationDurationTurns, setExplorationDurationTurns] = useState(3);
+  const [explorationDurationTurns, setExplorationDurationTurns] = useState(1);
   const [explorationRollsPerExpedition, setExplorationRollsPerExpedition] = useState(3);
   const [maxActiveColonizations, setMaxActiveColonizations] = useState(3);
   const [colonizationPointsPerTurn, setColonizationPointsPerTurn] = useState(30);
@@ -98,9 +98,9 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
         setDemolitionCostConstructionPercent(settings.economy.demolitionCostConstructionPercent ?? 20);
         setMarketPriceSmoothing(settings.economy.marketPriceSmoothing ?? 0.2);
-        setExplorationBaseEmptyChancePct(settings.economy.explorationBaseEmptyChancePct ?? 50);
+        setExplorationBaseEmptyChancePct(settings.economy.explorationBaseEmptyChancePct ?? 5);
         setExplorationDepletionPerAttemptPct(settings.economy.explorationDepletionPerAttemptPct ?? 7.5);
-        setExplorationDurationTurns(settings.economy.explorationDurationTurns ?? 3);
+        setExplorationDurationTurns(settings.economy.explorationDurationTurns ?? 1);
         setExplorationRollsPerExpedition(settings.economy.explorationRollsPerExpedition ?? 3);
         setMaxActiveColonizations(settings.colonization.maxActiveColonizations);
         setColonizationPointsPerTurn(settings.colonization.pointsPerTurn);
@@ -155,9 +155,9 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       setBaseGoldPerTurn(updated.economy.baseGoldPerTurn);
       setDemolitionCostConstructionPercent(updated.economy.demolitionCostConstructionPercent ?? 20);
       setMarketPriceSmoothing(updated.economy.marketPriceSmoothing ?? 0.2);
-      setExplorationBaseEmptyChancePct(updated.economy.explorationBaseEmptyChancePct ?? 50);
+      setExplorationBaseEmptyChancePct(updated.economy.explorationBaseEmptyChancePct ?? 5);
       setExplorationDepletionPerAttemptPct(updated.economy.explorationDepletionPerAttemptPct ?? 7.5);
-      setExplorationDurationTurns(updated.economy.explorationDurationTurns ?? 3);
+      setExplorationDurationTurns(updated.economy.explorationDurationTurns ?? 1);
       setExplorationRollsPerExpedition(updated.economy.explorationRollsPerExpedition ?? 3);
       onSettingsUpdated?.(updated);
       toast.success("Настройки экономики сохранены");
