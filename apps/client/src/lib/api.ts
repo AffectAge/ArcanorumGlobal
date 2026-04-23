@@ -33,6 +33,9 @@ export type ContentCulture = {
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
+  maxLevel?: number | null;
+  upgradeCostDucats?: number | null;
+  upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
   extractionAmountPerTurn?: number | null;
   extractionRequiresDeposit?: boolean | null;
@@ -84,6 +87,9 @@ type ContentEntryUpsertPayload = {
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
+  maxLevel?: number | null;
+  upgradeCostDucats?: number | null;
+  upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
   extractionAmountPerTurn?: number | null;
   extractionRequiresDeposit?: boolean | null;
@@ -1378,6 +1384,78 @@ export async function demolishCountryBuild(
     demolitionCostConstruction: number;
     demolitionPercent: number;
     constructionLeft: number;
+  };
+}
+
+export async function upgradeCountryBuildState(
+  token: string,
+  payload: { provinceId: string; buildingId: string; instanceId?: string },
+): Promise<{
+  ok: boolean;
+  provinceId: string;
+  buildingId: string;
+  instanceId: string;
+  queueId: string;
+  currentLevel: number;
+  targetLevel: number;
+  maxLevel: number;
+  upgradeCostConstruction: number;
+  upgradeCostDucats: number;
+}> {
+  const response = await fetch(`${API}/country/build/upgrade-state`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "BUILD_UPGRADE_STATE_FAILED");
+  }
+  return (await response.json()) as {
+    ok: boolean;
+    provinceId: string;
+    buildingId: string;
+    instanceId: string;
+    queueId: string;
+    currentLevel: number;
+    targetLevel: number;
+    maxLevel: number;
+    upgradeCostConstruction: number;
+    upgradeCostDucats: number;
+  };
+}
+
+export async function setCountryBuildAutoUpgradeState(
+  token: string,
+  payload: { provinceId: string; buildingId: string; instanceId?: string; enabled: boolean },
+): Promise<{
+  ok: boolean;
+  provinceId: string;
+  buildingId: string;
+  instanceId: string;
+  autoUpgradeEnabled: boolean;
+}> {
+  const response = await fetch(`${API}/country/build/auto-upgrade-state`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "BUILD_AUTO_UPGRADE_STATE_FAILED");
+  }
+  return (await response.json()) as {
+    ok: boolean;
+    provinceId: string;
+    buildingId: string;
+    instanceId: string;
+    autoUpgradeEnabled: boolean;
   };
 }
 

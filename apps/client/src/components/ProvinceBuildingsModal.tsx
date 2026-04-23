@@ -29,6 +29,8 @@ import {
   fetchCountries,
   fetchMarketOverview,
   fetchPublicGameUiSettings,
+  setCountryBuildAutoUpgradeState,
+  upgradeCountryBuildState,
   type ContentEntry,
   type MarketOverviewResponse,
   type ResourceIconsMap,
@@ -132,6 +134,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [ownerCompanyId, setOwnerCompanyId] = useState("");
   const [cancelingQueueKey, setCancelingQueueKey] = useState<string | null>(null);
   const [demolishingCardKey, setDemolishingCardKey] = useState<string | null>(null);
+  const [upgradingCardKey, setUpgradingCardKey] = useState<string | null>(null);
+  const [togglingAutoUpgradeCardKey, setTogglingAutoUpgradeCardKey] = useState<string | null>(null);
   const [cancelConfirmTarget, setCancelConfirmTarget] = useState<
     | null
     | {
@@ -421,6 +425,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         provinceName: string;
         buildingName: string;
         ownerLabel: string;
+        projectLabel: string;
         progressPercent: number;
         iconUrl: string | null;
         queueId: string;
@@ -441,6 +446,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
             provinceName: province.name,
             buildingName: building.name,
             ownerLabel,
+            projectLabel: (project.projectType ?? "build") === "upgrade" ? "Повышение уровня" : "Новое здание",
             progressPercent: Math.min(100, Math.round((project.progressConstruction / Math.max(1, project.costConstruction)) * 100)),
             iconUrl: building.logoUrl ?? null,
             queueId: project.queueId,
@@ -455,6 +461,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         provinceName: string;
         buildingName: string;
         ownerLabel: string;
+        projectLabel: string;
         progressPercent: number;
         iconUrl: string | null;
         orderId: string;
@@ -489,6 +496,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
               provinceName: pendingProvinceName,
               buildingName: pendingBuildingName,
               ownerLabel,
+              projectLabel: "Новое здание",
               progressPercent: 0,
               iconUrl: buildingById.get(payloadBuildingId)?.logoUrl ?? null,
               orderId: order.id,
@@ -826,7 +834,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       0,
     ) +
       Object.values(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce(
-        (sum, queue) => sum + (queue ?? []).filter((project) => project.buildingId === building.id).length,
+        (sum, queue) =>
+          sum +
+          (queue ?? []).filter(
+            (project) => project.buildingId === building.id && (project.projectType ?? "build") === "build",
+          ).length,
         0,
       );
     const countBuiltAndQueuedByCountry =
@@ -841,7 +853,12 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       }, 0) +
       Object.entries(worldBase?.provinceConstructionQueueByProvince ?? {}).reduce((sum, [pid, queue]) => {
         if ((worldBase?.provinceOwner?.[pid] ?? "") !== countryId) return sum;
-        return sum + (queue ?? []).filter((project) => project.buildingId === building.id).length;
+        return (
+          sum +
+          (queue ?? []).filter(
+            (project) => project.buildingId === building.id && (project.projectType ?? "build") === "build",
+          ).length
+        );
       }, 0);
     const pendingBuildOrders = [...(ordersByTurn.get(turnId)?.values() ?? [])]
       .flat()
@@ -982,6 +999,74 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       }
     } finally {
       setDemolishingCardKey(null);
+    }
+  };
+
+  const upgradeBuiltCardByState = async (target: {
+    key: string;
+    provinceId: string;
+    buildingId: string;
+    instanceId?: string;
+  }) => {
+    if (!auth?.token || !target.instanceId) return;
+    setUpgradingCardKey(target.key);
+    try {
+      const result = await upgradeCountryBuildState(auth.token, {
+        provinceId: target.provinceId,
+        buildingId: target.buildingId,
+        instanceId: target.instanceId,
+      });
+      toast.success(
+        `Апгрейд поставлен в очередь: Ур. ${result.currentLevel} -> ${result.targetLevel}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "BUILD_UPGRADE_STATE_FAILED";
+      if (message === "INSUFFICIENT_DUCATS") {
+        toast.error("Недостаточно дукатов государства для апгрейда");
+      } else if (message === "BUILDING_UPGRADE_ALREADY_QUEUED") {
+        toast.error("Апгрейд этого здания уже в очереди");
+      } else if (message === "BUILDING_MAX_LEVEL_REACHED") {
+        toast.error("Достигнут максимальный уровень здания");
+      } else if (message === "NOT_PROVINCE_OWNER") {
+        toast.error("Апгрейд доступен только в ваших провинциях");
+      } else {
+        toast.error("Не удалось поставить апгрейд в очередь");
+      }
+    } finally {
+      setUpgradingCardKey(null);
+    }
+  };
+
+  const toggleBuiltCardAutoUpgrade = async (target: {
+    key: string;
+    provinceId: string;
+    buildingId: string;
+    instanceId?: string;
+    enabled: boolean;
+  }) => {
+    if (!auth?.token || !target.instanceId) return;
+    setTogglingAutoUpgradeCardKey(target.key);
+    try {
+      const result = await setCountryBuildAutoUpgradeState(auth.token, {
+        provinceId: target.provinceId,
+        buildingId: target.buildingId,
+        instanceId: target.instanceId,
+        enabled: target.enabled,
+      });
+      toast.success(
+        result.autoUpgradeEnabled
+          ? "Автоповышение за счёт здания включено"
+          : "Автоповышение за счёт здания выключено",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "BUILD_AUTO_UPGRADE_STATE_FAILED";
+      if (message === "NOT_PROVINCE_OWNER") {
+        toast.error("Переключение доступно только в ваших провинциях");
+      } else {
+        toast.error("Не удалось изменить режим автоповышения");
+      }
+    } finally {
+      setTogglingAutoUpgradeCardKey(null);
     }
   };
 
@@ -1132,6 +1217,71 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 }
                 const displayIsActive = displayInactiveReasons.length === 0;
                 const econData = c.kind === "built" ? (econ ?? getCardEconomy(c)) : null;
+                const building = buildingById.get(c.buildingId);
+                const maxLevel =
+                  c.kind === "built"
+                    ? Math.max(1, Math.floor(Number((building as (ContentEntry & { maxLevel?: number }) | undefined)?.maxLevel ?? 1)))
+                    : 1;
+                const upgradeCostDucats =
+                  c.kind === "built"
+                    ? Math.max(
+                        0,
+                        Number(
+                          (building as (ContentEntry & { upgradeCostDucats?: number; costDucats?: number }) | undefined)
+                            ?.upgradeCostDucats ??
+                            (building as (ContentEntry & { costDucats?: number }) | undefined)?.costDucats ??
+                            10,
+                        ),
+                      )
+                    : 0;
+                const upgradeCostConstruction =
+                  c.kind === "built"
+                    ? Math.max(
+                        1,
+                        Math.floor(
+                          Number(
+                            (building as (ContentEntry & { upgradeCostConstruction?: number; costConstruction?: number }) | undefined)
+                              ?.upgradeCostConstruction ??
+                              (building as (ContentEntry & { costConstruction?: number }) | undefined)?.costConstruction ??
+                              100,
+                          ),
+                        ),
+                      )
+                    : 1;
+                const hasQueuedUpgrade =
+                  c.kind === "built" && c.instanceId
+                    ? (worldBase?.provinceConstructionQueueByProvince?.[c.provinceId] ?? []).some(
+                        (project) =>
+                          (project.projectType ?? "build") === "upgrade" &&
+                          (project.targetInstanceId ?? "") === c.instanceId,
+                      )
+                    : false;
+                const instanceAutoUpgradeEnabled =
+                  c.kind === "built" && c.instanceId
+                    ? (
+                        (worldBase?.provinceBuildingsByProvince?.[c.provinceId] ?? []).find(
+                          (instance) => instance.instanceId === c.instanceId,
+                        )?.autoUpgradeEnabled !== false
+                      )
+                    : true;
+                const canStateUpgrade =
+                  c.kind === "built" &&
+                  Boolean(c.instanceId) &&
+                  c.level < maxLevel &&
+                  !hasQueuedUpgrade &&
+                  availableDucats >= upgradeCostDucats;
+                const upgradeDisabledReason =
+                  c.kind !== "built"
+                    ? ""
+                    : !c.instanceId
+                      ? "Инстанс здания не найден"
+                      : c.level >= maxLevel
+                        ? `Достигнут максимум: Ур. ${maxLevel}`
+                        : hasQueuedUpgrade
+                          ? "Апгрейд уже в очереди"
+                          : availableDucats < upgradeCostDucats
+                            ? `Нужно дукатов: ${formatCompact(upgradeCostDucats)}`
+                            : "";
                 const cardBorder =
                   c.kind === "construction"
                     ? "border-amber-400/50"
@@ -1180,28 +1330,81 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                       </button>
                     </Tooltip>
                   ) : (
-                    <Tooltip content="Снести постройку целиком (стоимость в очках строительства)">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setDemolishConfirmTarget({
-                            key: c.key,
-                            provinceId: c.provinceId,
-                            buildingId: c.buildingId,
-                            instanceId: c.instanceId,
-                            buildingName: c.buildingName,
-                            provinceName: c.provinceName,
-                            demolitionCostConstruction: Math.ceil(
-                              (Math.max(1, Math.floor(c.costConstruction)) * demolitionCostConstructionPercent) / 100,
-                            ),
-                          })
+                    <div className="flex items-center gap-2">
+                      <Tooltip
+                        content={
+                          instanceAutoUpgradeEnabled
+                            ? "Выключить автоповышение за счёт здания"
+                            : "Включить автоповышение за счёт здания"
                         }
-                        disabled={demolishingCardKey === c.key}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/60 transition hover:border-red-400/40 hover:text-red-300 disabled:opacity-40"
                       >
-                        {demolishingCardKey === c.key ? "..." : <Trash2 size={14} />}
-                      </button>
-                    </Tooltip>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void toggleBuiltCardAutoUpgrade({
+                              key: c.key,
+                              provinceId: c.provinceId,
+                              buildingId: c.buildingId,
+                              instanceId: c.instanceId,
+                              enabled: !instanceAutoUpgradeEnabled,
+                            })
+                          }
+                          disabled={!c.instanceId || togglingAutoUpgradeCardKey === c.key}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-black/40 transition disabled:opacity-40 ${
+                            instanceAutoUpgradeEnabled
+                              ? "border-sky-400/45 text-sky-300 hover:border-sky-300/70"
+                              : "border-white/10 text-white/60 hover:border-white/25"
+                          }`}
+                        >
+                          {togglingAutoUpgradeCardKey === c.key ? "..." : <Lock size={14} />}
+                        </button>
+                      </Tooltip>
+                      <Tooltip
+                        content={
+                          canStateUpgrade
+                            ? `Повысить уровень за счёт государства (${formatCompact(upgradeCostConstruction)} строительства, ${formatCompact(upgradeCostDucats)} дукатов)`
+                            : `Нельзя повысить: ${upgradeDisabledReason}`
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void upgradeBuiltCardByState({
+                              key: c.key,
+                              provinceId: c.provinceId,
+                              buildingId: c.buildingId,
+                              instanceId: c.instanceId,
+                            })
+                          }
+                          disabled={!canStateUpgrade || upgradingCardKey === c.key}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/60 transition hover:border-emerald-400/45 hover:text-emerald-300 disabled:opacity-40"
+                        >
+                          {upgradingCardKey === c.key ? "..." : <ChevronUp size={14} />}
+                        </button>
+                      </Tooltip>
+                      <Tooltip content="Снести постройку целиком (стоимость в очках строительства)">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDemolishConfirmTarget({
+                              key: c.key,
+                              provinceId: c.provinceId,
+                              buildingId: c.buildingId,
+                              instanceId: c.instanceId,
+                              buildingName: c.buildingName,
+                              provinceName: c.provinceName,
+                              demolitionCostConstruction: Math.ceil(
+                                (Math.max(1, Math.floor(c.costConstruction)) * demolitionCostConstructionPercent) / 100,
+                              ),
+                            })
+                          }
+                          disabled={demolishingCardKey === c.key}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/40 text-white/60 transition hover:border-red-400/40 hover:text-red-300 disabled:opacity-40"
+                        >
+                          {demolishingCardKey === c.key ? "..." : <Trash2 size={14} />}
+                        </button>
+                      </Tooltip>
+                    </div>
                   )}
                 </div>
                 {c.kind === "construction" && (
@@ -1814,6 +2017,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               </div>
                               <div className="mt-1 text-[11px] text-white/55">
                                 Владелец: <span className="text-white/80">{card.ownerLabel}</span>
+                              </div>
+                              <div className="text-[11px] text-white/55">
+                                Проект: <span className="text-white/80">{card.projectLabel}</span>
                               </div>
                             </div>
                             <div className="flex w-16 shrink-0 items-center justify-center">

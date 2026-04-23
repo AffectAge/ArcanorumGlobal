@@ -841,6 +841,9 @@ type BuildingContentEntry = GameContentEntry & {
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
+  maxLevel?: number | null;
+  upgradeCostDucats?: number | null;
+  upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
   extractionAmountPerTurn?: number | null;
   extractionRequiresDeposit?: boolean | null;
@@ -1578,6 +1581,9 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       costConstruction?: unknown;
       costDucats?: unknown;
       startingDucats?: unknown;
+      maxLevel?: unknown;
+      upgradeCostDucats?: unknown;
+      upgradeCostConstruction?: unknown;
       extractionGoodId?: unknown;
       extractionAmountPerTurn?: unknown;
       extractionRequiresDeposit?: unknown;
@@ -1603,6 +1609,16 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       typeof raw?.startingDucats === "number" && Number.isFinite(raw.startingDucats)
         ? Math.max(0, Number(raw.startingDucats))
         : 0;
+    const maxLevel =
+      typeof raw?.maxLevel === "number" && Number.isFinite(raw.maxLevel) ? Math.max(1, Math.floor(raw.maxLevel)) : 1;
+    const upgradeCostConstruction =
+      typeof raw?.upgradeCostConstruction === "number" && Number.isFinite(raw.upgradeCostConstruction)
+        ? Math.max(1, Math.floor(raw.upgradeCostConstruction))
+        : costConstruction;
+    const upgradeCostDucats =
+      typeof raw?.upgradeCostDucats === "number" && Number.isFinite(raw.upgradeCostDucats)
+        ? Math.max(0, Number(raw.upgradeCostDucats))
+        : costDucats;
     const globalBuildLimit =
       typeof raw?.globalBuildLimit === "number" && Number.isFinite(raw.globalBuildLimit) && raw.globalBuildLimit > 0
         ? Math.max(1, Math.floor(raw.globalBuildLimit))
@@ -1622,6 +1638,9 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       costConstruction,
       costDucats: Number(costDucats.toFixed(3)),
       startingDucats: Number(startingDucats.toFixed(3)),
+      maxLevel,
+      upgradeCostDucats: Number(upgradeCostDucats.toFixed(3)),
+      upgradeCostConstruction,
       extractionGoodId,
       extractionAmountPerTurn,
       extractionRequiresDeposit,
@@ -1918,6 +1937,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             owner: normalizeBuildingOwner(source.owner ?? { type: "state", countryId: fallbackCountryId }),
             createdTurnId,
             level,
+            autoUpgradeEnabled: typeof source.autoUpgradeEnabled === "boolean" ? source.autoUpgradeEnabled : true,
             ducats:
               typeof source.ducats === "number" && Number.isFinite(source.ducats)
                 ? Number(Math.max(0, source.ducats).toFixed(3))
@@ -2071,6 +2091,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             owner: { type: "state", countryId: fallbackCountryId },
             createdTurnId: turnId,
             level,
+            autoUpgradeEnabled: true,
             ducats: 0,
             warehouseByGoodId: {},
             lastLaborCoverage: 0,
@@ -2172,6 +2193,11 @@ function normalizeProvinceConstructionQueueMap(input: unknown): Record<string, P
             : fallbackCountryId;
         const buildingId = typeof source.buildingId === "string" ? source.buildingId.trim() : "";
         if (!buildingId) continue;
+        const projectType = source.projectType === "upgrade" ? "upgrade" : "build";
+        const targetInstanceId =
+          projectType === "upgrade" && typeof source.targetInstanceId === "string" && source.targetInstanceId.trim().length > 0
+            ? source.targetInstanceId.trim()
+            : undefined;
         const costConstruction =
           typeof source.costConstruction === "number" && Number.isFinite(source.costConstruction)
             ? Math.max(1, Math.floor(source.costConstruction))
@@ -2193,6 +2219,8 @@ function normalizeProvinceConstructionQueueMap(input: unknown): Record<string, P
           requestedByCountryId,
           buildingId,
           owner: normalizeBuildingOwner(source.owner),
+          projectType,
+          targetInstanceId,
           progressConstruction: Number(progressConstruction.toFixed(3)),
           costConstruction,
           costDucats: Number(costDucats.toFixed(3)),
@@ -5302,6 +5330,8 @@ function isEqualConstructionQueue(
       prev.owner.type !== next.owner.type ||
       (prev.owner.type === "state" && next.owner.type === "state" && prev.owner.countryId !== next.owner.countryId) ||
       (prev.owner.type === "company" && next.owner.type === "company" && prev.owner.companyId !== next.owner.companyId) ||
+      (prev.projectType ?? "build") !== (next.projectType ?? "build") ||
+      (prev.targetInstanceId ?? "") !== (next.targetInstanceId ?? "") ||
       prev.progressConstruction !== next.progressConstruction ||
       prev.costConstruction !== next.costConstruction ||
       prev.costDucats !== next.costDucats ||
@@ -5372,6 +5402,7 @@ function isEqualBuildingInstances(
       prev.buildingId !== next.buildingId ||
       prev.createdTurnId !== next.createdTurnId ||
       Math.max(1, Math.floor(Number(prev.level ?? 1))) !== Math.max(1, Math.floor(Number(next.level ?? 1))) ||
+      (prev.autoUpgradeEnabled !== false) !== (next.autoUpgradeEnabled !== false) ||
       prev.owner.type !== next.owner.type ||
       (prev.owner.type === "state" && next.owner.type === "state" && prev.owner.countryId !== next.owner.countryId) ||
       (prev.owner.type === "company" &&
@@ -6126,6 +6157,7 @@ function countBuildingOccurrences(
   for (const [provinceId, queue] of Object.entries(worldBase.provinceConstructionQueueByProvince)) {
     for (const project of queue ?? []) {
       if (project.buildingId !== buildingId) continue;
+      if (project.projectType === "upgrade") continue;
       global += 1;
       if ((worldBase.provinceOwner[provinceId] ?? null) === countryId) {
         byCountry += 1;
@@ -6176,6 +6208,87 @@ function resolveBuildingOwnerFromPayload(payload: Record<string, unknown>, reque
   const countryId = typeof source.countryId === "string" ? source.countryId.trim() : requestedByCountryId;
   if (!countryId || !worldBase.resourcesByCountry[countryId]) return null;
   return { type: "state", countryId };
+}
+
+function getBuildingMaxLevel(building: BuildingContentEntry | undefined): number {
+  const raw = Number(building?.maxLevel ?? 1);
+  if (!Number.isFinite(raw)) return 1;
+  return Math.max(1, Math.floor(raw));
+}
+
+function getBuildingUpgradeCosts(building: BuildingContentEntry | undefined): { costConstruction: number; costDucats: number } {
+  const baseConstruction = Math.max(1, Math.floor(Number(building?.costConstruction ?? 100)));
+  const baseDucats = Math.max(0, Number(building?.costDucats ?? 10));
+  const upgradeCostConstructionRaw = Number(building?.upgradeCostConstruction ?? baseConstruction);
+  const upgradeCostDucatsRaw = Number(building?.upgradeCostDucats ?? baseDucats);
+  return {
+    costConstruction:
+      Number.isFinite(upgradeCostConstructionRaw) && upgradeCostConstructionRaw > 0
+        ? Math.max(1, Math.floor(upgradeCostConstructionRaw))
+        : baseConstruction,
+    costDucats: Number(
+      (Number.isFinite(upgradeCostDucatsRaw) ? Math.max(0, upgradeCostDucatsRaw) : baseDucats).toFixed(3),
+    ),
+  };
+}
+
+function enqueueBuildingAutoUpgradesTurn(): void {
+  const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
+  for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince ?? {})) {
+    if (!Array.isArray(instances) || instances.length === 0) continue;
+    const ownerCountryId = worldBase.provinceOwner[provinceId] ?? null;
+    if (!ownerCountryId) continue;
+    ensureCountryInWorldBase(ownerCountryId);
+
+    const nextInstances = [...instances];
+    const queue = [...(worldBase.provinceConstructionQueueByProvince[provinceId] ?? [])];
+    let queueChanged = false;
+    let instancesChanged = false;
+
+    for (const instance of nextInstances) {
+      const building = buildingById.get(instance.buildingId);
+      if (!building) continue;
+      if (instance.autoUpgradeEnabled === false) continue;
+      const currentLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      instance.level = currentLevel;
+      const maxLevel = getBuildingMaxLevel(building);
+      if (currentLevel >= maxLevel) continue;
+
+      const alreadyQueued = queue.some(
+        (project) =>
+          (project.projectType ?? "build") === "upgrade" &&
+          (project.targetInstanceId ?? "") === instance.instanceId,
+      );
+      if (alreadyQueued) continue;
+
+      const upgradeCosts = getBuildingUpgradeCosts(building);
+      const instanceDucats = round3(Math.max(0, Number(instance.ducats ?? 0)));
+      if (instanceDucats + 1e-9 < upgradeCosts.costDucats) continue;
+
+      instance.ducats = round3(Math.max(0, instanceDucats - upgradeCosts.costDucats));
+      instancesChanged = true;
+      queue.push({
+        queueId: randomUUID(),
+        requestedByCountryId: ownerCountryId,
+        buildingId: instance.buildingId,
+        owner: instance.owner,
+        projectType: "upgrade",
+        targetInstanceId: instance.instanceId,
+        progressConstruction: 0,
+        costConstruction: upgradeCosts.costConstruction,
+        costDucats: 0,
+        createdTurnId: turnId,
+      });
+      queueChanged = true;
+    }
+
+    if (instancesChanged) {
+      worldBase.provinceBuildingsByProvince[provinceId] = nextInstances;
+    }
+    if (queueChanged) {
+      worldBase.provinceConstructionQueueByProvince[provinceId] = queue;
+    }
+  }
 }
 
 function resolveBuildingConstructionQueuesTurn(): void {
@@ -6275,6 +6388,25 @@ function resolveBuildingConstructionQueuesTurn(): void {
     for (const project of queue) {
       if (project.progressConstruction + 1e-9 >= project.costConstruction) {
         const building = buildingById.get(project.buildingId);
+        if ((project.projectType ?? "build") === "upgrade") {
+          const targetInstanceId = typeof project.targetInstanceId === "string" ? project.targetInstanceId.trim() : "";
+          if (!targetInstanceId) {
+            continue;
+          }
+          const targetInstance = buildingInstances.find(
+            (instance) => instance.instanceId === targetInstanceId && instance.buildingId === project.buildingId,
+          );
+          if (!targetInstance) {
+            continue;
+          }
+          const currentLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
+          const maxLevel = getBuildingMaxLevel(building);
+          if (currentLevel >= maxLevel) {
+            continue;
+          }
+          targetInstance.level = Math.min(maxLevel, currentLevel + 1);
+          continue;
+        }
         const startingDucats = Math.max(0, Number(building?.startingDucats ?? 0));
         buildingInstances.push({
           instanceId: randomUUID(),
@@ -6282,6 +6414,7 @@ function resolveBuildingConstructionQueuesTurn(): void {
           owner: project.owner,
           createdTurnId: turnId,
           level: 1,
+          autoUpgradeEnabled: true,
           ducats: Number(startingDucats.toFixed(3)),
         });
         continue;
@@ -6488,6 +6621,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
           requestedByCountryId: order.countryId,
           buildingId,
           owner: ownerForProject,
+          projectType: "build",
           progressConstruction: 0,
           costConstruction: Math.max(1, Math.floor(Number(building.costConstruction ?? 100))),
           costDucats: Math.max(0, Number(building.costDucats ?? 10)),
@@ -6567,6 +6701,7 @@ function resolveTurn(): { rejectedOrders: WorldDelta["rejectedOrders"]; news: Ev
 
   }
 
+  enqueueBuildingAutoUpgradesTurn();
   resolveBuildingConstructionQueuesTurn();
   resolveResourceExplorationTurn();
 
@@ -8208,6 +8343,9 @@ const culturePayloadSchema = z.object({
   costConstruction: z.number().int().min(1).optional(),
   costDucats: z.number().finite().min(0).optional(),
   startingDucats: z.number().finite().min(0).optional(),
+  maxLevel: z.number().int().min(1).optional(),
+  upgradeCostDucats: z.number().finite().min(0).optional(),
+  upgradeCostConstruction: z.number().int().min(1).optional(),
   extractionGoodId: z.string().trim().min(1).max(120).nullable().optional(),
   extractionAmountPerTurn: z.number().finite().min(0).optional(),
   extractionRequiresDeposit: z.boolean().optional(),
@@ -8337,10 +8475,23 @@ function sanitizeContentEntryByKind(
     };
   }
   if (kind === "buildings") {
+    const costConstruction = Math.max(1, Math.floor(payload.costConstruction ?? 100));
+    const costDucats = Number(Math.max(0, payload.costDucats ?? 10).toFixed(3));
+    const maxLevel = Math.max(1, Math.floor(payload.maxLevel ?? 1));
+    const upgradeCostConstruction = Math.max(
+      1,
+      Math.floor(payload.upgradeCostConstruction ?? payload.costConstruction ?? 100),
+    );
+    const upgradeCostDucats = Number(
+      Math.max(0, payload.upgradeCostDucats ?? payload.costDucats ?? 10).toFixed(3),
+    );
     return {
-      costConstruction: Math.max(1, Math.floor(payload.costConstruction ?? 100)),
-      costDucats: Number(Math.max(0, payload.costDucats ?? 10).toFixed(3)),
+      costConstruction,
+      costDucats,
       startingDucats: Number(Math.max(0, payload.startingDucats ?? 0).toFixed(3)),
+      maxLevel,
+      upgradeCostDucats,
+      upgradeCostConstruction,
       extractionGoodId:
         payload.extractionGoodId === undefined
           ? undefined
@@ -8995,6 +9146,17 @@ const buildDemolishSchema = z.object({
   buildingId: z.string().min(1),
   instanceId: z.string().min(1).optional(),
 });
+const buildUpgradeStateSchema = z.object({
+  provinceId: z.string().min(1),
+  buildingId: z.string().min(1),
+  instanceId: z.string().min(1).optional(),
+});
+const buildAutoUpgradeSchema = z.object({
+  provinceId: z.string().min(1),
+  buildingId: z.string().min(1),
+  instanceId: z.string().min(1).optional(),
+  enabled: z.boolean(),
+});
 
 const provinceRenameSchema = z.object({
   provinceId: z.string().min(1),
@@ -9314,6 +9476,7 @@ app.post("/country/build/demolish", async (req, res) => {
   const previousWorldBase = cloneWorldBaseSectionSnapshot(
     WORLD_DELTA_MASK.resourcesByCountry |
       WORLD_DELTA_MASK.provinceBuildingsByProvince |
+      WORLD_DELTA_MASK.provinceConstructionQueueByProvince |
       WORLD_DELTA_MASK.provinceBuildingDucatsByProvince,
   );
   countryResource.construction = Math.max(0, countryResource.construction - demolitionCostConstruction);
@@ -9324,6 +9487,14 @@ app.post("/country/build/demolish", async (req, res) => {
   const targetLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
   const nextInstances = instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
   worldBase.provinceBuildingsByProvince[provinceId] = nextInstances;
+  const queue = worldBase.provinceConstructionQueueByProvince[provinceId] ?? [];
+  worldBase.provinceConstructionQueueByProvince[provinceId] = queue.filter(
+    (project) =>
+      !(
+        (project.projectType ?? "build") === "upgrade" &&
+        (project.targetInstanceId ?? "") === targetInstance.instanceId
+      ),
+  );
   const buildingDucats = worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {};
   const remainingByType = nextInstances.some((instance) => instance.buildingId === buildingId);
   if (!remainingByType && Object.prototype.hasOwnProperty.call(buildingDucats, buildingId)) {
@@ -9345,6 +9516,151 @@ app.post("/country/build/demolish", async (req, res) => {
     demolitionCostConstruction,
     demolitionPercent,
     constructionLeft: countryResource.construction,
+  });
+});
+
+app.post("/country/build/upgrade-state", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = buildUpgradeStateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, buildingId, instanceId } = parsed.data;
+  const provinceOwnerId = worldBase.provinceOwner[provinceId] ?? null;
+  if (!provinceOwnerId || provinceOwnerId !== auth.countryId) {
+    return res.status(403).json({ error: "NOT_PROVINCE_OWNER" });
+  }
+
+  const instances = worldBase.provinceBuildingsByProvince[provinceId] ?? [];
+  const matchingInstances = instances.filter((instance) => instance.buildingId === buildingId);
+  if (matchingInstances.length <= 0) {
+    return res.status(404).json({ error: "BUILDING_NOT_FOUND" });
+  }
+  const targetInstance =
+    typeof instanceId === "string" && instanceId.trim().length > 0
+      ? matchingInstances.find((instance) => instance.instanceId === instanceId.trim())
+      : matchingInstances[0];
+  if (!targetInstance) {
+    return res.status(404).json({ error: "BUILDING_INSTANCE_NOT_FOUND" });
+  }
+
+  const building = gameSettings.content.buildings.find((entry) => entry.id === buildingId);
+  if (!building) {
+    return res.status(404).json({ error: "BUILDING_DEFINITION_NOT_FOUND" });
+  }
+
+  const currentLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
+  const maxLevel = getBuildingMaxLevel(building);
+  if (currentLevel >= maxLevel) {
+    return res.status(400).json({ error: "BUILDING_MAX_LEVEL_REACHED", maxLevel, currentLevel });
+  }
+
+  const queue = [...(worldBase.provinceConstructionQueueByProvince[provinceId] ?? [])];
+  const alreadyQueued = queue.some(
+    (project) =>
+      (project.projectType ?? "build") === "upgrade" &&
+      (project.targetInstanceId ?? "") === targetInstance.instanceId,
+  );
+  if (alreadyQueued) {
+    return res.status(409).json({ error: "BUILDING_UPGRADE_ALREADY_QUEUED" });
+  }
+
+  const costs = getBuildingUpgradeCosts(building);
+  ensureCountryInWorldBase(auth.countryId);
+  const countryResource = worldBase.resourcesByCountry[auth.countryId];
+  if (!countryResource) {
+    return res.status(500).json({ error: "NO_RESOURCES" });
+  }
+  if (countryResource.ducats < costs.costDucats) {
+    return res.status(400).json({
+      error: "INSUFFICIENT_DUCATS",
+      required: costs.costDucats,
+      available: countryResource.ducats,
+    });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceConstructionQueueByProvince);
+  const queueId = randomUUID();
+  queue.push({
+    queueId,
+    requestedByCountryId: auth.countryId,
+    buildingId,
+    owner: targetInstance.owner,
+    projectType: "upgrade",
+    targetInstanceId: targetInstance.instanceId,
+    progressConstruction: 0,
+    costConstruction: costs.costConstruction,
+    costDucats: costs.costDucats,
+    createdTurnId: turnId,
+  });
+  worldBase.provinceConstructionQueueByProvince[provinceId] = queue;
+
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+
+  return res.json({
+    ok: true,
+    provinceId,
+    buildingId,
+    instanceId: targetInstance.instanceId,
+    queueId,
+    currentLevel,
+    targetLevel: Math.min(maxLevel, currentLevel + 1),
+    maxLevel,
+    upgradeCostConstruction: costs.costConstruction,
+    upgradeCostDucats: costs.costDucats,
+  });
+});
+
+app.post("/country/build/auto-upgrade-state", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = buildAutoUpgradeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, buildingId, instanceId, enabled } = parsed.data;
+  const provinceOwnerId = worldBase.provinceOwner[provinceId] ?? null;
+  if (!provinceOwnerId || provinceOwnerId !== auth.countryId) {
+    return res.status(403).json({ error: "NOT_PROVINCE_OWNER" });
+  }
+
+  const instances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
+  const matchingInstances = instances.filter((instance) => instance.buildingId === buildingId);
+  if (matchingInstances.length <= 0) {
+    return res.status(404).json({ error: "BUILDING_NOT_FOUND" });
+  }
+  const targetInstance =
+    typeof instanceId === "string" && instanceId.trim().length > 0
+      ? matchingInstances.find((instance) => instance.instanceId === instanceId.trim())
+      : matchingInstances[0];
+  if (!targetInstance) {
+    return res.status(404).json({ error: "BUILDING_INSTANCE_NOT_FOUND" });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceBuildingsByProvince);
+  worldBase.provinceBuildingsByProvince[provinceId] = instances.map((instance) =>
+    instance.instanceId === targetInstance.instanceId ? { ...instance, autoUpgradeEnabled: enabled } : instance,
+  );
+
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+
+  return res.json({
+    ok: true,
+    provinceId,
+    buildingId,
+    instanceId: targetInstance.instanceId,
+    autoUpgradeEnabled: enabled,
   });
 });
 

@@ -81,6 +81,7 @@ export type BuildingInstance = {
   owner: BuildingOwner;
   createdTurnId: number;
   level?: number;
+  autoUpgradeEnabled?: boolean;
   ducats?: number;
   warehouseByGoodId?: Record<string, number>;
   lastLaborCoverage?: number;
@@ -108,6 +109,8 @@ export type ProvinceConstructionProject = {
   requestedByCountryId: string;
   buildingId: string;
   owner: BuildingOwner;
+  projectType?: "build" | "upgrade";
+  targetInstanceId?: string;
   progressConstruction: number;
   costConstruction: number;
   costDucats: number;

@@ -363,6 +363,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftCostConstruction, setDraftCostConstruction] = useState("100");
   const [draftCostDucats, setDraftCostDucats] = useState("10");
   const [draftStartingDucats, setDraftStartingDucats] = useState("0");
+  const [draftMaxLevel, setDraftMaxLevel] = useState("1");
+  const [draftUpgradeCostDucats, setDraftUpgradeCostDucats] = useState("10");
+  const [draftUpgradeCostConstruction, setDraftUpgradeCostConstruction] = useState("100");
   const [draftExtractionGoodId, setDraftExtractionGoodId] = useState("");
   const [draftExtractionAmountPerTurn, setDraftExtractionAmountPerTurn] = useState("0");
   const [draftExtractionRequiresDeposit, setDraftExtractionRequiresDeposit] = useState(true);
@@ -382,6 +385,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [goodsEconomyOpen, setGoodsEconomyOpen] = useState(false);
   const [goodsExplorationOpen, setGoodsExplorationOpen] = useState(false);
   const [buildingCostOpen, setBuildingCostOpen] = useState(false);
+  const [buildingUpgradeOpen, setBuildingUpgradeOpen] = useState(false);
   const [buildingExtractionOpen, setBuildingExtractionOpen] = useState(false);
   const [buildingInputsOpen, setBuildingInputsOpen] = useState(false);
   const [buildingOutputsOpen, setBuildingOutputsOpen] = useState(false);
@@ -426,6 +430,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       costConstruction: entry.costConstruction ?? null,
       costDucats: entry.costDucats ?? null,
       startingDucats: entry.startingDucats ?? null,
+      maxLevel: entry.maxLevel ?? null,
+      upgradeCostDucats: entry.upgradeCostDucats ?? null,
+      upgradeCostConstruction: entry.upgradeCostConstruction ?? null,
       extractionGoodId: entry.extractionGoodId ?? null,
       extractionAmountPerTurn: entry.extractionAmountPerTurn ?? null,
       extractionRequiresDeposit:
@@ -581,6 +588,24 @@ export function ContentPanel({ open, token, onClose }: Props) {
         activeCategory === "buildings"
           ? Number.isFinite(Number(draftStartingDucats))
             ? Number(Math.max(0, Number(draftStartingDucats)).toFixed(3))
+            : null
+          : null,
+      maxLevel:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftMaxLevel))
+            ? Math.max(1, Math.floor(Number(draftMaxLevel)))
+            : null
+          : null,
+      upgradeCostDucats:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftUpgradeCostDucats))
+            ? Number(Math.max(0, Number(draftUpgradeCostDucats)).toFixed(3))
+            : null
+          : null,
+      upgradeCostConstruction:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftUpgradeCostConstruction))
+            ? Math.max(1, Math.floor(Number(draftUpgradeCostConstruction)))
             : null
           : null,
       extractionGoodId: activeCategory === "buildings" ? draftExtractionGoodId.trim() || null : null,
@@ -751,6 +776,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
         for (const [provinceId, queue] of Object.entries(snapshot.worldBase.provinceConstructionQueueByProvince ?? {})) {
           const ownerCountryId = snapshot.worldBase.provinceOwner?.[provinceId] ?? null;
           for (const project of queue ?? []) {
+            if ((project.projectType ?? "build") !== "build") continue;
             addUsage(project.buildingId, ownerCountryId, 1);
           }
         }
@@ -801,6 +827,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftCostConstruction("100");
       setDraftCostDucats("10");
       setDraftStartingDucats("0");
+      setDraftMaxLevel("1");
+      setDraftUpgradeCostDucats("10");
+      setDraftUpgradeCostConstruction("100");
       setDraftInfrastructureUse("0");
       setDraftInputs([]);
       setDraftOutputs([]);
@@ -810,6 +839,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftDeniedCountryIds([]);
       setDraftCountryBuildLimits([]);
       setDraftGlobalBuildLimit("");
+      setBuildingUpgradeOpen(false);
       setSavedSnapshot("");
       return;
     }
@@ -920,6 +950,21 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(Math.max(0, selectedEntry.startingDucats))
         : "0",
     );
+    setDraftMaxLevel(
+      typeof selectedEntry.maxLevel === "number" && Number.isFinite(selectedEntry.maxLevel)
+        ? String(Math.max(1, Math.floor(selectedEntry.maxLevel)))
+        : "1",
+    );
+    setDraftUpgradeCostDucats(
+      typeof selectedEntry.upgradeCostDucats === "number" && Number.isFinite(selectedEntry.upgradeCostDucats)
+        ? String(Math.max(0, selectedEntry.upgradeCostDucats))
+        : "10",
+    );
+    setDraftUpgradeCostConstruction(
+      typeof selectedEntry.upgradeCostConstruction === "number" && Number.isFinite(selectedEntry.upgradeCostConstruction)
+        ? String(Math.max(1, Math.floor(selectedEntry.upgradeCostConstruction)))
+        : "100",
+    );
     setDraftExtractionGoodId(
       typeof selectedEntry.extractionGoodId === "string" && selectedEntry.extractionGoodId.trim().length > 0
         ? selectedEntry.extractionGoodId.trim()
@@ -974,6 +1019,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     setCriteriaLimitsOpen(false);
     setGoodsEconomyOpen(false);
     setBuildingCostOpen(false);
+    setBuildingUpgradeOpen(false);
     setBuildingExtractionOpen(false);
     setBuildingInputsOpen(false);
     setBuildingOutputsOpen(false);
@@ -1009,6 +1055,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftCostConstruction,
     draftCostDucats,
     draftStartingDucats,
+    draftMaxLevel,
+    draftUpgradeCostDucats,
+    draftUpgradeCostConstruction,
     draftExtractionGoodId,
     draftExtractionAmountPerTurn,
     draftExtractionRequiresDeposit,
@@ -1075,6 +1124,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
         costConstruction: activeCategory === "buildings" ? 100 : undefined,
         costDucats: activeCategory === "buildings" ? 10 : undefined,
         startingDucats: activeCategory === "buildings" ? 0 : undefined,
+        maxLevel: activeCategory === "buildings" ? 1 : undefined,
+        upgradeCostDucats: activeCategory === "buildings" ? 10 : undefined,
+        upgradeCostConstruction: activeCategory === "buildings" ? 100 : undefined,
         extractionGoodId: activeCategory === "buildings" ? null : undefined,
         extractionAmountPerTurn: activeCategory === "buildings" ? 0 : undefined,
         extractionRequiresDeposit: activeCategory === "buildings" ? true : undefined,
@@ -1151,6 +1203,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
       costConstruction: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftCostConstruction || "100"))) : undefined,
       costDucats: activeCategory === "buildings" ? Math.max(0, Number(draftCostDucats || "10")) : undefined,
       startingDucats: activeCategory === "buildings" ? Math.max(0, Number(draftStartingDucats || "0")) : undefined,
+      maxLevel: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftMaxLevel || "1"))) : undefined,
+      upgradeCostDucats:
+        activeCategory === "buildings" ? Math.max(0, Number(draftUpgradeCostDucats || "10")) : undefined,
+      upgradeCostConstruction:
+        activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftUpgradeCostConstruction || "100"))) : undefined,
       extractionGoodId: activeCategory === "buildings" ? (draftExtractionGoodId.trim() || null) : undefined,
       extractionAmountPerTurn:
         activeCategory === "buildings" ? Math.max(0, Number(draftExtractionAmountPerTurn || "0")) : undefined,
@@ -1217,6 +1274,9 @@ export function ContentPanel({ open, token, onClose }: Props) {
       (!Number.isFinite(payload.costConstruction ?? Number.NaN) ||
         !Number.isFinite(payload.costDucats ?? Number.NaN) ||
         !Number.isFinite(payload.startingDucats ?? Number.NaN) ||
+        !Number.isFinite(payload.maxLevel ?? Number.NaN) ||
+        !Number.isFinite(payload.upgradeCostDucats ?? Number.NaN) ||
+        !Number.isFinite(payload.upgradeCostConstruction ?? Number.NaN) ||
         !Number.isFinite(payload.extractionAmountPerTurn ?? Number.NaN) ||
         !Number.isFinite(payload.infrastructureUse ?? Number.NaN))
     ) {
@@ -1638,6 +1698,75 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                   onChange={(e) => setDraftInfrastructureUse(e.target.value)}
                                   inputMode="decimal"
                                   placeholder="0"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                            </div>
+                            </motion.div>
+                            ) : null}
+                            </AnimatePresence>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-[#131a22] p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setBuildingUpgradeOpen((v) => !v)}
+                                className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-left"
+                              >
+                                <Tooltip content="Параметры повышения уровня инстанса здания: потолок уровня и требования для автопостановки в очередь апгрейда.">
+                                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Повышение уровня</div>
+                                </Tooltip>
+                                {buildingUpgradeOpen ? (
+                                  <ChevronDown size={14} className="text-white/60" />
+                                ) : (
+                                  <ChevronRight size={14} className="text-white/60" />
+                                )}
+                              </button>
+                            </div>
+                            <AnimatePresence initial={false}>
+                            {buildingUpgradeOpen ? (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2, ease: "easeOut" }}
+                              className="overflow-visible"
+                            >
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-3">
+                              <label className="block">
+                                <Tooltip content="Максимальный уровень одного инстанса здания. При достижении этого значения автоповышение не ставится в очередь.">
+                                  <span className="mb-1 block text-xs text-white/60">Макс. уровень</span>
+                                </Tooltip>
+                                <input
+                                  value={draftMaxLevel}
+                                  onChange={(e) => setDraftMaxLevel(e.target.value)}
+                                  inputMode="numeric"
+                                  placeholder="1"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Сколько дукатов должно быть на счёте здания для автопостановки апгрейда. Эти дукаты списываются со счёта здания сразу при постановке в очередь.">
+                                  <span className="mb-1 block text-xs text-white/60">Дукаты на апгрейд</span>
+                                </Tooltip>
+                                <input
+                                  value={draftUpgradeCostDucats}
+                                  onChange={(e) => setDraftUpgradeCostDucats(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="10"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Сколько очков строительства требуется для повышения уровня. После автопостановки проект расходует очки строительства страны через обычную очередь.">
+                                  <span className="mb-1 block text-xs text-white/60">Очки строительства</span>
+                                </Tooltip>
+                                <input
+                                  value={draftUpgradeCostConstruction}
+                                  onChange={(e) => setDraftUpgradeCostConstruction(e.target.value)}
+                                  inputMode="numeric"
+                                  placeholder="100"
                                   className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
                                 />
                               </label>
