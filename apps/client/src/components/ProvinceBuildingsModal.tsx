@@ -30,6 +30,7 @@ import {
   fetchMarketOverview,
   fetchPublicGameUiSettings,
   setCountryBuildAutoUpgradeState,
+  setCountryBuildSubsidyState,
   upgradeCountryBuildState,
   type ContentEntry,
   type MarketOverviewResponse,
@@ -136,6 +137,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [demolishingCardKey, setDemolishingCardKey] = useState<string | null>(null);
   const [upgradingCardKey, setUpgradingCardKey] = useState<string | null>(null);
   const [togglingAutoUpgradeCardKey, setTogglingAutoUpgradeCardKey] = useState<string | null>(null);
+  const [togglingSubsidyCardKey, setTogglingSubsidyCardKey] = useState<string | null>(null);
   const [cancelConfirmTarget, setCancelConfirmTarget] = useState<
     | null
     | {
@@ -1070,6 +1072,39 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     }
   };
 
+  const toggleBuiltCardSubsidies = async (target: {
+    key: string;
+    provinceId: string;
+    buildingId: string;
+    instanceId?: string;
+    enabled: boolean;
+  }) => {
+    if (!auth?.token || !target.instanceId) return;
+    setTogglingSubsidyCardKey(target.key);
+    try {
+      const result = await setCountryBuildSubsidyState(auth.token, {
+        provinceId: target.provinceId,
+        buildingId: target.buildingId,
+        instanceId: target.instanceId,
+        enabled: target.enabled,
+      });
+      toast.success(
+        result.stateSubsidiesEnabled
+          ? "Государственные субсидии включены"
+          : "Государственные субсидии выключены",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "BUILD_SUBSIDY_STATE_FAILED";
+      if (message === "NOT_PROVINCE_OWNER") {
+        toast.error("Переключение доступно только в ваших провинциях");
+      } else {
+        toast.error("Не удалось изменить режим субсидий");
+      }
+    } finally {
+      setTogglingSubsidyCardKey(null);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[206]">
       <motion.div aria-hidden="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
@@ -1264,6 +1299,14 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                         )?.autoUpgradeEnabled !== false
                       )
                     : true;
+                const instanceStateSubsidiesEnabled =
+                  c.kind === "built" && c.instanceId
+                    ? (
+                        (worldBase?.provinceBuildingsByProvince?.[c.provinceId] ?? []).find(
+                          (instance) => instance.instanceId === c.instanceId,
+                        )?.stateSubsidiesEnabled !== false
+                      )
+                    : true;
                 const canStateUpgrade =
                   c.kind === "built" &&
                   Boolean(c.instanceId) &&
@@ -1331,6 +1374,34 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </Tooltip>
                   ) : (
                     <div className="flex items-center gap-2">
+                      <Tooltip
+                        content={
+                          instanceStateSubsidiesEnabled
+                            ? "Выключить государственные субсидии"
+                            : "Включить государственные субсидии"
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void toggleBuiltCardSubsidies({
+                              key: c.key,
+                              provinceId: c.provinceId,
+                              buildingId: c.buildingId,
+                              instanceId: c.instanceId,
+                              enabled: !instanceStateSubsidiesEnabled,
+                            })
+                          }
+                          disabled={!c.instanceId || togglingSubsidyCardKey === c.key}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-black/40 transition disabled:opacity-40 ${
+                            instanceStateSubsidiesEnabled
+                              ? "border-amber-400/55 text-amber-300 hover:border-amber-300/80"
+                              : "border-white/10 text-white/60 hover:border-white/25"
+                          }`}
+                        >
+                          {togglingSubsidyCardKey === c.key ? "..." : <Coins size={14} />}
+                        </button>
+                      </Tooltip>
                       <Tooltip
                         content={
                           instanceAutoUpgradeEnabled

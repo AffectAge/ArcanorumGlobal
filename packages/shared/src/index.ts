@@ -82,6 +82,7 @@ export type BuildingInstance = {
   createdTurnId: number;
   level?: number;
   autoUpgradeEnabled?: boolean;
+  stateSubsidiesEnabled?: boolean;
   ducats?: number;
   warehouseByGoodId?: Record<string, number>;
   lastLaborCoverage?: number;

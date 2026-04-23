@@ -1459,6 +1459,37 @@ export async function setCountryBuildAutoUpgradeState(
   };
 }
 
+export async function setCountryBuildSubsidyState(
+  token: string,
+  payload: { provinceId: string; buildingId: string; instanceId?: string; enabled: boolean },
+): Promise<{
+  ok: boolean;
+  provinceId: string;
+  buildingId: string;
+  instanceId: string;
+  stateSubsidiesEnabled: boolean;
+}> {
+  const response = await fetch(`${API}/country/build/subsidy-state`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "BUILD_SUBSIDY_STATE_FAILED");
+  }
+  return (await response.json()) as {
+    ok: boolean;
+    provinceId: string;
+    buildingId: string;
+    instanceId: string;
+    stateSubsidiesEnabled: boolean;
+  };
+}
+
 export async function adminReviewRegistration(
   token: string,
   countryId: string,

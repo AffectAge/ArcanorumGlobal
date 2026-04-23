@@ -51,7 +51,7 @@
         "startingDucats": 10000,
         "maxLevel": 10,
         "upgradeCostDucats": 10,
-        "upgradeCostConstruction": 1100000,
+        "upgradeCostConstruction": 100,
         "extractionGoodId": "68f51d4c-fb46-4792-9069-231f5e8c4ed2",
         "extractionAmountPerTurn": 100,
         "extractionRequiresDeposit": true,
@@ -366,7 +366,7 @@
         "costConstruction": 100,
         "costDucats": 10,
         "startingDucats": 10000,
-        "maxLevel": 1,
+        "maxLevel": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "extractionGoodId": null,
@@ -673,5 +673,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-04-23T17:03:44.843Z"
+  "updatedAt": "2026-04-23T17:17:50.587Z"
 }

@@ -1938,6 +1938,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             createdTurnId,
             level,
             autoUpgradeEnabled: typeof source.autoUpgradeEnabled === "boolean" ? source.autoUpgradeEnabled : true,
+            stateSubsidiesEnabled: typeof source.stateSubsidiesEnabled === "boolean" ? source.stateSubsidiesEnabled : true,
             ducats:
               typeof source.ducats === "number" && Number.isFinite(source.ducats)
                 ? Number(Math.max(0, source.ducats).toFixed(3))
@@ -2092,6 +2093,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             createdTurnId: turnId,
             level,
             autoUpgradeEnabled: true,
+            stateSubsidiesEnabled: true,
             ducats: 0,
             warehouseByGoodId: {},
             lastLaborCoverage: 0,
@@ -2825,6 +2827,21 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
         requiredInputValueEstimate += deficit * price;
         addCountryGood(demandRequestedByCountry, marketId, input.goodId, deficit);
         addGlobalGood(demandRequestedGlobal, input.goodId, deficit);
+      }
+      const subsidyCountryId = instance.owner.type === "state" ? instance.owner.countryId : ownerCountryId;
+      const estimatedTotalCost = round3(wagesEstimate + requiredInputValueEstimate);
+      if (instance.stateSubsidiesEnabled !== false && estimatedTotalCost > 0) {
+        const buildingDucatsBeforeSubsidy = round3(Math.max(0, Number(instance.ducats ?? 0)));
+        const subsidyNeeded = round3(Math.max(0, estimatedTotalCost - buildingDucatsBeforeSubsidy));
+        if (subsidyNeeded > 0) {
+          ensureCountryInWorldBase(subsidyCountryId);
+          const subsidySource = worldBase.resourcesByCountry[subsidyCountryId];
+          const subsidyAvailable = round3(Math.max(0, Number(subsidySource?.ducats ?? 0)));
+          if (subsidySource && subsidyAvailable + 1e-9 >= subsidyNeeded) {
+            subsidySource.ducats = round3(Math.max(0, subsidyAvailable - subsidyNeeded));
+            instance.ducats = round3(buildingDucatsBeforeSubsidy + subsidyNeeded);
+          }
+        }
       }
       const financeCoverage =
         wagesEstimate + requiredInputValueEstimate > 0
@@ -5403,6 +5420,7 @@ function isEqualBuildingInstances(
       prev.createdTurnId !== next.createdTurnId ||
       Math.max(1, Math.floor(Number(prev.level ?? 1))) !== Math.max(1, Math.floor(Number(next.level ?? 1))) ||
       (prev.autoUpgradeEnabled !== false) !== (next.autoUpgradeEnabled !== false) ||
+      (prev.stateSubsidiesEnabled !== false) !== (next.stateSubsidiesEnabled !== false) ||
       prev.owner.type !== next.owner.type ||
       (prev.owner.type === "state" && next.owner.type === "state" && prev.owner.countryId !== next.owner.countryId) ||
       (prev.owner.type === "company" &&
@@ -6415,6 +6433,7 @@ function resolveBuildingConstructionQueuesTurn(): void {
           createdTurnId: turnId,
           level: 1,
           autoUpgradeEnabled: true,
+          stateSubsidiesEnabled: true,
           ducats: Number(startingDucats.toFixed(3)),
         });
         continue;
@@ -9157,6 +9176,12 @@ const buildAutoUpgradeSchema = z.object({
   instanceId: z.string().min(1).optional(),
   enabled: z.boolean(),
 });
+const buildSubsidiesSchema = z.object({
+  provinceId: z.string().min(1),
+  buildingId: z.string().min(1),
+  instanceId: z.string().min(1).optional(),
+  enabled: z.boolean(),
+});
 
 const provinceRenameSchema = z.object({
   provinceId: z.string().min(1),
@@ -9661,6 +9686,53 @@ app.post("/country/build/auto-upgrade-state", async (req, res) => {
     buildingId,
     instanceId: targetInstance.instanceId,
     autoUpgradeEnabled: enabled,
+  });
+});
+
+app.post("/country/build/subsidy-state", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = buildSubsidiesSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, buildingId, instanceId, enabled } = parsed.data;
+  const provinceOwnerId = worldBase.provinceOwner[provinceId] ?? null;
+  if (!provinceOwnerId || provinceOwnerId !== auth.countryId) {
+    return res.status(403).json({ error: "NOT_PROVINCE_OWNER" });
+  }
+
+  const instances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
+  const matchingInstances = instances.filter((instance) => instance.buildingId === buildingId);
+  if (matchingInstances.length <= 0) {
+    return res.status(404).json({ error: "BUILDING_NOT_FOUND" });
+  }
+  const targetInstance =
+    typeof instanceId === "string" && instanceId.trim().length > 0
+      ? matchingInstances.find((instance) => instance.instanceId === instanceId.trim())
+      : matchingInstances[0];
+  if (!targetInstance) {
+    return res.status(404).json({ error: "BUILDING_INSTANCE_NOT_FOUND" });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceBuildingsByProvince);
+  worldBase.provinceBuildingsByProvince[provinceId] = instances.map((instance) =>
+    instance.instanceId === targetInstance.instanceId ? { ...instance, stateSubsidiesEnabled: enabled } : instance,
+  );
+
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+
+  return res.json({
+    ok: true,
+    provinceId,
+    buildingId,
+    instanceId: targetInstance.instanceId,
+    stateSubsidiesEnabled: enabled,
   });
 });
 
