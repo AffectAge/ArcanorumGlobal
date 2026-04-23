@@ -1348,6 +1348,7 @@ export async function demolishCountryBuild(
   provinceId: string;
   buildingId: string;
   removedInstanceId: string;
+  removedLevels: number;
   previousCount: number;
   newCount: number;
   demolitionCostConstruction: number;
@@ -1371,6 +1372,7 @@ export async function demolishCountryBuild(
     provinceId: string;
     buildingId: string;
     removedInstanceId: string;
+    removedLevels: number;
     previousCount: number;
     newCount: number;
     demolitionCostConstruction: number;

@@ -6276,30 +6276,14 @@ function resolveBuildingConstructionQueuesTurn(): void {
       if (project.progressConstruction + 1e-9 >= project.costConstruction) {
         const building = buildingById.get(project.buildingId);
         const startingDucats = Math.max(0, Number(building?.startingDucats ?? 0));
-        const existingInstance = buildingInstances.find((instance) => {
-          if (instance.buildingId !== project.buildingId) return false;
-          if (instance.owner.type !== project.owner.type) return false;
-          if (instance.owner.type === "state" && project.owner.type === "state") {
-            return instance.owner.countryId === project.owner.countryId;
-          }
-          if (instance.owner.type === "company" && project.owner.type === "company") {
-            return instance.owner.companyId === project.owner.companyId;
-          }
-          return false;
+        buildingInstances.push({
+          instanceId: randomUUID(),
+          buildingId: project.buildingId,
+          owner: project.owner,
+          createdTurnId: turnId,
+          level: 1,
+          ducats: Number(startingDucats.toFixed(3)),
         });
-        if (existingInstance) {
-          existingInstance.level = Math.max(1, Math.floor(Number(existingInstance.level ?? 1))) + 1;
-          existingInstance.ducats = round3(Math.max(0, Number(existingInstance.ducats ?? 0)) + startingDucats);
-        } else {
-          buildingInstances.push({
-            instanceId: randomUUID(),
-            buildingId: project.buildingId,
-            owner: project.owner,
-            createdTurnId: turnId,
-            level: 1,
-            ducats: Number(startingDucats.toFixed(3)),
-          });
-        }
         continue;
       }
       nextQueue.push(project);
@@ -9338,14 +9322,7 @@ app.post("/country/build/demolish", async (req, res) => {
     0,
   );
   const targetLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
-  const nextInstances =
-    targetLevel > 1
-      ? instances.map((instance) =>
-          instance.instanceId === targetInstance.instanceId
-            ? { ...instance, level: targetLevel - 1 }
-            : instance,
-        )
-      : instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
+  const nextInstances = instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
   worldBase.provinceBuildingsByProvince[provinceId] = nextInstances;
   const buildingDucats = worldBase.provinceBuildingDucatsByProvince[provinceId] ?? {};
   const remainingByType = nextInstances.some((instance) => instance.buildingId === buildingId);
@@ -9362,8 +9339,9 @@ app.post("/country/build/demolish", async (req, res) => {
     provinceId,
     buildingId,
     removedInstanceId: targetInstance.instanceId,
+    removedLevels: targetLevel,
     previousCount: previousTotalLevel,
-    newCount: Math.max(0, previousTotalLevel - 1),
+    newCount: Math.max(0, previousTotalLevel - targetLevel),
     demolitionCostConstruction,
     demolitionPercent,
     constructionLeft: countryResource.construction,
@@ -10770,7 +10748,7 @@ wss.on("connection", (socket) => {
       }
 
       if (delta.order.turnId !== turnId) {
-        send({ type: "ERROR", code: "TURN_MISMATCH", message: "Order for stale turn" });
+        send({ type: "ERROR", code: "TURN_MISMATCH", message: "Ход устарел. Перезагрузите страницу и повторите действие." });
         return;
       }
 

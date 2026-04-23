@@ -967,7 +967,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         instanceId: target.instanceId,
       });
       toast.success(
-        `Постройка снесена: -1 уровень (${formatCompact(result.demolitionCostConstruction)} очков строительства)`,
+        `Постройка снесена (${formatCompact(result.demolitionCostConstruction)} очков строительства)`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "BUILD_DEMOLISH_FAILED";
@@ -1180,7 +1180,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                       </button>
                     </Tooltip>
                   ) : (
-                    <Tooltip content="Снести один уровень постройки (стоимость в очках строительства)">
+                    <Tooltip content="Снести постройку целиком (стоимость в очках строительства)">
                       <button
                         type="button"
                         onClick={() =>
