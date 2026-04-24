@@ -366,6 +366,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftMaxLevel, setDraftMaxLevel] = useState("1");
   const [draftUpgradeCostDucats, setDraftUpgradeCostDucats] = useState("10");
   const [draftUpgradeCostConstruction, setDraftUpgradeCostConstruction] = useState("100");
+  const [draftIndustryId, setDraftIndustryId] = useState("");
   const [draftExtractionGoodId, setDraftExtractionGoodId] = useState("");
   const [draftExtractionAmountPerTurn, setDraftExtractionAmountPerTurn] = useState("0");
   const [draftExtractionRequiresDeposit, setDraftExtractionRequiresDeposit] = useState(true);
@@ -394,6 +395,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [goodsOptions, setGoodsOptions] = useState<ContentEntry[]>([]);
   const [resourceCategoryOptions, setResourceCategoryOptions] = useState<ContentEntry[]>([]);
   const [professionOptions, setProfessionOptions] = useState<ContentEntry[]>([]);
+  const [industryOptions, setIndustryOptions] = useState<ContentEntry[]>([]);
   const [countryOptions, setCountryOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [worldBuildingUsage, setWorldBuildingUsage] = useState<{
     globalByBuildingId: Record<string, number>;
@@ -433,6 +435,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       maxLevel: entry.maxLevel ?? null,
       upgradeCostDucats: entry.upgradeCostDucats ?? null,
       upgradeCostConstruction: entry.upgradeCostConstruction ?? null,
+      industryId: entry.industryId ?? null,
       extractionGoodId: entry.extractionGoodId ?? null,
       extractionAmountPerTurn: entry.extractionAmountPerTurn ?? null,
       extractionRequiresDeposit:
@@ -608,6 +611,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
             ? Math.max(1, Math.floor(Number(draftUpgradeCostConstruction)))
             : null
           : null,
+      industryId: activeCategory === "buildings" ? draftIndustryId.trim() || null : null,
       extractionGoodId: activeCategory === "buildings" ? draftExtractionGoodId.trim() || null : null,
       extractionAmountPerTurn:
         activeCategory === "buildings"
@@ -725,13 +729,15 @@ export function ContentPanel({ open, token, onClose }: Props) {
       adminFetchContentEntries(token, "goods"),
       adminFetchContentEntries(token, "resourceCategories"),
       adminFetchContentEntries(token, "professions"),
+      adminFetchContentEntries(token, "industries"),
       fetchCountries(),
     ])
-      .then(([goods, resourceCategories, professions, countries]) => {
+      .then(([goods, resourceCategories, professions, industries, countries]) => {
         if (cancelled) return;
         setGoodsOptions(goods);
         setResourceCategoryOptions(resourceCategories);
         setProfessionOptions(professions);
+        setIndustryOptions(industries);
         setCountryOptions(countries.map((country) => ({ id: country.id, name: country.name })));
       })
       .catch(() => {
@@ -739,6 +745,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
         setGoodsOptions([]);
         setResourceCategoryOptions([]);
         setProfessionOptions([]);
+        setIndustryOptions([]);
         setCountryOptions([]);
       });
     return () => {
@@ -830,6 +837,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftMaxLevel("1");
       setDraftUpgradeCostDucats("10");
       setDraftUpgradeCostConstruction("100");
+      setDraftIndustryId("");
       setDraftInfrastructureUse("0");
       setDraftInputs([]);
       setDraftOutputs([]);
@@ -965,6 +973,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(Math.max(1, Math.floor(selectedEntry.upgradeCostConstruction)))
         : "100",
     );
+    setDraftIndustryId(
+      typeof selectedEntry.industryId === "string" && selectedEntry.industryId.trim().length > 0
+        ? selectedEntry.industryId.trim()
+        : "",
+    );
     setDraftExtractionGoodId(
       typeof selectedEntry.extractionGoodId === "string" && selectedEntry.extractionGoodId.trim().length > 0
         ? selectedEntry.extractionGoodId.trim()
@@ -1058,6 +1071,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftMaxLevel,
     draftUpgradeCostDucats,
     draftUpgradeCostConstruction,
+    draftIndustryId,
     draftExtractionGoodId,
     draftExtractionAmountPerTurn,
     draftExtractionRequiresDeposit,
@@ -1208,6 +1222,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
         activeCategory === "buildings" ? Math.max(0, Number(draftUpgradeCostDucats || "10")) : undefined,
       upgradeCostConstruction:
         activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftUpgradeCostConstruction || "100"))) : undefined,
+      industryId: activeCategory === "buildings" ? (draftIndustryId.trim() || null) : undefined,
       extractionGoodId: activeCategory === "buildings" ? (draftExtractionGoodId.trim() || null) : undefined,
       extractionAmountPerTurn:
         activeCategory === "buildings" ? Math.max(0, Number(draftExtractionAmountPerTurn || "0")) : undefined,
@@ -1652,7 +1667,21 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               transition={{ duration: 0.2, ease: "easeOut" }}
                               className="overflow-visible"
                             >
-                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-4">
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-5">
+                              <label className="block">
+                                <Tooltip content="Отрасль, к которой относится здание (используется в фильтрах и группировках UI).">
+                                  <span className="mb-1 block text-xs text-white/60">Отрасль</span>
+                                </Tooltip>
+                                <CustomSelect
+                                  value={draftIndustryId}
+                                  onChange={setDraftIndustryId}
+                                  options={[
+                                    { value: "", label: "Не указана" },
+                                    ...industryOptions.map((option) => ({ value: option.id, label: option.name })),
+                                  ]}
+                                  buttonClassName="h-[42px]"
+                                />
+                              </label>
                               <label className="block">
                                 <Tooltip content="Сколько очков строительства требуется на завершение проекта.">
                                   <span className="mb-1 block text-xs text-white/60">Очки строительства</span>

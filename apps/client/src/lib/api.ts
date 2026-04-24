@@ -37,6 +37,7 @@ export type ContentCulture = {
   upgradeCostDucats?: number | null;
   upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
+  industryId?: string | null;
   extractionAmountPerTurn?: number | null;
   extractionRequiresDeposit?: boolean | null;
   infrastructureUse?: number | null;
@@ -91,6 +92,7 @@ type ContentEntryUpsertPayload = {
   upgradeCostDucats?: number | null;
   upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
+  industryId?: string | null;
   extractionAmountPerTurn?: number | null;
   extractionRequiresDeposit?: boolean | null;
   infrastructureUse?: number | null;

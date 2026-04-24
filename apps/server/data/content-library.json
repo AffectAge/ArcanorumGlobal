@@ -52,6 +52,7 @@
         "maxLevel": 10,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": "8cafa974-b527-4d9b-977c-9bcdc96eaa76",
         "extractionGoodId": "68f51d4c-fb46-4792-9069-231f5e8c4ed2",
         "extractionAmountPerTurn": 100,
         "extractionRequiresDeposit": true,
@@ -84,6 +85,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -126,6 +128,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -153,6 +156,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -180,6 +184,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -207,6 +212,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -234,6 +240,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -261,6 +268,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -288,6 +296,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -315,6 +324,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -342,6 +352,7 @@
         "maxLevel": 1,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -358,7 +369,7 @@
       {
         "id": "44e05f46-e9b7-4264-a095-77027362d735",
         "name": "Угольная электростанция",
-        "description": "",
+        "description": "вапваогр7",
         "color": "#a78bfa",
         "logoUrl": null,
         "malePortraitUrl": null,
@@ -369,6 +380,7 @@
         "maxLevel": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
+        "industryId": null,
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -614,12 +626,22 @@
         "name": "Новая компания",
         "description": "",
         "color": "#a78bfa",
-        "logoUrl": null,
+        "logoUrl": "/uploads/companies/a26cd789-6442-43b6-86fe-61e29c1bc216.png?v=1777037268607",
         "malePortraitUrl": null,
         "femalePortraitUrl": null
       }
     ],
-    "industries": [],
+    "industries": [
+      {
+        "id": "8cafa974-b527-4d9b-977c-9bcdc96eaa76",
+        "name": "Энергетика",
+        "description": "",
+        "color": "#e8ff38",
+        "logoUrl": "/uploads/industries/a6b7450c-662e-42a8-9959-03006ec92021.png?v=1777037259352",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
     "cultures": []
   },
   "civilopedia": {
@@ -673,5 +695,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-04-24T13:05:55.092Z"
+  "updatedAt": "2026-04-24T13:31:11.205Z"
 }

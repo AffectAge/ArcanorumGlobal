@@ -838,6 +838,7 @@ type GoodContentEntry = GameContentEntry & {
 };
 
 type BuildingContentEntry = GameContentEntry & {
+  industryId?: string | null;
   costConstruction?: number | null;
   costDucats?: number | null;
   startingDucats?: number | null;
@@ -1585,6 +1586,7 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       upgradeCostDucats?: unknown;
       upgradeCostConstruction?: unknown;
       extractionGoodId?: unknown;
+      industryId?: unknown;
       extractionAmountPerTurn?: unknown;
       extractionRequiresDeposit?: unknown;
       inputs?: unknown;
@@ -1627,6 +1629,8 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       typeof raw?.extractionGoodId === "string" && raw.extractionGoodId.trim().length > 0
         ? raw.extractionGoodId.trim()
         : null;
+    const industryId =
+      typeof raw?.industryId === "string" && raw.industryId.trim().length > 0 ? raw.industryId.trim() : null;
     const extractionAmountPerTurn =
       typeof raw?.extractionAmountPerTurn === "number" && Number.isFinite(raw.extractionAmountPerTurn)
         ? Number(Math.max(0, raw.extractionAmountPerTurn).toFixed(3))
@@ -1641,6 +1645,7 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       maxLevel,
       upgradeCostDucats: Number(upgradeCostDucats.toFixed(3)),
       upgradeCostConstruction,
+      industryId,
       extractionGoodId,
       extractionAmountPerTurn,
       extractionRequiresDeposit,
@@ -8412,6 +8417,7 @@ const culturePayloadSchema = z.object({
   maxLevel: z.number().int().min(1).optional(),
   upgradeCostDucats: z.number().finite().min(0).optional(),
   upgradeCostConstruction: z.number().int().min(1).optional(),
+  industryId: z.string().trim().min(1).max(120).nullable().optional(),
   extractionGoodId: z.string().trim().min(1).max(120).nullable().optional(),
   extractionAmountPerTurn: z.number().finite().min(0).optional(),
   extractionRequiresDeposit: z.boolean().optional(),
@@ -8558,6 +8564,12 @@ function sanitizeContentEntryByKind(
       maxLevel,
       upgradeCostDucats,
       upgradeCostConstruction,
+      industryId:
+        payload.industryId === undefined
+          ? undefined
+          : typeof payload.industryId === "string" && payload.industryId.trim().length > 0
+            ? payload.industryId.trim()
+            : null,
       extractionGoodId:
         payload.extractionGoodId === undefined
           ? undefined

@@ -62,6 +62,7 @@ type Card = {
   buildingId: string;
   buildingName: string;
   iconUrl: string | null;
+  industryLogo: string | null;
   industryName: string | null;
   ownerLabel: string;
   ownerLogo: string | null;
@@ -364,6 +365,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           buildingId: bid,
           buildingName: b.name,
           iconUrl: b.logoUrl ?? null,
+          industryLogo: ind?.logoUrl ?? null,
           industryName: ind?.name ?? null,
           ownerLabel,
           ownerLogo,
@@ -402,6 +404,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           buildingId: q.buildingId,
           buildingName: b.name,
           iconUrl: b.logoUrl ?? null,
+          industryLogo: null,
           industryName: null,
           ownerLabel,
           ownerLogo,
@@ -784,6 +787,25 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     companies,
     buildingById,
   ]);
+
+  const provinceSections = useMemo(
+    () => {
+      const byProvinceId = new Map<string, Card[]>();
+      for (const card of filteredCards) {
+        const list = byProvinceId.get(card.provinceId) ?? [];
+        list.push(card);
+        byProvinceId.set(card.provinceId, list);
+      }
+      return myProvinces
+        .filter((province) => !filterProvinceId || province.id === filterProvinceId)
+        .map((province) => ({
+          provinceId: province.id,
+          provinceName: province.name,
+          cards: byProvinceId.get(province.id) ?? [],
+        }));
+    },
+    [filteredCards, filterProvinceId, myProvinces],
+  );
 
   const availableConstruction = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.construction ?? 0)));
   const availableDucats = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.ducats ?? 0)));
@@ -1270,8 +1292,19 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
             </div>
           </div>
 
-          <div className="arc-scrollbar grid min-h-0 grid-cols-1 gap-3 overflow-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
-            {filteredCards.map((c) => (
+          <div className="arc-scrollbar min-h-0 space-y-4 overflow-auto pr-1">
+            {provinceSections.map((section) => {
+              const provinceCards = section.cards;
+              return (
+                <section key={section.provinceId} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold text-white/85">{section.provinceName}</div>
+                    <div className="text-[11px] text-white/50">
+                      Построек: {provinceCards.filter((card) => card.kind === "built").length}, в очереди: {provinceCards.filter((card) => card.kind === "construction").length}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {provinceCards.map((c) => (
               (() => {
                 const econ = c.kind === "built" ? getCardEconomy(c) : null;
                 const displayInactiveReasons = [...c.inactiveReasons];
@@ -1311,6 +1344,15 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 const displayIsActive = c.isActive;
                 const econData = c.kind === "built" ? (econ ?? getCardEconomy(c)) : null;
                 const building = buildingById.get(c.buildingId);
+                const industryDescription = (() => {
+                  const industryId = ((building as { industryId?: string } | undefined)?.industryId ?? "").trim();
+                  if (!industryId) return "";
+                  return (industryById.get(industryId)?.description ?? "").trim();
+                })();
+                const ownerCompanyDescription =
+                  c.ownerType === "company" && c.ownerCompanyId
+                    ? (companyById.get(c.ownerCompanyId)?.description ?? "").trim()
+                    : "";
                 const maxLevel =
                   c.kind === "built"
                     ? Math.max(1, Math.floor(Number((building as (ContentEntry & { maxLevel?: number }) | undefined)?.maxLevel ?? 1)))
@@ -1406,10 +1448,18 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
               <article key={c.key} className={`rounded-2xl border bg-gradient-to-br from-white/5 to-transparent p-4 flex flex-col gap-4 shadow-lg shadow-black/30 ${cardBorder}`}>
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
-                      <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">{c.iconUrl ? <img src={c.iconUrl} alt="" className="h-full w-full object-cover" /> : <Factory size={16} />}</div>
+                      <div className="flex h-[60px] w-[60px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">{c.iconUrl ? <img src={c.iconUrl} alt="" className="h-full w-full object-cover" /> : <Factory size={20} />}</div>
                       <div>
                       <div className="flex items-center gap-2 text-white/80 text-sm font-semibold">
-                        <span>{c.buildingName || c.buildingId}</span>
+                        <Tooltip
+                          content={(() => {
+                            const description = (buildingById.get(c.buildingId)?.description ?? "").trim();
+                            return description.length > 0 ? description : "Описание здания отсутствует";
+                          })()}
+                          placement="top"
+                        >
+                          <span>{c.buildingName || c.buildingId}</span>
+                        </Tooltip>
                         {c.kind === "built" && (
                           <span className="inline-flex items-center rounded-full border border-white/15 bg-black/40 px-2 py-0.5 text-[10px] font-semibold text-white/70">
                             Ур. {c.level}
@@ -1600,11 +1650,41 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                   </div>
                 )}
                 <div className="flex flex-col gap-1.5 text-xs text-white/65">
-                  <div className="flex items-center gap-2"><Factory size={13} /><span className="text-white/40">Отрасль:</span><span>{c.industryName ?? "—"}</span></div>
+                  <div className="flex items-center gap-2">
+                    <Factory size={13} />
+                    <span className="text-white/40">Отрасль:</span>
+                    <Tooltip
+                      content={industryDescription.length > 0 ? industryDescription : "Описание отрасли отсутствует"}
+                      placement="top"
+                    >
+                      <span className="inline-flex items-center gap-1.5 text-white/80">
+                        {c.industryLogo ? <img src={c.industryLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}
+                        <span>{c.industryName ?? "—"}</span>
+                      </span>
+                    </Tooltip>
+                  </div>
                   {c.kind === "built" && <div className="flex items-center gap-2"><Hammer size={13} /><span className="text-white/40">Уровень:</span><span>{c.level}</span></div>}
                   <div className="flex items-center gap-2"><MapPin size={13} /><span className="text-white/40">Провинция:</span><span>{c.provinceName}</span></div>
-                  <div className="flex items-center gap-2"><Building2 size={13} /><span className="text-white/40">Страна:</span><span>{countryById.get(c.provinceOwnerCountryId)?.name ?? (c.provinceOwnerCountryId || "—")}</span></div>
-                  <div className="flex items-center gap-2"><Factory size={13} /><span className="text-white/40">Владелец:</span><span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-2 py-0.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}{c.ownerLabel}</span></div>
+                  <div className="flex items-center gap-2">
+                    <Building2 size={13} />
+                    <span className="text-white/40">Страна:</span>
+                    <span className="inline-flex items-center gap-1.5 text-white/80">
+                      {countryById.get(c.provinceOwnerCountryId)?.flagUrl ? (
+                        <img src={countryById.get(c.provinceOwnerCountryId)?.flagUrl ?? ""} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" />
+                      ) : null}
+                      <span>{countryById.get(c.provinceOwnerCountryId)?.name ?? (c.provinceOwnerCountryId || "—")}</span>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2"><Factory size={13} /><span className="text-white/40">Владелец:</span>{c.ownerType === "company" ? (
+                    <Tooltip
+                      content={ownerCompanyDescription.length > 0 ? ownerCompanyDescription : "Описание компании отсутствует"}
+                      placement="top"
+                    >
+                      <span className="inline-flex items-center gap-1.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}<span>{c.ownerLabel}</span></span>
+                    </Tooltip>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}<span>{c.ownerLabel}</span></span>
+                  )}</div>
                   {c.kind === "built" && <div className="flex items-center gap-2"><Users size={13} /><span className="text-white/40">Рабочие:</span><span>{fmt(c.workersEmployed)} / {fmt(c.workersDemand)}</span></div>}
                 </div>
                 {c.kind === "built" && (
@@ -1958,8 +2038,27 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 );
               })()
             ))}
-            {filteredCards.length === 0 && (
-              <div className="col-span-full rounded-lg border border-dashed border-white/15 bg-black/20 p-4 text-sm text-white/50">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBuildCountryId(countryId);
+                        setProvinceId(section.provinceId);
+                        setConstructionOpen(true);
+                      }}
+                      className="group flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-emerald-400/50 bg-emerald-500/10 p-4 text-emerald-200 transition hover:border-emerald-300/80 hover:bg-emerald-500/15"
+                    >
+                      <span className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/20">
+                        <Plus size={20} />
+                      </span>
+                      <span className="mt-3 text-sm font-semibold">Добавить постройку</span>
+                      <span className="mt-1 text-[11px] text-emerald-100/80">Быстрый переход к строительству</span>
+                    </button>
+                  </div>
+                </section>
+              );
+            })}
+            {provinceSections.length === 0 && (
+              <div className="rounded-lg border border-dashed border-white/15 bg-black/20 p-4 text-sm text-white/50">
                 По выбранным фильтрам ничего не найдено.
               </div>
             )}
