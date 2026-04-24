@@ -14,6 +14,7 @@ import {
   Lock,
   MapPin,
   Package,
+  Power,
   Plus,
   SlidersHorizontal,
   Trash2,
@@ -30,6 +31,7 @@ import {
   fetchMarketOverview,
   fetchPublicGameUiSettings,
   setCountryBuildAutoUpgradeState,
+  setCountryBuildManualWorkState,
   setCountryBuildSubsidyState,
   upgradeCountryBuildState,
   type ContentEntry,
@@ -76,6 +78,7 @@ type Card = {
   lastInputCoverage?: number;
   lastInfraCoverage?: number;
   lastFinanceCoverage?: number;
+  lastExtractionCoverage?: number;
   lastProductivity?: number;
   inactiveReason?: string | null;
 };
@@ -138,6 +141,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [upgradingCardKey, setUpgradingCardKey] = useState<string | null>(null);
   const [togglingAutoUpgradeCardKey, setTogglingAutoUpgradeCardKey] = useState<string | null>(null);
   const [togglingSubsidyCardKey, setTogglingSubsidyCardKey] = useState<string | null>(null);
+  const [togglingManualWorkCardKey, setTogglingManualWorkCardKey] = useState<string | null>(null);
   const [cancelConfirmTarget, setCancelConfirmTarget] = useState<
     | null
     | {
@@ -340,9 +344,6 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         if (instance.inactiveReason) {
           inactiveReasons.push(instance.inactiveReason);
         }
-        if (workersDemandPerLevel > 0 && workersEmployed <= 0) {
-          inactiveReasons.push("Нет доступной рабочей силы");
-        }
         const ind = industryById.get(((b as { industryId?: string }).industryId ?? "").trim());
         const ownerLabel =
           instance.owner.type === "company"
@@ -368,7 +369,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           ownerLogo,
           ownerType: instance.owner.type,
           ownerCompanyId: instance.owner.type === "company" ? instance.owner.companyId : undefined,
-          isActive: !(instance.isInactive ?? false) && inactiveReasons.length === 0,
+          isActive: !(instance.isInactive ?? false) && !instance.inactiveReason,
           inactiveReasons,
           level: instanceLevel,
           progressPercent: 100,
@@ -379,6 +380,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           lastInputCoverage: typeof instance.lastInputCoverage === "number" ? instance.lastInputCoverage : undefined,
           lastInfraCoverage: typeof instance.lastInfraCoverage === "number" ? instance.lastInfraCoverage : undefined,
           lastFinanceCoverage: typeof instance.lastFinanceCoverage === "number" ? instance.lastFinanceCoverage : undefined,
+          lastExtractionCoverage:
+            typeof instance.lastExtractionCoverage === "number" ? instance.lastExtractionCoverage : undefined,
           lastProductivity: typeof instance.lastProductivity === "number" ? instance.lastProductivity : undefined,
           inactiveReason: instance.inactiveReason ?? null,
         });
@@ -536,6 +539,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         inputCost: 0,
         outputRevenue: 0,
         wagesCost: 0,
+        stateSubsidyDucats: 0,
         netPerTurn: 0,
         storageAmount: 0,
         inputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; cost: number }>,
@@ -616,6 +620,10 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       typeof instance?.lastNetDucats === "number"
         ? Number(instance.lastNetDucats)
         : outputRevenue - inputCost - wagesCost;
+    const stateSubsidyDucats =
+      typeof instance?.lastStateSubsidyDucats === "number"
+        ? Math.max(0, Number(instance.lastStateSubsidyDucats))
+        : 0;
 
     const storageAmount =
       typeof instance?.ducats === "number"
@@ -719,6 +727,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       inputCost,
       outputRevenue,
       wagesCost,
+      stateSubsidyDucats,
       netPerTurn,
       storageAmount,
       inputs,
@@ -1105,6 +1114,39 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     }
   };
 
+  const toggleBuiltCardManualWork = async (target: {
+    key: string;
+    provinceId: string;
+    buildingId: string;
+    instanceId?: string;
+    enabled: boolean;
+  }) => {
+    if (!auth?.token || !target.instanceId) return;
+    setTogglingManualWorkCardKey(target.key);
+    try {
+      const result = await setCountryBuildManualWorkState(auth.token, {
+        provinceId: target.provinceId,
+        buildingId: target.buildingId,
+        instanceId: target.instanceId,
+        enabled: target.enabled,
+      });
+      toast.success(
+        result.manualWorkEnabled
+          ? "Постройка включена вручную"
+          : "Постройка отключена вручную",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "BUILD_MANUAL_WORK_STATE_FAILED";
+      if (message === "NOT_PROVINCE_OWNER") {
+        toast.error("Переключение доступно только в ваших провинциях");
+      } else {
+        toast.error("Не удалось изменить ручной режим постройки");
+      }
+    } finally {
+      setTogglingManualWorkCardKey(null);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[206]">
       <motion.div aria-hidden="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
@@ -1233,24 +1275,40 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
               (() => {
                 const econ = c.kind === "built" ? getCardEconomy(c) : null;
                 const displayInactiveReasons = [...c.inactiveReasons];
+                let limitingFactorBadge: { text: string; tooltip: string } | null = null;
                 if (c.kind === "built") {
                   const factors = [
                     { label: "labor", value: c.lastLaborCoverage },
                     { label: "input", value: c.lastInputCoverage },
                     { label: "infra", value: c.lastInfraCoverage },
                     { label: "finance", value: c.lastFinanceCoverage },
+                    { label: "extraction", value: c.lastExtractionCoverage },
                   ]
                     .filter((f): f is { label: string; value: number } => typeof f.value === "number")
                     .sort((a, b) => a.value - b.value);
                   if (factors.length > 0 && factors[0].value < 0.999) {
                     const limiting = factors[0];
-                    displayInactiveReasons.push(`Лимит-фактор: ${limiting.label} (${Math.round(limiting.value * 100)}%)`);
+                    const factorLabel =
+                      limiting.label === "labor"
+                        ? "труд"
+                        : limiting.label === "input"
+                          ? "входные товары"
+                          : limiting.label === "infra"
+                            ? "инфраструктура"
+                            : limiting.label === "finance"
+                              ? "финансы"
+                              : "добыча";
+                    const factorPct = Math.round(limiting.value * 100);
+                    limitingFactorBadge = {
+                      text: `Лимит: ${factorLabel} ${factorPct}%`,
+                      tooltip: `Лимит-фактор: ${factorLabel} (${factorPct}%)`,
+                    };
                   }
                 }
                 if (c.kind === "built" && econ && econ.netPerTurn < 0 && econ.storageAmount <= 0) {
                   displayInactiveReasons.push("Недостаточно дукатов: убыток не покрывается кассой здания");
                 }
-                const displayIsActive = displayInactiveReasons.length === 0;
+                const displayIsActive = c.isActive;
                 const econData = c.kind === "built" ? (econ ?? getCardEconomy(c)) : null;
                 const building = buildingById.get(c.buildingId);
                 const maxLevel =
@@ -1307,6 +1365,19 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                         )?.stateSubsidiesEnabled !== false
                       )
                     : true;
+                const instanceManualWorkEnabled =
+                  c.kind === "built" && c.instanceId
+                    ? (
+                        (worldBase?.provinceBuildingsByProvince?.[c.provinceId] ?? []).find(
+                          (instance) => instance.instanceId === c.instanceId,
+                        )?.manualWorkEnabled !== false
+                      )
+                    : true;
+                const isManuallyDisabled =
+                  c.kind === "built" &&
+                  (!instanceManualWorkEnabled ||
+                    c.inactiveReason === "Отключено вручную" ||
+                    c.inactiveReasons.includes("Отключено вручную"));
                 const canStateUpgrade =
                   c.kind === "built" &&
                   Boolean(c.instanceId) &&
@@ -1351,6 +1422,13 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                           <span className="mt-1 inline-flex rounded-full border border-red-400/40 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200">Неактивное</span>
                         </Tooltip>
                       )}
+                      {limitingFactorBadge && (
+                        <Tooltip content={limitingFactorBadge.tooltip} placement="top">
+                          <span className="mt-1 ml-1 inline-flex rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+                            {limitingFactorBadge.text}
+                          </span>
+                        </Tooltip>
+                      )}
                     </div>
                   </div>
                   {c.kind === "construction" ? (
@@ -1374,6 +1452,34 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </Tooltip>
                   ) : (
                     <div className="flex items-center gap-2">
+                      <Tooltip
+                        content={
+                          isManuallyDisabled
+                            ? "Включить постройку вручную"
+                            : "Отключить постройку вручную"
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void toggleBuiltCardManualWork({
+                              key: c.key,
+                              provinceId: c.provinceId,
+                              buildingId: c.buildingId,
+                              instanceId: c.instanceId,
+                              enabled: isManuallyDisabled,
+                            })
+                          }
+                          disabled={!c.instanceId || togglingManualWorkCardKey === c.key}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-black/40 transition disabled:opacity-40 ${
+                            isManuallyDisabled
+                              ? "border-red-400/50 text-red-300 hover:border-red-300/80"
+                              : "border-emerald-400/55 text-emerald-300 hover:border-emerald-300/80"
+                          }`}
+                        >
+                          {togglingManualWorkCardKey === c.key ? "..." : <Power size={14} />}
+                        </button>
+                      </Tooltip>
                       <Tooltip
                         content={
                           instanceStateSubsidiesEnabled
@@ -1807,6 +1913,14 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                 <span className="font-semibold text-red-300">Зарплаты</span>
                                 <span className="inline-flex items-center rounded-md border border-red-400/45 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold text-red-200">
                                   -{formatCompact(econData.wagesCost)} дукат
+                                </span>
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-white/70">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-semibold text-amber-300">Гос. субсидии</span>
+                                <span className="inline-flex items-center rounded-md border border-amber-400/45 bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-200">
+                                  +{formatCompact(econData.stateSubsidyDucats)} дукат
                                 </span>
                               </div>
                             </div>

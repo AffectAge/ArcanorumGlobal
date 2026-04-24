@@ -1939,6 +1939,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             level,
             autoUpgradeEnabled: typeof source.autoUpgradeEnabled === "boolean" ? source.autoUpgradeEnabled : true,
             stateSubsidiesEnabled: typeof source.stateSubsidiesEnabled === "boolean" ? source.stateSubsidiesEnabled : true,
+            manualWorkEnabled: typeof source.manualWorkEnabled === "boolean" ? source.manualWorkEnabled : true,
             ducats:
               typeof source.ducats === "number" && Number.isFinite(source.ducats)
                 ? Number(Math.max(0, source.ducats).toFixed(3))
@@ -1973,6 +1974,10 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             lastFinanceCoverage:
               typeof source.lastFinanceCoverage === "number" && Number.isFinite(source.lastFinanceCoverage)
                 ? Number(Math.max(0, Math.min(1, source.lastFinanceCoverage)).toFixed(3))
+                : 0,
+            lastExtractionCoverage:
+              typeof source.lastExtractionCoverage === "number" && Number.isFinite(source.lastExtractionCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastExtractionCoverage)).toFixed(3))
                 : 0,
             lastProductivity:
               typeof source.lastProductivity === "number" && Number.isFinite(source.lastProductivity)
@@ -2069,6 +2074,10 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
               typeof source.lastWagesDucats === "number" && Number.isFinite(source.lastWagesDucats)
                 ? Number(source.lastWagesDucats.toFixed(3))
                 : 0,
+            lastStateSubsidyDucats:
+              typeof source.lastStateSubsidyDucats === "number" && Number.isFinite(source.lastStateSubsidyDucats)
+                ? Number(source.lastStateSubsidyDucats.toFixed(3))
+                : 0,
             lastNetDucats:
               typeof source.lastNetDucats === "number" && Number.isFinite(source.lastNetDucats)
                 ? Number(source.lastNetDucats.toFixed(3))
@@ -2094,12 +2103,14 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             level,
             autoUpgradeEnabled: true,
             stateSubsidiesEnabled: true,
+            manualWorkEnabled: true,
             ducats: 0,
             warehouseByGoodId: {},
             lastLaborCoverage: 0,
             lastInfraCoverage: 0,
             lastInputCoverage: 0,
             lastFinanceCoverage: 0,
+            lastExtractionCoverage: 0,
             lastProductivity: 0,
             lastPurchaseByGoodId: {},
             lastPurchaseCostByGoodId: {},
@@ -2111,6 +2122,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             lastRevenueDucats: 0,
             lastInputCostDucats: 0,
             lastWagesDucats: 0,
+            lastStateSubsidyDucats: 0,
             lastNetDucats: 0,
             isInactive: false,
             inactiveReason: null,
@@ -2704,13 +2716,20 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       instance.lastInfraCoverage = 0;
       instance.lastInputCoverage = 0;
       instance.lastFinanceCoverage = 0;
+      instance.lastExtractionCoverage = 0;
       instance.lastProductivity = 0;
       instance.lastRevenueDucats = 0;
       instance.lastInputCostDucats = 0;
       instance.lastWagesDucats = 0;
+      instance.lastStateSubsidyDucats = 0;
       instance.lastNetDucats = 0;
       instance.isInactive = false;
       instance.inactiveReason = null;
+      const manualWorkEnabled = instance.manualWorkEnabled !== false;
+      instance.manualWorkEnabled = manualWorkEnabled;
+      if (!manualWorkEnabled) {
+        continue;
+      }
       for (const [goodId, amountRaw] of Object.entries(instance.warehouseByGoodId ?? {})) {
         const amount = round3(Math.max(0, Number(amountRaw)));
         if (amount <= 0) continue;
@@ -2798,6 +2817,11 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
     for (const instance of buildingInstances) {
       const building = buildingById.get(instance.buildingId);
       if (!building) continue;
+      if (instance.manualWorkEnabled === false) {
+        instance.isInactive = true;
+        instance.inactiveReason = "Отключено вручную";
+        continue;
+      }
       const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
       const warehouse = instance.warehouseByGoodId ?? {};
       let wagesEstimate = 0;
@@ -2840,6 +2864,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
           if (subsidySource && subsidyAvailable + 1e-9 >= subsidyNeeded) {
             subsidySource.ducats = round3(Math.max(0, subsidyAvailable - subsidyNeeded));
             instance.ducats = round3(buildingDucatsBeforeSubsidy + subsidyNeeded);
+            instance.lastStateSubsidyDucats = round3(Math.max(0, Number(instance.lastStateSubsidyDucats ?? 0)) + subsidyNeeded);
           }
         }
       }
@@ -3086,11 +3111,31 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       }
       if (!Number.isFinite(inputCoverage)) inputCoverage = 1;
       inputCoverage = round3(Math.max(0, Math.min(1, inputCoverage)));
-      const productivity = round3(Math.max(0, Math.min(1, Math.min(laborCoverage, infraCoverage, inputCoverage, financeCoverage))));
+      const extractionGoodId =
+        typeof building.extractionGoodId === "string" && building.extractionGoodId.trim().length > 0
+          ? building.extractionGoodId.trim()
+          : "";
+      const extractionAmountPerTurn = Math.max(0, Number(building.extractionAmountPerTurn ?? 0));
+      const extractionRequiresDeposit = building.extractionRequiresDeposit !== false;
+      let extractionCoverage = 1;
+      if (extractionGoodId && extractionAmountPerTurn > 0 && extractionRequiresDeposit) {
+        const deposit = provinceDeposits.find((row) => row.goodId === extractionGoodId);
+        const availableDeposit = Math.max(0, Number(deposit?.amount ?? 0));
+        const extractionRequired = round3(extractionAmountPerTurn * instanceLevel * laborCoverage * BUILDING_BASE_THROUGHPUT);
+        if (extractionRequired > 0) {
+          extractionCoverage = Math.min(1, availableDeposit / extractionRequired);
+        }
+      }
+      if (!Number.isFinite(extractionCoverage)) extractionCoverage = 1;
+      extractionCoverage = round3(Math.max(0, Math.min(1, extractionCoverage)));
+      const productivity = round3(
+        Math.max(0, Math.min(1, Math.min(laborCoverage, infraCoverage, inputCoverage, financeCoverage, extractionCoverage))),
+      );
       instance.lastLaborCoverage = laborCoverage;
       instance.lastInfraCoverage = infraCoverage;
       instance.lastInputCoverage = inputCoverage;
       instance.lastFinanceCoverage = financeCoverage;
+      instance.lastExtractionCoverage = extractionCoverage;
       instance.lastProductivity = productivity;
 
       const consumedByGood: Record<string, number> = {};
@@ -3120,12 +3165,6 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
         addGlobalGood(productionGlobal, output.goodId, produced);
       }
       const extractedByGood: Record<string, number> = {};
-      const extractionGoodId =
-        typeof building.extractionGoodId === "string" && building.extractionGoodId.trim().length > 0
-          ? building.extractionGoodId.trim()
-          : "";
-      const extractionAmountPerTurn = Math.max(0, Number(building.extractionAmountPerTurn ?? 0));
-      const extractionRequiresDeposit = building.extractionRequiresDeposit !== false;
       if (extractionGoodId && extractionAmountPerTurn > 0) {
         const deposit = provinceDeposits.find((row) => row.goodId === extractionGoodId);
         const availableDeposit = Math.max(0, Number(deposit?.amount ?? 0));
@@ -3168,11 +3207,12 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       if (productivity <= 0) {
         instance.isInactive = true;
         const buildingLabel = building.name?.trim() || instance.buildingId;
-        const coverages: Array<{ key: "labor" | "input" | "infra" | "finance"; value: number }> = [
+        const coverages: Array<{ key: "labor" | "input" | "infra" | "finance" | "extraction"; value: number }> = [
           { key: "labor", value: laborCoverage },
           { key: "input", value: inputCoverage },
           { key: "infra", value: infraCoverage },
           { key: "finance", value: financeCoverage },
+          { key: "extraction", value: extractionCoverage },
         ];
         coverages.sort((a, b) => a.value - b.value);
         const limiting = coverages[0];
@@ -3183,7 +3223,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
               ? "входных товаров"
               : limiting.key === "infra"
                 ? "инфраструктуры"
-                : "финансов";
+                : limiting.key === "finance"
+                  ? "финансов"
+                  : "добычи";
         const missingInputsText =
           limiting.key === "input" && missingInputGoods.length > 0
             ? `; не хватает: ${missingInputGoods.slice(0, 4).join(", ")}${missingInputGoods.length > 4 ? "..." : ""}`
@@ -5421,6 +5463,7 @@ function isEqualBuildingInstances(
       Math.max(1, Math.floor(Number(prev.level ?? 1))) !== Math.max(1, Math.floor(Number(next.level ?? 1))) ||
       (prev.autoUpgradeEnabled !== false) !== (next.autoUpgradeEnabled !== false) ||
       (prev.stateSubsidiesEnabled !== false) !== (next.stateSubsidiesEnabled !== false) ||
+      (prev.manualWorkEnabled !== false) !== (next.manualWorkEnabled !== false) ||
       prev.owner.type !== next.owner.type ||
       (prev.owner.type === "state" && next.owner.type === "state" && prev.owner.countryId !== next.owner.countryId) ||
       (prev.owner.type === "company" &&
@@ -5435,10 +5478,12 @@ function isEqualBuildingInstances(
       Number(prev.lastInfraCoverage ?? 0) !== Number(next.lastInfraCoverage ?? 0) ||
       Number(prev.lastInputCoverage ?? 0) !== Number(next.lastInputCoverage ?? 0) ||
       Number(prev.lastFinanceCoverage ?? 0) !== Number(next.lastFinanceCoverage ?? 0) ||
+      Number(prev.lastExtractionCoverage ?? 0) !== Number(next.lastExtractionCoverage ?? 0) ||
       Number(prev.lastProductivity ?? 0) !== Number(next.lastProductivity ?? 0) ||
       Number(prev.lastRevenueDucats ?? 0) !== Number(next.lastRevenueDucats ?? 0) ||
       Number(prev.lastInputCostDucats ?? 0) !== Number(next.lastInputCostDucats ?? 0) ||
       Number(prev.lastWagesDucats ?? 0) !== Number(next.lastWagesDucats ?? 0) ||
+      Number(prev.lastStateSubsidyDucats ?? 0) !== Number(next.lastStateSubsidyDucats ?? 0) ||
       Number(prev.lastNetDucats ?? 0) !== Number(next.lastNetDucats ?? 0) ||
       Boolean(prev.isInactive) !== Boolean(next.isInactive) ||
       (prev.inactiveReason ?? null) !== (next.inactiveReason ?? null)
@@ -6434,6 +6479,8 @@ function resolveBuildingConstructionQueuesTurn(): void {
           level: 1,
           autoUpgradeEnabled: true,
           stateSubsidiesEnabled: true,
+          manualWorkEnabled: true,
+          lastStateSubsidyDucats: 0,
           ducats: Number(startingDucats.toFixed(3)),
         });
         continue;
@@ -9182,6 +9229,12 @@ const buildSubsidiesSchema = z.object({
   instanceId: z.string().min(1).optional(),
   enabled: z.boolean(),
 });
+const buildManualWorkSchema = z.object({
+  provinceId: z.string().min(1),
+  buildingId: z.string().min(1),
+  instanceId: z.string().min(1).optional(),
+  enabled: z.boolean(),
+});
 
 const provinceRenameSchema = z.object({
   provinceId: z.string().min(1),
@@ -9733,6 +9786,65 @@ app.post("/country/build/subsidy-state", async (req, res) => {
     buildingId,
     instanceId: targetInstance.instanceId,
     stateSubsidiesEnabled: enabled,
+  });
+});
+
+app.post("/country/build/manual-work-state", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = buildManualWorkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, buildingId, instanceId, enabled } = parsed.data;
+  const provinceOwnerId = worldBase.provinceOwner[provinceId] ?? null;
+  if (!provinceOwnerId || provinceOwnerId !== auth.countryId) {
+    return res.status(403).json({ error: "NOT_PROVINCE_OWNER" });
+  }
+
+  const instances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
+  const matchingInstances = instances.filter((instance) => instance.buildingId === buildingId);
+  if (matchingInstances.length <= 0) {
+    return res.status(404).json({ error: "BUILDING_NOT_FOUND" });
+  }
+  const targetInstance =
+    typeof instanceId === "string" && instanceId.trim().length > 0
+      ? matchingInstances.find((instance) => instance.instanceId === instanceId.trim())
+      : matchingInstances[0];
+  if (!targetInstance) {
+    return res.status(404).json({ error: "BUILDING_INSTANCE_NOT_FOUND" });
+  }
+
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceBuildingsByProvince);
+  worldBase.provinceBuildingsByProvince[provinceId] = instances.map((instance) =>
+    instance.instanceId === targetInstance.instanceId
+      ? {
+          ...instance,
+          manualWorkEnabled: enabled,
+          isInactive: enabled
+            ? (instance.inactiveReason === "Отключено вручную" ? false : instance.isInactive)
+            : true,
+          inactiveReason: enabled
+            ? (instance.inactiveReason === "Отключено вручную" ? null : instance.inactiveReason)
+            : "Отключено вручную",
+          lastProductivity: enabled ? instance.lastProductivity : 0,
+        }
+      : instance,
+  );
+
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+
+  return res.json({
+    ok: true,
+    provinceId,
+    buildingId,
+    instanceId: targetInstance.instanceId,
+    manualWorkEnabled: enabled,
   });
 });
 

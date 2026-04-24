@@ -83,12 +83,14 @@ export type BuildingInstance = {
   level?: number;
   autoUpgradeEnabled?: boolean;
   stateSubsidiesEnabled?: boolean;
+  manualWorkEnabled?: boolean;
   ducats?: number;
   warehouseByGoodId?: Record<string, number>;
   lastLaborCoverage?: number;
   lastInfraCoverage?: number;
   lastInputCoverage?: number;
   lastFinanceCoverage?: number;
+  lastExtractionCoverage?: number;
   lastProductivity?: number;
   lastPurchaseByGoodId?: Record<string, number>;
   lastPurchaseCostByGoodId?: Record<string, number>;
@@ -100,6 +102,7 @@ export type BuildingInstance = {
   lastRevenueDucats?: number;
   lastInputCostDucats?: number;
   lastWagesDucats?: number;
+  lastStateSubsidyDucats?: number;
   lastNetDucats?: number;
   isInactive?: boolean;
   inactiveReason?: string | null;

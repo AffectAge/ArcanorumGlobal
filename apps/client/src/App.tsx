@@ -782,6 +782,22 @@ export default function App() {
       totals.construction += myConstructionProjection.predictedPointsSpend;
       totals.ducats += myConstructionProjection.predictedDucatSpend;
     }
+    if (worldBase) {
+      let subsidySpend = 0;
+      for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince ?? {})) {
+        if (!Array.isArray(instances) || instances.length === 0) continue;
+        const provinceOwnerCountryId = worldBase.provinceOwner?.[provinceId] ?? "";
+        for (const instance of instances) {
+          const subsidySourceCountryId =
+            instance.owner.type === "state"
+              ? instance.owner.countryId
+              : provinceOwnerCountryId;
+          if (subsidySourceCountryId !== auth.countryId) continue;
+          subsidySpend += Math.max(0, Number(instance.lastStateSubsidyDucats ?? 0));
+        }
+      }
+      totals.ducats += Math.floor(Math.max(0, subsidySpend));
+    }
 
     return totals;
   }, [
@@ -796,6 +812,7 @@ export default function App() {
     provinceRenameDucatSpend.amount,
     provinceRenameDucatSpend.turnId,
     turnId,
+    worldBase,
   ]);
   useEffect(() => {
     setCustomizationDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));

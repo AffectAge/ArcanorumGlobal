@@ -1490,6 +1490,37 @@ export async function setCountryBuildSubsidyState(
   };
 }
 
+export async function setCountryBuildManualWorkState(
+  token: string,
+  payload: { provinceId: string; buildingId: string; instanceId?: string; enabled: boolean },
+): Promise<{
+  ok: boolean;
+  provinceId: string;
+  buildingId: string;
+  instanceId: string;
+  manualWorkEnabled: boolean;
+}> {
+  const response = await fetch(`${API}/country/build/manual-work-state`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "BUILD_MANUAL_WORK_STATE_FAILED");
+  }
+  return (await response.json()) as {
+    ok: boolean;
+    provinceId: string;
+    buildingId: string;
+    instanceId: string;
+    manualWorkEnabled: boolean;
+  };
+}
+
 export async function adminReviewRegistration(
   token: string,
   countryId: string,
