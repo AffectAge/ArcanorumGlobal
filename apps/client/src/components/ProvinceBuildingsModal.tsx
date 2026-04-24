@@ -1444,6 +1444,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     : displayIsActive
                       ? "border-white/10"
                       : "border-red-400/60";
+                const displayCostConstruction =
+                  c.kind === "built"
+                    ? Math.max(1, Math.floor(c.costConstruction)) +
+                      Math.max(0, Math.max(1, Math.floor(c.level)) - 1) * upgradeCostConstruction
+                    : Math.max(1, Math.floor(c.costConstruction));
                 return (
               <article key={c.key} className={`rounded-2xl border bg-gradient-to-br from-white/5 to-transparent p-4 flex flex-col gap-4 shadow-lg shadow-black/30 ${cardBorder}`}>
                 <div className="flex items-start justify-between gap-3">
@@ -1466,7 +1471,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-white/45">Стоимость: {fmt(c.costConstruction)}</div>
+                      <div className="text-[11px] text-white/45">Стоимость: {fmt(displayCostConstruction)}</div>
                       {!displayIsActive && (
                         <Tooltip content={displayInactiveReasons.join(", ")} placement="top">
                           <span className="mt-1 inline-flex rounded-full border border-red-400/40 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200">Неактивное</span>
@@ -1621,7 +1626,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               buildingName: c.buildingName,
                               provinceName: c.provinceName,
                               demolitionCostConstruction: Math.ceil(
-                                (Math.max(1, Math.floor(c.costConstruction)) * demolitionCostConstructionPercent) / 100,
+                                (
+                                  (Math.max(1, Math.floor(c.costConstruction)) +
+                                    Math.max(0, Math.max(1, Math.floor(c.level)) - 1) * upgradeCostConstruction) *
+                                  demolitionCostConstructionPercent
+                                ) / 100,
                               ),
                             })
                           }

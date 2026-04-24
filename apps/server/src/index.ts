@@ -6300,6 +6300,16 @@ function getBuildingUpgradeCosts(building: BuildingContentEntry | undefined): { 
   };
 }
 
+function getBuildingConstructionTotalCostByLevel(
+  building: BuildingContentEntry | undefined,
+  levelRaw: number,
+): number {
+  const level = Math.max(1, Math.floor(Number(levelRaw)));
+  const baseConstruction = Math.max(1, Math.floor(Number(building?.costConstruction ?? 100)));
+  const upgradeCostConstruction = getBuildingUpgradeCosts(building).costConstruction;
+  return baseConstruction + Math.max(0, level - 1) * upgradeCostConstruction;
+}
+
 function enqueueBuildingAutoUpgradesTurn(): void {
   const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
   for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince ?? {})) {
@@ -9546,7 +9556,8 @@ app.post("/country/build/demolish", async (req, res) => {
   if (!building) {
     return res.status(404).json({ error: "BUILDING_DEFINITION_NOT_FOUND" });
   }
-  const costConstruction = Math.max(1, Math.floor(Number(building.costConstruction ?? 100)));
+  const targetLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
+  const costConstruction = getBuildingConstructionTotalCostByLevel(building, targetLevel);
   const demolitionPercent = Math.max(0, Math.min(100, Math.floor(gameSettings.economy.demolitionCostConstructionPercent ?? 20)));
   const demolitionCostConstruction = Math.ceil((costConstruction * demolitionPercent) / 100);
 
@@ -9574,7 +9585,6 @@ app.post("/country/build/demolish", async (req, res) => {
     (sum, instance) => sum + Math.max(1, Math.floor(Number(instance.level ?? 1))),
     0,
   );
-  const targetLevel = Math.max(1, Math.floor(Number(targetInstance.level ?? 1)));
   const nextInstances = instances.filter((instance) => instance.instanceId !== targetInstance.instanceId);
   worldBase.provinceBuildingsByProvince[provinceId] = nextInstances;
   const queue = worldBase.provinceConstructionQueueByProvince[provinceId] ?? [];
