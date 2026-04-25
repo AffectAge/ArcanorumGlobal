@@ -34,6 +34,7 @@ export type ContentCulture = {
   costDucats?: number | null;
   startingDucats?: number | null;
   maxLevel?: number | null;
+  maxDurability?: number | null;
   upgradeCostDucats?: number | null;
   upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
@@ -91,6 +92,7 @@ type ContentEntryUpsertPayload = {
   costDucats?: number | null;
   startingDucats?: number | null;
   maxLevel?: number | null;
+  maxDurability?: number | null;
   upgradeCostDucats?: number | null;
   upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
@@ -1047,6 +1049,8 @@ export type GameSettings = {
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
     marketPriceSmoothing: number;
+    buildingDurabilityDecayPerTurn: number;
+    buildingDurabilityRecoveryPerTurn: number;
     explorationBaseEmptyChancePct: number;
     explorationDepletionPerAttemptPct: number;
     explorationDurationTurns: number;
@@ -1297,6 +1301,8 @@ export async function updateGameSettings(
       baseGoldPerTurn?: number;
       demolitionCostConstructionPercent?: number;
       marketPriceSmoothing?: number;
+      buildingDurabilityDecayPerTurn?: number;
+      buildingDurabilityRecoveryPerTurn?: number;
       explorationBaseEmptyChancePct?: number;
       explorationDepletionPerAttemptPct?: number;
       explorationDurationTurns?: number;
@@ -1523,6 +1529,37 @@ export async function setCountryBuildManualWorkState(
     buildingId: string;
     instanceId: string;
     manualWorkEnabled: boolean;
+  };
+}
+
+export async function setCountryBuildCustomName(
+  token: string,
+  payload: { provinceId: string; buildingId: string; instanceId?: string; customName: string | null },
+): Promise<{
+  ok: boolean;
+  provinceId: string;
+  buildingId: string;
+  instanceId: string;
+  customName: string | null;
+}> {
+  const response = await fetch(`${API}/country/build/custom-name`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error ?? "BUILD_CUSTOM_NAME_FAILED");
+  }
+  return (await response.json()) as {
+    ok: boolean;
+    provinceId: string;
+    buildingId: string;
+    instanceId: string;
+    customName: string | null;
   };
 }
 

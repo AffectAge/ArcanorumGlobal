@@ -336,6 +336,9 @@ const DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT = 5;
 const DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT = 7.5;
 const DEFAULT_EXPLORATION_DURATION_TURNS = 1;
 const DEFAULT_EXPLORATION_ROLLS_PER_EXPEDITION = 3;
+const DEFAULT_BUILDING_DURABILITY_MAX = 100;
+const DEFAULT_BUILDING_DURABILITY_DECAY_PER_TURN = 10;
+const DEFAULT_BUILDING_DURABILITY_RECOVERY_PER_TURN = 5;
 type PriceScopeState = Record<string, Record<string, number>>;
 let countryGoodPrices: PriceScopeState = {};
 let globalGoodPrices: Record<string, number> = {};
@@ -777,6 +780,58 @@ const POPULATION_FALLBACK_KEY_BY_DIMENSION: Record<PopulationDimensionKey, strin
   professionPct: "profession:default",
 };
 
+const POPULATION_FALLBACK_NAME_BY_DIMENSION: Record<PopulationDimensionKey, string> = {
+  culturePct: "Без культуры",
+  ideologyPct: "Без идеологии",
+  religionPct: "Атеизм",
+  racePct: "Люди",
+  professionPct: "Безработные",
+};
+
+function normalizeCompareText(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLocaleLowerCase("ru-RU");
+}
+
+function resolvePopulationFallbackKeys(domains: PopulationDomainKeys): Record<PopulationDimensionKey, string> {
+  const fallbackByDimension: Record<PopulationDimensionKey, string> = { ...POPULATION_FALLBACK_KEY_BY_DIMENSION };
+  const sourceByDimension: Record<PopulationDimensionKey, Array<{ id: string; name?: string | null }>> = {
+    culturePct: gameSettings.content.cultures,
+    ideologyPct: gameSettings.content.ideologies,
+    religionPct: gameSettings.content.religions,
+    racePct: gameSettings.content.races,
+    professionPct: gameSettings.content.professions,
+  };
+  for (const dimension of Object.keys(fallbackByDimension) as PopulationDimensionKey[]) {
+    const allowed = new Set((domains[dimension] ?? []).map((id) => String(id).trim()).filter(Boolean));
+    const wantedName = normalizeCompareText(POPULATION_FALLBACK_NAME_BY_DIMENSION[dimension]);
+    const wantedLegacyId = normalizeCompareText(POPULATION_FALLBACK_KEY_BY_DIMENSION[dimension]);
+    const entries = sourceByDimension[dimension] ?? [];
+    let foundId: string | null = null;
+    for (const entry of entries) {
+      const id = String(entry.id ?? "").trim();
+      if (!id || !allowed.has(id)) continue;
+      const nameNorm = normalizeCompareText(entry.name);
+      const idNorm = normalizeCompareText(id);
+      if (nameNorm === wantedName || idNorm === wantedLegacyId) {
+        foundId = id;
+        break;
+      }
+    }
+    if (foundId) {
+      fallbackByDimension[dimension] = foundId;
+      continue;
+    }
+    if (allowed.has(POPULATION_FALLBACK_KEY_BY_DIMENSION[dimension])) {
+      fallbackByDimension[dimension] = POPULATION_FALLBACK_KEY_BY_DIMENSION[dimension];
+      continue;
+    }
+    fallbackByDimension[dimension] = (domains[dimension]?.[0] ?? POPULATION_FALLBACK_KEY_BY_DIMENSION[dimension]).trim();
+  }
+  return fallbackByDimension;
+}
+
 function invalidateCountryQueryCache(): void {
   countryQueryCache.clear();
 }
@@ -846,6 +901,7 @@ type BuildingContentEntry = GameContentEntry & {
   costDucats?: number | null;
   startingDucats?: number | null;
   maxLevel?: number | null;
+  maxDurability?: number | null;
   upgradeCostDucats?: number | null;
   upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
@@ -946,6 +1002,8 @@ type GameSettings = {
     baseGoldPerTurn: number;
     demolitionCostConstructionPercent: number;
     marketPriceSmoothing: number;
+    buildingDurabilityDecayPerTurn: number;
+    buildingDurabilityRecoveryPerTurn: number;
     explorationBaseEmptyChancePct: number;
     explorationDepletionPerAttemptPct: number;
     explorationDurationTurns: number;
@@ -1587,6 +1645,7 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       costDucats?: unknown;
       startingDucats?: unknown;
       maxLevel?: unknown;
+      maxDurability?: unknown;
       upgradeCostDucats?: unknown;
       upgradeCostConstruction?: unknown;
       extractionGoodId?: unknown;
@@ -1618,6 +1677,10 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
         : 0;
     const maxLevel =
       typeof raw?.maxLevel === "number" && Number.isFinite(raw.maxLevel) ? Math.max(1, Math.floor(raw.maxLevel)) : 1;
+    const maxDurability =
+      typeof raw?.maxDurability === "number" && Number.isFinite(raw.maxDurability)
+        ? Number(Math.max(1, raw.maxDurability).toFixed(3))
+        : DEFAULT_BUILDING_DURABILITY_MAX;
     const upgradeCostConstruction =
       typeof raw?.upgradeCostConstruction === "number" && Number.isFinite(raw.upgradeCostConstruction)
         ? Math.max(1, Math.floor(raw.upgradeCostConstruction))
@@ -1654,6 +1717,7 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       costDucats: Number(costDucats.toFixed(3)),
       startingDucats: Number(startingDucats.toFixed(3)),
       maxLevel,
+      maxDurability,
       upgradeCostDucats: Number(upgradeCostDucats.toFixed(3)),
       upgradeCostConstruction,
       sectorId: sectorIdRaw,
@@ -1798,6 +1862,7 @@ function isEqualProvincePopulation(prevValue: ProvincePopulation | undefined, ne
 }
 
 function buildDefaultProvincePopulation(provinceId: string, domains: PopulationDomainKeys): ProvincePopulation {
+  const fallbackByDimension = resolvePopulationFallbackKeys(domains);
   const areaKm2 = Math.max(1, adm1ProvinceAreaById.get(provinceId) ?? 1_000);
   const seed = hashStringToUInt32(provinceId);
   const areaBasedPopulation = Math.floor(areaKm2 * 120);
@@ -1807,28 +1872,24 @@ function buildDefaultProvincePopulation(provinceId: string, domains: PopulationD
     culturePct: buildDeterministicPctMap(
       domains.culturePct,
       `${provinceId}:culture`,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct,
+      fallbackByDimension.culturePct,
     ),
     ideologyPct: buildDeterministicPctMap(
       domains.ideologyPct,
       `${provinceId}:ideology`,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct,
+      fallbackByDimension.ideologyPct,
     ),
     religionPct: buildDeterministicPctMap(
       domains.religionPct,
       `${provinceId}:religion`,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct,
+      fallbackByDimension.religionPct,
     ),
     racePct: buildDeterministicPctMap(
       domains.racePct,
       `${provinceId}:race`,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct,
+      fallbackByDimension.racePct,
     ),
-    professionPct: buildDeterministicPctMap(
-      domains.professionPct,
-      `${provinceId}:profession`,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct,
-    ),
+    professionPct: { [fallbackByDimension.professionPct]: 100 },
   };
 }
 
@@ -1837,6 +1898,7 @@ function normalizeProvincePopulation(
   provinceId: string,
   domains: PopulationDomainKeys,
 ): ProvincePopulation {
+  const fallbackByDimension = resolvePopulationFallbackKeys(domains);
   const fallback = buildDefaultProvincePopulation(provinceId, domains);
   if (!input || typeof input !== "object") {
     return fallback;
@@ -1852,23 +1914,23 @@ function normalizeProvincePopulation(
     culturePct: normalizePercentageMap(
       row.culturePct,
       domains.culturePct,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct,
+      fallbackByDimension.culturePct,
     ),
     ideologyPct: normalizePercentageMap(
       row.ideologyPct,
       domains.ideologyPct,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct,
+      fallbackByDimension.ideologyPct,
     ),
     religionPct: normalizePercentageMap(
       row.religionPct,
       domains.religionPct,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct,
+      fallbackByDimension.religionPct,
     ),
-    racePct: normalizePercentageMap(row.racePct, domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct),
+    racePct: normalizePercentageMap(row.racePct, domains.racePct, fallbackByDimension.racePct),
     professionPct: normalizePercentageMap(
       row.professionPct,
       domains.professionPct,
-      POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct,
+      fallbackByDimension.professionPct,
     ),
   };
 }
@@ -1878,6 +1940,7 @@ function buildRandomProvincePopulation(
   domains: PopulationDomainKeys,
   populationTotalOverride?: number,
 ): ProvincePopulation {
+  const fallbackByDimension = resolvePopulationFallbackKeys(domains);
   const fallback = buildDefaultProvincePopulation(provinceId, domains);
   const total =
     typeof populationTotalOverride === "number" && Number.isFinite(populationTotalOverride)
@@ -1885,11 +1948,11 @@ function buildRandomProvincePopulation(
       : fallback.populationTotal;
   return {
     populationTotal: total,
-    culturePct: buildRandomPctMap(domains.culturePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct),
-    ideologyPct: buildRandomPctMap(domains.ideologyPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct),
-    religionPct: buildRandomPctMap(domains.religionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct),
-    racePct: buildRandomPctMap(domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct),
-    professionPct: buildRandomPctMap(domains.professionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct),
+    culturePct: buildRandomPctMap(domains.culturePct, fallbackByDimension.culturePct),
+    ideologyPct: buildRandomPctMap(domains.ideologyPct, fallbackByDimension.ideologyPct),
+    religionPct: buildRandomPctMap(domains.religionPct, fallbackByDimension.religionPct),
+    racePct: buildRandomPctMap(domains.racePct, fallbackByDimension.racePct),
+    professionPct: { [fallbackByDimension.professionPct]: 100 },
   };
 }
 
@@ -1951,9 +2014,19 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
                 ? source.instanceId.trim()
                 : randomUUID(),
             buildingId,
+            customName:
+              typeof source.customName === "string"
+                ? source.customName.trim().slice(0, 80) || null
+                : source.customName === null
+                  ? null
+                  : null,
             owner: normalizeBuildingOwner(source.owner ?? { type: "state", countryId: fallbackCountryId }),
             createdTurnId,
             level,
+            currentDurability:
+              typeof source.currentDurability === "number" && Number.isFinite(source.currentDurability)
+                ? Number(Math.max(0, source.currentDurability).toFixed(3))
+                : DEFAULT_BUILDING_DURABILITY_MAX,
             autoUpgradeEnabled: typeof source.autoUpgradeEnabled === "boolean" ? source.autoUpgradeEnabled : true,
             stateSubsidiesEnabled: typeof source.stateSubsidiesEnabled === "boolean" ? source.stateSubsidiesEnabled : true,
             manualWorkEnabled: typeof source.manualWorkEnabled === "boolean" ? source.manualWorkEnabled : true,
@@ -1995,6 +2068,10 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             lastExtractionCoverage:
               typeof source.lastExtractionCoverage === "number" && Number.isFinite(source.lastExtractionCoverage)
                 ? Number(Math.max(0, Math.min(1, source.lastExtractionCoverage)).toFixed(3))
+                : 0,
+            lastDurabilityCoverage:
+              typeof source.lastDurabilityCoverage === "number" && Number.isFinite(source.lastDurabilityCoverage)
+                ? Number(Math.max(0, Math.min(1, source.lastDurabilityCoverage)).toFixed(3))
                 : 0,
             lastProductivity:
               typeof source.lastProductivity === "number" && Number.isFinite(source.lastProductivity)
@@ -2115,9 +2192,11 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
           instances.push({
             instanceId: randomUUID(),
             buildingId,
+            customName: null,
             owner: { type: "state", countryId: fallbackCountryId },
             createdTurnId: turnId,
             level,
+            currentDurability: DEFAULT_BUILDING_DURABILITY_MAX,
             autoUpgradeEnabled: true,
             stateSubsidiesEnabled: true,
             manualWorkEnabled: true,
@@ -2128,6 +2207,7 @@ function normalizeProvinceBuildingsMap(input: unknown): Record<string, BuildingI
             lastInputCoverage: 0,
             lastFinanceCoverage: 0,
             lastExtractionCoverage: 0,
+            lastDurabilityCoverage: 0,
             lastProductivity: 0,
             lastPurchaseByGoodId: {},
             lastPurchaseCostByGoodId: {},
@@ -2386,6 +2466,7 @@ function resolvePopulationTurnForProvince(
 
 function resolveBuildingsTurn(): Record<string, Record<string, number>> {
   const domains = getPopulationDomainKeys();
+  const fallbackByDimension = resolvePopulationFallbackKeys(domains);
   const buildingById = new Map(gameSettings.content.buildings.map((entry) => [entry.id, entry] as const));
   const goodById = new Map(gameSettings.content.goods.map((entry) => [entry.id, entry] as const));
   const professionById = new Map(gameSettings.content.professions.map((entry) => [entry.id, entry] as const));
@@ -2719,8 +2800,10 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       const building = buildingById.get(instance.buildingId);
       if (!building) continue;
       const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      const maxDurability = getBuildingMaxDurability(building);
       instance.level = instanceLevel;
       instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0)));
+      instance.currentDurability = round3(Math.max(0, Math.min(maxDurability, Number(instance.currentDurability ?? maxDurability))));
       instance.warehouseByGoodId = { ...(instance.warehouseByGoodId ?? {}) };
       instance.lastPurchaseByGoodId = {};
       instance.lastPurchaseCostByGoodId = {};
@@ -2734,6 +2817,7 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       instance.lastInputCoverage = 0;
       instance.lastFinanceCoverage = 0;
       instance.lastExtractionCoverage = 0;
+      instance.lastDurabilityCoverage = 0;
       instance.lastProductivity = 0;
       instance.lastRevenueDucats = 0;
       instance.lastInputCostDucats = 0;
@@ -2820,9 +2904,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       const multiplier = shortageRatio > 1 ? 1 + (shortageRatio - 1) * 0.5 : 1;
       wageMultiplierByProfession[professionId] = round3(Math.max(0.5, Math.min(3, multiplier)));
     }
-    let totalEmployed = 0;
-    const employedByProfession: Record<string, number> = {};
     let provinceWages = 0;
+    const employedByProfession: Record<string, number> = {};
+    const instanceIdsToRemove = new Set<string>();
 
     const getScopedSellerList = (scope: "province" | "country" | "market" | "global", goodId: string): SellerSlot[] => {
       if (scope === "province") return sellersByProvinceGood.get(`${provinceId}:${goodId}`) ?? [];
@@ -2840,6 +2924,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
         continue;
       }
       const instanceLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+      const maxDurability = getBuildingMaxDurability(building);
+      const currentDurability = round3(Math.max(0, Math.min(maxDurability, Number(instance.currentDurability ?? maxDurability))));
+      instance.currentDurability = currentDurability;
       const warehouse = instance.warehouseByGoodId ?? {};
       let wagesEstimate = 0;
       let workersDemand = 0;
@@ -2851,12 +2938,6 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
         workersDemand += workers;
       }
       const laborCoverage = workersDemand > 0 ? laborCoverageProvince : 1;
-      const employedWorkers = workersDemand * laborCoverage;
-      totalEmployed += employedWorkers;
-      for (const requirement of building.workforceRequirements ?? []) {
-        const workers = Math.max(0, requirement.workers) * instanceLevel * laborCoverage;
-        employedByProfession[requirement.professionId] = round3((employedByProfession[requirement.professionId] ?? 0) + workers);
-      }
       const infraCoverage = 1;
 
       let requiredInputValueEstimate = 0;
@@ -2870,8 +2951,10 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
         addGlobalGood(demandRequestedGlobal, input.goodId, deficit);
       }
       const subsidyCountryId = instance.owner.type === "state" ? instance.owner.countryId : ownerCountryId;
+      const subsidiesEnabled = instance.stateSubsidiesEnabled !== false;
+      let grantedStateSubsidy = 0;
       const estimatedTotalCost = round3(wagesEstimate + requiredInputValueEstimate);
-      if (instance.stateSubsidiesEnabled !== false && estimatedTotalCost > 0) {
+      if (subsidiesEnabled && estimatedTotalCost > 0) {
         const buildingDucatsBeforeSubsidy = round3(Math.max(0, Number(instance.ducats ?? 0)));
         const subsidyNeeded = round3(Math.max(0, estimatedTotalCost - buildingDucatsBeforeSubsidy));
         if (subsidyNeeded > 0) {
@@ -2881,7 +2964,8 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
           if (subsidySource && subsidyAvailable + 1e-9 >= subsidyNeeded) {
             subsidySource.ducats = round3(Math.max(0, subsidyAvailable - subsidyNeeded));
             instance.ducats = round3(buildingDucatsBeforeSubsidy + subsidyNeeded);
-            instance.lastStateSubsidyDucats = round3(Math.max(0, Number(instance.lastStateSubsidyDucats ?? 0)) + subsidyNeeded);
+            grantedStateSubsidy = round3(grantedStateSubsidy + subsidyNeeded);
+            instance.lastStateSubsidyDucats = grantedStateSubsidy;
           }
         }
       }
@@ -3145,15 +3229,25 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       }
       if (!Number.isFinite(extractionCoverage)) extractionCoverage = 1;
       extractionCoverage = round3(Math.max(0, Math.min(1, extractionCoverage)));
+      const durabilityCoverage =
+        maxDurability > 0
+          ? round3(Math.max(0, Math.min(1, currentDurability / maxDurability)))
+          : 1;
       const productivity = round3(
-        Math.max(0, Math.min(1, Math.min(laborCoverage, infraCoverage, inputCoverage, financeCoverage, extractionCoverage))),
+        Math.max(0, Math.min(1, Math.min(laborCoverage, infraCoverage, inputCoverage, financeCoverage, extractionCoverage, durabilityCoverage))),
       );
       instance.lastLaborCoverage = laborCoverage;
       instance.lastInfraCoverage = infraCoverage;
       instance.lastInputCoverage = inputCoverage;
       instance.lastFinanceCoverage = financeCoverage;
       instance.lastExtractionCoverage = extractionCoverage;
+      instance.lastDurabilityCoverage = durabilityCoverage;
       instance.lastProductivity = productivity;
+      for (const requirement of building.workforceRequirements ?? []) {
+        const workers = round3(Math.max(0, requirement.workers) * instanceLevel * laborCoverage * productivity);
+        if (workers <= 0) continue;
+        employedByProfession[requirement.professionId] = round3((employedByProfession[requirement.professionId] ?? 0) + workers);
+      }
 
       const consumedByGood: Record<string, number> = {};
       for (const input of building.inputs ?? []) {
@@ -3218,18 +3312,57 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       instance.lastWagesDucats = wagesActual;
       const paidWages = Math.min(Number(instance.ducats ?? 0), wagesActual);
       instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - paidWages));
-      const unpaidWages = round3(Math.max(0, wagesActual - paidWages));
+      let unpaidWages = round3(Math.max(0, wagesActual - paidWages));
+
+      // Final subsidy settlement by factual deficit:
+      // subsidy = max(0, factual costs - building funds before subsidy),
+      // with refund of excess provisional subsidy and optional top-up for underestimation.
+      const buildingDucatsBeforeSubsidy = round3(Math.max(0, Number(instance.ducats ?? 0) + paidWages + purchaseCost - grantedStateSubsidy));
+      const factualDeficit = round3(Math.max(0, purchaseCost + wagesActual - buildingDucatsBeforeSubsidy));
+      if (subsidiesEnabled) {
+        ensureCountryInWorldBase(subsidyCountryId);
+        const subsidySource = worldBase.resourcesByCountry[subsidyCountryId];
+        if (subsidySource) {
+          if (grantedStateSubsidy > factualDeficit) {
+            const refund = round3(Math.max(0, grantedStateSubsidy - factualDeficit));
+            if (refund > 0) {
+              subsidySource.ducats = round3(Math.max(0, Number(subsidySource.ducats ?? 0)) + refund);
+              instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - refund));
+              grantedStateSubsidy = round3(Math.max(0, grantedStateSubsidy - refund));
+            }
+          } else if (grantedStateSubsidy + 1e-9 < factualDeficit) {
+            const extraNeeded = round3(Math.max(0, factualDeficit - grantedStateSubsidy));
+            const extraAvailable = round3(Math.max(0, Number(subsidySource.ducats ?? 0)));
+            const extraGranted = round3(Math.min(extraNeeded, extraAvailable));
+            if (extraGranted > 0) {
+              subsidySource.ducats = round3(Math.max(0, extraAvailable - extraGranted));
+              instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) + extraGranted));
+              grantedStateSubsidy = round3(grantedStateSubsidy + extraGranted);
+            }
+          }
+        }
+      }
+      instance.lastStateSubsidyDucats = round3(Math.max(0, grantedStateSubsidy));
+
+      if (unpaidWages > 0 && subsidiesEnabled) {
+        const catchUpWages = round3(Math.min(unpaidWages, Math.max(0, Number(instance.ducats ?? 0))));
+        if (catchUpWages > 0) {
+          instance.ducats = round3(Math.max(0, Number(instance.ducats ?? 0) - catchUpWages));
+          unpaidWages = round3(Math.max(0, unpaidWages - catchUpWages));
+        }
+      }
       const net = round3(realizedRevenue - purchaseCost - wagesActual);
       instance.lastNetDucats = net;
       if (productivity <= 0) {
         instance.isInactive = true;
         const buildingLabel = building.name?.trim() || instance.buildingId;
-        const coverages: Array<{ key: "labor" | "input" | "infra" | "finance" | "extraction"; value: number }> = [
+        const coverages: Array<{ key: "labor" | "input" | "infra" | "finance" | "extraction" | "durability"; value: number }> = [
           { key: "labor", value: laborCoverage },
           { key: "input", value: inputCoverage },
           { key: "infra", value: infraCoverage },
           { key: "finance", value: financeCoverage },
           { key: "extraction", value: extractionCoverage },
+          { key: "durability", value: durabilityCoverage },
         ];
         coverages.sort((a, b) => a.value - b.value);
         const limiting = coverages[0];
@@ -3242,7 +3375,9 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
                 ? "инфраструктуры"
                 : limiting.key === "finance"
                   ? "финансов"
-                  : "добычи";
+                  : limiting.key === "extraction"
+                    ? "добычи"
+                    : "прочности";
         const missingInputsText =
           limiting.key === "input" && missingInputGoods.length > 0
             ? `; не хватает: ${missingInputGoods.slice(0, 4).join(", ")}${missingInputGoods.length > 4 ? "..." : ""}`
@@ -3272,6 +3407,25 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
         instance.isInactive = false;
         instance.inactiveReason = null;
       }
+      const durabilityDecayPerTurn = round3(Math.max(0, Number(gameSettings.economy.buildingDurabilityDecayPerTurn ?? DEFAULT_BUILDING_DURABILITY_DECAY_PER_TURN)));
+      const durabilityRecoveryPerTurn = round3(Math.max(0, Number(gameSettings.economy.buildingDurabilityRecoveryPerTurn ?? DEFAULT_BUILDING_DURABILITY_RECOVERY_PER_TURN)));
+      const maxDurabilityForTurn = getBuildingMaxDurability(building);
+      const durabilityNow = round3(Math.max(0, Math.min(maxDurabilityForTurn, Number(instance.currentDurability ?? maxDurabilityForTurn))));
+      if (instance.isInactive) {
+        const degraded = round3(Math.max(0, durabilityNow - durabilityDecayPerTurn));
+        instance.currentDurability = degraded;
+        if (degraded <= 0) {
+          const currentLevel = Math.max(1, Math.floor(Number(instance.level ?? 1)));
+          const nextLevel = currentLevel - 1;
+          if (nextLevel <= 0) {
+            instanceIdsToRemove.add(instance.instanceId);
+            continue;
+          }
+          instance.level = nextLevel;
+        }
+      } else {
+        instance.currentDurability = round3(Math.min(maxDurabilityForTurn, durabilityNow + durabilityRecoveryPerTurn));
+      }
       instance.warehouseByGoodId = Object.fromEntries(
         Object.entries(warehouse)
           .map(([goodId, amount]) => [goodId, round3(Math.max(0, Number(amount)))])
@@ -3279,7 +3433,8 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       );
     }
 
-    for (const instance of buildingInstances) {
+    const activeBuildingInstances = buildingInstances.filter((instance) => !instanceIdsToRemove.has(instance.instanceId));
+    for (const instance of activeBuildingInstances) {
       instance.lastNetDucats = round3(
         Number(instance.lastRevenueDucats ?? 0) -
           Number(instance.lastInputCostDucats ?? 0) -
@@ -3287,22 +3442,44 @@ function resolveBuildingsTurn(): Record<string, Record<string, number>> {
       );
     }
 
-    if (totalEmployed > 0) {
+    if (population.populationTotal > 0) {
+      const populationTotal = Math.max(0, Number(population.populationTotal));
+      const employedTotalRaw = Object.values(employedByProfession).reduce(
+        (sum, value) => sum + Math.max(0, Number(value)),
+        0,
+      );
+      const employedScale =
+        employedTotalRaw > populationTotal && employedTotalRaw > 0
+          ? populationTotal / employedTotalRaw
+          : 1;
+      const professionDistributionRaw: Record<string, number> = {};
+      let employedTotalScaled = 0;
+      for (const [professionId, value] of Object.entries(employedByProfession)) {
+        const scaled = round3(Math.max(0, Number(value)) * employedScale);
+        if (scaled <= 0) continue;
+        professionDistributionRaw[professionId] = scaled;
+        employedTotalScaled += scaled;
+      }
+      const unemployedId = fallbackByDimension.professionPct;
+      const unemployed = round3(Math.max(0, populationTotal - employedTotalScaled));
+      professionDistributionRaw[unemployedId] = round3(
+        Math.max(0, Number(professionDistributionRaw[unemployedId] ?? 0)) + unemployed,
+      );
       nextProfessionPctByProvince[provinceId] = normalizePercentageMap(
-        employedByProfession,
+        professionDistributionRaw,
         domains.professionPct,
-        POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct,
+        fallbackByDimension.professionPct,
       );
     }
 
     const prevTreasury = worldBase.provincePopulationTreasuryByProvince[provinceId] ?? 0;
     worldBase.provincePopulationTreasuryByProvince[provinceId] = round3(prevTreasury + provinceWages);
     const byBuildingDucats: Record<string, number> = {};
-    for (const instance of buildingInstances) {
+    for (const instance of activeBuildingInstances) {
       byBuildingDucats[instance.buildingId] = round3((byBuildingDucats[instance.buildingId] ?? 0) + Number(instance.ducats ?? 0));
     }
     worldBase.provinceBuildingDucatsByProvince[provinceId] = byBuildingDucats;
-    worldBase.provinceBuildingsByProvince[provinceId] = buildingInstances;
+    worldBase.provinceBuildingsByProvince[provinceId] = activeBuildingInstances;
     worldBase.provinceResourceDepositsByProvince[provinceId] = provinceDeposits
       .filter((row) => Number(row.amount) > 0)
       .sort((a, b) => a.goodId.localeCompare(b.goodId));
@@ -3807,6 +3984,8 @@ const defaultGameSettings = (): GameSettings => {
       baseGoldPerTurn: 10,
       demolitionCostConstructionPercent: 20,
       marketPriceSmoothing: 0.2,
+      buildingDurabilityDecayPerTurn: DEFAULT_BUILDING_DURABILITY_DECAY_PER_TURN,
+      buildingDurabilityRecoveryPerTurn: DEFAULT_BUILDING_DURABILITY_RECOVERY_PER_TURN,
       explorationBaseEmptyChancePct: DEFAULT_EXPLORATION_EMPTY_CHANCE_PCT,
       explorationDepletionPerAttemptPct: DEFAULT_EXPLORATION_DEPLETION_PER_ATTEMPT_PCT,
       explorationDurationTurns: DEFAULT_EXPLORATION_DURATION_TURNS,
@@ -4090,6 +4269,16 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           typeof next.economy?.marketPriceSmoothing === "number" && Number.isFinite(next.economy.marketPriceSmoothing)
             ? Math.max(0, Math.min(1, Number(next.economy.marketPriceSmoothing)))
             : defaults.economy.marketPriceSmoothing,
+        buildingDurabilityDecayPerTurn:
+          typeof next.economy?.buildingDurabilityDecayPerTurn === "number" &&
+          Number.isFinite(next.economy.buildingDurabilityDecayPerTurn)
+            ? Math.max(0, Number(next.economy.buildingDurabilityDecayPerTurn))
+            : defaults.economy.buildingDurabilityDecayPerTurn,
+        buildingDurabilityRecoveryPerTurn:
+          typeof next.economy?.buildingDurabilityRecoveryPerTurn === "number" &&
+          Number.isFinite(next.economy.buildingDurabilityRecoveryPerTurn)
+            ? Math.max(0, Number(next.economy.buildingDurabilityRecoveryPerTurn))
+            : defaults.economy.buildingDurabilityRecoveryPerTurn,
         explorationBaseEmptyChancePct:
           typeof next.economy?.explorationBaseEmptyChancePct === "number" &&
           Number.isFinite(next.economy.explorationBaseEmptyChancePct)
@@ -5479,6 +5668,8 @@ function isEqualBuildingInstances(
     if (
       prev.instanceId !== next.instanceId ||
       prev.buildingId !== next.buildingId ||
+      (typeof prev.customName === "string" ? prev.customName : null) !==
+        (typeof next.customName === "string" ? next.customName : null) ||
       prev.createdTurnId !== next.createdTurnId ||
       Math.max(1, Math.floor(Number(prev.level ?? 1))) !== Math.max(1, Math.floor(Number(next.level ?? 1))) ||
       (prev.autoUpgradeEnabled !== false) !== (next.autoUpgradeEnabled !== false) ||
@@ -5494,11 +5685,13 @@ function isEqualBuildingInstances(
     }
     if (
       Number(prev.ducats ?? 0) !== Number(next.ducats ?? 0) ||
+      Number(prev.currentDurability ?? 0) !== Number(next.currentDurability ?? 0) ||
       Number(prev.lastLaborCoverage ?? 0) !== Number(next.lastLaborCoverage ?? 0) ||
       Number(prev.lastInfraCoverage ?? 0) !== Number(next.lastInfraCoverage ?? 0) ||
       Number(prev.lastInputCoverage ?? 0) !== Number(next.lastInputCoverage ?? 0) ||
       Number(prev.lastFinanceCoverage ?? 0) !== Number(next.lastFinanceCoverage ?? 0) ||
       Number(prev.lastExtractionCoverage ?? 0) !== Number(next.lastExtractionCoverage ?? 0) ||
+      Number(prev.lastDurabilityCoverage ?? 0) !== Number(next.lastDurabilityCoverage ?? 0) ||
       Number(prev.lastProductivity ?? 0) !== Number(next.lastProductivity ?? 0) ||
       Number(prev.lastRevenueDucats ?? 0) !== Number(next.lastRevenueDucats ?? 0) ||
       Number(prev.lastInputCostDucats ?? 0) !== Number(next.lastInputCostDucats ?? 0) ||
@@ -6299,6 +6492,12 @@ function getBuildingMaxLevel(building: BuildingContentEntry | undefined): number
   return Math.max(1, Math.floor(raw));
 }
 
+function getBuildingMaxDurability(building: BuildingContentEntry | undefined): number {
+  const raw = Number(building?.maxDurability ?? DEFAULT_BUILDING_DURABILITY_MAX);
+  if (!Number.isFinite(raw)) return DEFAULT_BUILDING_DURABILITY_MAX;
+  return Math.max(1, Number(raw.toFixed(3)));
+}
+
 function getBuildingUpgradeCosts(building: BuildingContentEntry | undefined): { costConstruction: number; costDucats: number } {
   const baseConstruction = Math.max(1, Math.floor(Number(building?.costConstruction ?? 100)));
   const baseDucats = Math.max(0, Number(building?.costDucats ?? 10));
@@ -6501,15 +6700,18 @@ function resolveBuildingConstructionQueuesTurn(): void {
           continue;
         }
         const startingDucats = Math.max(0, Number(building?.startingDucats ?? 0));
+        const maxDurability = getBuildingMaxDurability(building);
         buildingInstances.push({
           instanceId: randomUUID(),
           buildingId: project.buildingId,
           owner: project.owner,
           createdTurnId: turnId,
           level: 1,
+          currentDurability: maxDurability,
           autoUpgradeEnabled: true,
           stateSubsidiesEnabled: true,
           manualWorkEnabled: true,
+          lastDurabilityCoverage: 1,
           lastStateSubsidyDucats: 0,
           ducats: Number(startingDucats.toFixed(3)),
         });
@@ -8116,6 +8318,8 @@ const gameSettingsSchema = z.object({
       baseGoldPerTurn: z.coerce.number().int().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       demolitionCostConstructionPercent: z.coerce.number().int().min(0).max(100).optional(),
       marketPriceSmoothing: z.coerce.number().min(0).max(1).optional(),
+      buildingDurabilityDecayPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).optional(),
+      buildingDurabilityRecoveryPerTurn: z.coerce.number().min(0).max(SETTINGS_MAX_NUMBER).optional(),
       explorationBaseEmptyChancePct: z.coerce.number().min(0).max(100).optional(),
       explorationDepletionPerAttemptPct: z.coerce.number().min(0).max(100).optional(),
       explorationDurationTurns: z.coerce.number().int().min(1).max(3650).optional(),
@@ -8440,6 +8644,7 @@ const culturePayloadSchema = z.object({
   costDucats: z.number().finite().min(0).optional(),
   startingDucats: z.number().finite().min(0).optional(),
   maxLevel: z.number().int().min(1).optional(),
+  maxDurability: z.number().finite().min(1).optional(),
   upgradeCostDucats: z.number().finite().min(0).optional(),
   upgradeCostConstruction: z.number().int().min(1).optional(),
   sectorId: z.string().trim().min(1).max(120).nullable().optional(),
@@ -8577,6 +8782,7 @@ function sanitizeContentEntryByKind(
     const costConstruction = Math.max(1, Math.floor(payload.costConstruction ?? 100));
     const costDucats = Number(Math.max(0, payload.costDucats ?? 10).toFixed(3));
     const maxLevel = Math.max(1, Math.floor(payload.maxLevel ?? 1));
+    const maxDurability = Number(Math.max(1, payload.maxDurability ?? DEFAULT_BUILDING_DURABILITY_MAX).toFixed(3));
     const upgradeCostConstruction = Math.max(
       1,
       Math.floor(payload.upgradeCostConstruction ?? payload.costConstruction ?? 100),
@@ -8589,6 +8795,7 @@ function sanitizeContentEntryByKind(
       costDucats,
       startingDucats: Number(Math.max(0, payload.startingDucats ?? 0).toFixed(3)),
       maxLevel,
+      maxDurability,
       upgradeCostDucats,
       upgradeCostConstruction,
       sectorId:
@@ -9078,6 +9285,12 @@ app.patch("/admin/game-settings", async (req, res) => {
     if (typeof nextEconomy.marketPriceSmoothing === "number") {
       gameSettings.economy.marketPriceSmoothing = nextEconomy.marketPriceSmoothing;
     }
+    if (typeof nextEconomy.buildingDurabilityDecayPerTurn === "number") {
+      gameSettings.economy.buildingDurabilityDecayPerTurn = nextEconomy.buildingDurabilityDecayPerTurn;
+    }
+    if (typeof nextEconomy.buildingDurabilityRecoveryPerTurn === "number") {
+      gameSettings.economy.buildingDurabilityRecoveryPerTurn = nextEconomy.buildingDurabilityRecoveryPerTurn;
+    }
     if (typeof nextEconomy.explorationBaseEmptyChancePct === "number") {
       gameSettings.economy.explorationBaseEmptyChancePct = nextEconomy.explorationBaseEmptyChancePct;
     }
@@ -9283,6 +9496,12 @@ const buildManualWorkSchema = z.object({
   buildingId: z.string().min(1),
   instanceId: z.string().min(1).optional(),
   enabled: z.boolean(),
+});
+const buildCustomNameSchema = z.object({
+  provinceId: z.string().min(1),
+  buildingId: z.string().min(1),
+  instanceId: z.string().min(1).optional(),
+  customName: z.union([z.string().max(80), z.null()]),
 });
 
 const provinceRenameSchema = z.object({
@@ -9897,6 +10116,66 @@ app.post("/country/build/manual-work-state", async (req, res) => {
   });
 });
 
+app.post("/country/build/custom-name", async (req, res) => {
+  const auth = parseAuthHeader(req);
+  if (!auth) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const parsed = buildCustomNameSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "INVALID_PAYLOAD", issues: parsed.error.issues });
+  }
+
+  const { provinceId, buildingId, instanceId, customName } = parsed.data;
+  const provinceOwnerId = worldBase.provinceOwner[provinceId] ?? null;
+  if (!provinceOwnerId || provinceOwnerId !== auth.countryId) {
+    return res.status(403).json({ error: "NOT_PROVINCE_OWNER" });
+  }
+
+  const instances = [...(worldBase.provinceBuildingsByProvince[provinceId] ?? [])];
+  const matchingInstances = instances.filter((instance) => instance.buildingId === buildingId);
+  if (matchingInstances.length <= 0) {
+    return res.status(404).json({ error: "BUILDING_NOT_FOUND" });
+  }
+  const targetInstance =
+    typeof instanceId === "string" && instanceId.trim().length > 0
+      ? matchingInstances.find((instance) => instance.instanceId === instanceId.trim())
+      : matchingInstances[0];
+  if (!targetInstance) {
+    return res.status(404).json({ error: "BUILDING_INSTANCE_NOT_FOUND" });
+  }
+
+  const normalizedName = typeof customName === "string" ? customName.trim().slice(0, 80) : "";
+  const nextName = normalizedName.length > 0 ? normalizedName : null;
+  if (nextName) {
+    const nextNameLower = nextName.toLocaleLowerCase("ru-RU");
+    const duplicate = instances.some((instance) => {
+      if (instance.instanceId === targetInstance.instanceId) return false;
+      const candidate = typeof instance.customName === "string" ? instance.customName.trim() : "";
+      return candidate.length > 0 && candidate.toLocaleLowerCase("ru-RU") === nextNameLower;
+    });
+    if (duplicate) {
+      return res.status(409).json({ error: "BUILDING_CUSTOM_NAME_ALREADY_USED" });
+    }
+  }
+  const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provinceBuildingsByProvince);
+  worldBase.provinceBuildingsByProvince[provinceId] = instances.map((instance) =>
+    instance.instanceId === targetInstance.instanceId ? { ...instance, customName: nextName } : instance,
+  );
+
+  savePersistentState();
+  broadcastWorldDeltaFromSectionSnapshot(wss, previousWorldBase);
+
+  return res.json({
+    ok: true,
+    provinceId,
+    buildingId,
+    instanceId: targetInstance.instanceId,
+    customName: nextName,
+  });
+});
+
 app.get("/country/orders/current", async (req, res) => {
   const auth = parseAuthHeader(req);
   if (!auth) {
@@ -10128,6 +10407,7 @@ app.post("/admin/population/generate", async (req, res) => {
 
   const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provincePopulationByProvince);
   const domains = getPopulationDomainKeys();
+  const fallbackByDimension = resolvePopulationFallbackKeys(domains);
   let updatedCount = 0;
   for (const provinceId of targetProvinceIds) {
     const current = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
@@ -10141,23 +10421,23 @@ app.post("/admin/population/generate", async (req, res) => {
                 : current.populationTotal,
             culturePct:
               parsed.data.culturePct != null
-                ? normalizePercentageMap(parsed.data.culturePct, domains.culturePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct)
+                ? normalizePercentageMap(parsed.data.culturePct, domains.culturePct, fallbackByDimension.culturePct)
                 : current.culturePct,
             ideologyPct:
               parsed.data.ideologyPct != null
-                ? normalizePercentageMap(parsed.data.ideologyPct, domains.ideologyPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct)
+                ? normalizePercentageMap(parsed.data.ideologyPct, domains.ideologyPct, fallbackByDimension.ideologyPct)
                 : current.ideologyPct,
             religionPct:
               parsed.data.religionPct != null
-                ? normalizePercentageMap(parsed.data.religionPct, domains.religionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct)
+                ? normalizePercentageMap(parsed.data.religionPct, domains.religionPct, fallbackByDimension.religionPct)
                 : current.religionPct,
             racePct:
               parsed.data.racePct != null
-                ? normalizePercentageMap(parsed.data.racePct, domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct)
+                ? normalizePercentageMap(parsed.data.racePct, domains.racePct, fallbackByDimension.racePct)
                 : current.racePct,
             professionPct:
               parsed.data.professionPct != null
-                ? normalizePercentageMap(parsed.data.professionPct, domains.professionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct)
+                ? normalizePercentageMap(parsed.data.professionPct, domains.professionPct, fallbackByDimension.professionPct)
                 : current.professionPct,
           };
     if (!isEqualProvincePopulation(worldBase.provincePopulationByProvince[provinceId], next)) {
@@ -10239,29 +10519,30 @@ app.patch("/admin/population/provinces/:provinceId", async (req, res) => {
 
   const previousWorldBase = cloneWorldBaseSectionSnapshot(WORLD_DELTA_MASK.provincePopulationByProvince);
   const domains = getPopulationDomainKeys();
+  const fallbackByDimension = resolvePopulationFallbackKeys(domains);
   const current = normalizeProvincePopulation(worldBase.provincePopulationByProvince[provinceId], provinceId, domains);
   const next: ProvincePopulation = {
     populationTotal:
       typeof parsed.data.populationTotal === "number" ? Math.max(0, Math.floor(parsed.data.populationTotal)) : current.populationTotal,
     culturePct:
       parsed.data.culturePct != null
-        ? normalizePercentageMap(parsed.data.culturePct, domains.culturePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.culturePct)
+        ? normalizePercentageMap(parsed.data.culturePct, domains.culturePct, fallbackByDimension.culturePct)
         : current.culturePct,
     ideologyPct:
       parsed.data.ideologyPct != null
-        ? normalizePercentageMap(parsed.data.ideologyPct, domains.ideologyPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.ideologyPct)
+        ? normalizePercentageMap(parsed.data.ideologyPct, domains.ideologyPct, fallbackByDimension.ideologyPct)
         : current.ideologyPct,
     religionPct:
       parsed.data.religionPct != null
-        ? normalizePercentageMap(parsed.data.religionPct, domains.religionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.religionPct)
+        ? normalizePercentageMap(parsed.data.religionPct, domains.religionPct, fallbackByDimension.religionPct)
         : current.religionPct,
     racePct:
       parsed.data.racePct != null
-        ? normalizePercentageMap(parsed.data.racePct, domains.racePct, POPULATION_FALLBACK_KEY_BY_DIMENSION.racePct)
+        ? normalizePercentageMap(parsed.data.racePct, domains.racePct, fallbackByDimension.racePct)
         : current.racePct,
     professionPct:
       parsed.data.professionPct != null
-        ? normalizePercentageMap(parsed.data.professionPct, domains.professionPct, POPULATION_FALLBACK_KEY_BY_DIMENSION.professionPct)
+        ? normalizePercentageMap(parsed.data.professionPct, domains.professionPct, fallbackByDimension.professionPct)
         : current.professionPct,
   };
   worldBase.provincePopulationByProvince[provinceId] = next;

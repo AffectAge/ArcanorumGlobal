@@ -382,6 +382,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftCostDucats, setDraftCostDucats] = useState("10");
   const [draftStartingDucats, setDraftStartingDucats] = useState("0");
   const [draftMaxLevel, setDraftMaxLevel] = useState("1");
+  const [draftMaxDurability, setDraftMaxDurability] = useState("100");
   const [draftUpgradeCostDucats, setDraftUpgradeCostDucats] = useState("10");
   const [draftUpgradeCostConstruction, setDraftUpgradeCostConstruction] = useState("100");
   const [draftIndustryId, setDraftIndustryId] = useState("");
@@ -453,6 +454,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       costDucats: entry.costDucats ?? null,
       startingDucats: entry.startingDucats ?? null,
       maxLevel: entry.maxLevel ?? null,
+      maxDurability: entry.maxDurability ?? null,
       upgradeCostDucats: entry.upgradeCostDucats ?? null,
       upgradeCostConstruction: entry.upgradeCostConstruction ?? null,
       industryId: entry.industryId ?? entry.sectorId ?? null,
@@ -618,6 +620,12 @@ export function ContentPanel({ open, token, onClose }: Props) {
         activeCategory === "buildings"
           ? Number.isFinite(Number(draftMaxLevel))
             ? Math.max(1, Math.floor(Number(draftMaxLevel)))
+            : null
+          : null,
+      maxDurability:
+        activeCategory === "buildings"
+          ? Number.isFinite(Number(draftMaxDurability))
+            ? Number(Math.max(1, Number(draftMaxDurability)).toFixed(3))
             : null
           : null,
       upgradeCostDucats:
@@ -860,6 +868,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftCostDucats("10");
       setDraftStartingDucats("0");
       setDraftMaxLevel("1");
+      setDraftMaxDurability("100");
       setDraftUpgradeCostDucats("10");
       setDraftUpgradeCostConstruction("100");
       setDraftIndustryId("");
@@ -989,6 +998,11 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(Math.max(1, Math.floor(selectedEntry.maxLevel)))
         : "1",
     );
+    setDraftMaxDurability(
+      typeof selectedEntry.maxDurability === "number" && Number.isFinite(selectedEntry.maxDurability)
+        ? String(Math.max(1, selectedEntry.maxDurability))
+        : "100",
+    );
     setDraftUpgradeCostDucats(
       typeof selectedEntry.upgradeCostDucats === "number" && Number.isFinite(selectedEntry.upgradeCostDucats)
         ? String(Math.max(0, selectedEntry.upgradeCostDucats))
@@ -1104,6 +1118,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftCostDucats,
     draftStartingDucats,
     draftMaxLevel,
+    draftMaxDurability,
     draftUpgradeCostDucats,
     draftUpgradeCostConstruction,
     draftIndustryId,
@@ -1175,6 +1190,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
         costDucats: activeCategory === "buildings" ? 10 : undefined,
         startingDucats: activeCategory === "buildings" ? 0 : undefined,
         maxLevel: activeCategory === "buildings" ? 1 : undefined,
+        maxDurability: activeCategory === "buildings" ? 100 : undefined,
         upgradeCostDucats: activeCategory === "buildings" ? 10 : undefined,
         upgradeCostConstruction: activeCategory === "buildings" ? 100 : undefined,
         extractionGoodId: activeCategory === "buildings" ? null : undefined,
@@ -1254,6 +1270,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
       costDucats: activeCategory === "buildings" ? Math.max(0, Number(draftCostDucats || "10")) : undefined,
       startingDucats: activeCategory === "buildings" ? Math.max(0, Number(draftStartingDucats || "0")) : undefined,
       maxLevel: activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftMaxLevel || "1"))) : undefined,
+      maxDurability:
+        activeCategory === "buildings" ? Number(Math.max(1, Number(draftMaxDurability || "100")).toFixed(3)) : undefined,
       upgradeCostDucats:
         activeCategory === "buildings" ? Math.max(0, Number(draftUpgradeCostDucats || "10")) : undefined,
       upgradeCostConstruction:
@@ -1327,6 +1345,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
         !Number.isFinite(payload.costDucats ?? Number.NaN) ||
         !Number.isFinite(payload.startingDucats ?? Number.NaN) ||
         !Number.isFinite(payload.maxLevel ?? Number.NaN) ||
+        !Number.isFinite(payload.maxDurability ?? Number.NaN) ||
         !Number.isFinite(payload.upgradeCostDucats ?? Number.NaN) ||
         !Number.isFinite(payload.upgradeCostConstruction ?? Number.NaN) ||
         !Number.isFinite(payload.extractionAmountPerTurn ?? Number.NaN) ||
@@ -1813,7 +1832,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               transition={{ duration: 0.2, ease: "easeOut" }}
                               className="overflow-visible"
                             >
-                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-3">
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-4">
                               <label className="block">
                                 <Tooltip content="Максимальный уровень одного инстанса здания. При достижении этого значения автоповышение не ставится в очередь.">
                                   <span className="mb-1 block text-xs text-white/60">Макс. уровень</span>
@@ -1823,6 +1842,18 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                   onChange={(e) => setDraftMaxLevel(e.target.value)}
                                   inputMode="numeric"
                                   placeholder="1"
+                                  className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Максимальная прочность инстанса здания. Прочность ограничивает потолок продуктивности.">
+                                  <span className="mb-1 block text-xs text-white/60">Макс. прочность</span>
+                                </Tooltip>
+                                <input
+                                  value={draftMaxDurability}
+                                  onChange={(e) => setDraftMaxDurability(e.target.value)}
+                                  inputMode="decimal"
+                                  placeholder="100"
                                   className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm text-white outline-none transition focus:border-arc-accent/30"
                                 />
                               </label>

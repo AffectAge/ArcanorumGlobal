@@ -78,9 +78,11 @@ export type BuildingOwner =
 export type BuildingInstance = {
   instanceId: string;
   buildingId: string;
+  customName?: string | null;
   owner: BuildingOwner;
   createdTurnId: number;
   level?: number;
+  currentDurability?: number;
   autoUpgradeEnabled?: boolean;
   stateSubsidiesEnabled?: boolean;
   manualWorkEnabled?: boolean;
@@ -91,6 +93,7 @@ export type BuildingInstance = {
   lastInputCoverage?: number;
   lastFinanceCoverage?: number;
   lastExtractionCoverage?: number;
+  lastDurabilityCoverage?: number;
   lastProductivity?: number;
   lastPurchaseByGoodId?: Record<string, number>;
   lastPurchaseCostByGoodId?: Record<string, number>;

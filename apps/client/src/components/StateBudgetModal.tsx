@@ -1,8 +1,10 @@
 import { Dialog } from "@headlessui/react";
 import type { WorldBase } from "@arcanorum/shared";
+import * as echarts from "echarts";
+import type { EChartsType } from "echarts";
 import { motion } from "framer-motion";
 import { Landmark, ListFilter, ReceiptText, Wallet, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchContentEntries } from "../lib/api";
 
 type DucatExpenses = {
@@ -46,6 +48,12 @@ type HistoryRow = {
   projectedEnd: number;
 };
 
+type BudgetCategoryRow = {
+  key: string;
+  label: string;
+  value: number;
+};
+
 function formatInt(value: number): string {
   return new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.floor(value)));
 }
@@ -70,6 +78,9 @@ const TABS: Array<{ id: TabId; label: string; icon: typeof Wallet }> = [
   { id: "history", label: "История", icon: ListFilter },
 ];
 
+const INCOME_CHART_COLORS = ["#34d399", "#22d3ee", "#60a5fa", "#a78bfa", "#f59e0b"];
+const EXPENSE_CHART_COLORS = ["#fb7185", "#f87171", "#f59e0b", "#f97316", "#a78bfa"];
+
 export function StateBudgetModal({
   open,
   onClose,
@@ -86,15 +97,68 @@ export function StateBudgetModal({
   const [activeTab, setActiveTab] = useState<TabId>("summary");
   const [buildingNameById, setBuildingNameById] = useState<Record<string, string>>({});
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
+  const incomePieRef = useRef<HTMLDivElement | null>(null);
+  const expensePieRef = useRef<HTMLDivElement | null>(null);
+  const incomeChartRef = useRef<EChartsType | null>(null);
+  const expenseChartRef = useRef<EChartsType | null>(null);
 
   const projectedEnd = useMemo(
     () => Math.floor(Number(currentDucats ?? 0) + Number(projectedIncomeDucats ?? 0) - Number(ducatExpenses.total ?? 0)),
     [currentDucats, ducatExpenses.total, projectedIncomeDucats],
   );
   const net = useMemo(() => projectedIncomeDucats - ducatExpenses.total, [ducatExpenses.total, projectedIncomeDucats]);
+  const incomeRows = useMemo<BudgetCategoryRow[]>(
+    () => [
+      {
+        key: "base-income",
+        label: "Базовый доход государства",
+        value: Math.max(0, Math.floor(projectedIncomeDucats ?? 0)),
+      },
+    ],
+    [projectedIncomeDucats],
+  );
+  const expenseRows = useMemo<BudgetCategoryRow[]>(
+    () => [
+      { key: "subsidies", label: "Государственные субсидии", value: Math.max(0, Math.floor(ducatExpenses.subsidies ?? 0)) },
+      { key: "construction", label: "Строительные проекты", value: Math.max(0, Math.floor(ducatExpenses.construction ?? 0)) },
+      { key: "colonization", label: "Поддержка колонизаций", value: Math.max(0, Math.floor(ducatExpenses.colonizationSupport ?? 0)) },
+      { key: "province-rename", label: "Переименование провинций", value: Math.max(0, Math.floor(ducatExpenses.provinceRename ?? 0)) },
+      { key: "customization", label: "Кастомизация страны", value: Math.max(0, Math.floor(ducatExpenses.customization ?? 0)) },
+    ],
+    [
+      ducatExpenses.colonizationSupport,
+      ducatExpenses.construction,
+      ducatExpenses.customization,
+      ducatExpenses.provinceRename,
+      ducatExpenses.subsidies,
+    ],
+  );
+  const incomeTableTotal = useMemo(
+    () => incomeRows.reduce((sum, row) => sum + Math.max(0, Math.floor(row.value)), 0),
+    [incomeRows],
+  );
+  const expenseTableTotal = useMemo(
+    () => expenseRows.reduce((sum, row) => sum + Math.max(0, Math.floor(row.value)), 0),
+    [expenseRows],
+  );
+  const incomeChartRows = useMemo(
+    () =>
+      incomeRows
+        .filter((row) => row.value > 0)
+        .map((row, index) => ({ ...row, color: INCOME_CHART_COLORS[index % INCOME_CHART_COLORS.length] })),
+    [incomeRows],
+  );
+  const expenseChartRows = useMemo(
+    () =>
+      expenseRows
+        .filter((row) => row.value > 0)
+        .map((row, index) => ({ ...row, color: EXPENSE_CHART_COLORS[index % EXPENSE_CHART_COLORS.length] })),
+    [expenseRows],
+  );
 
   useEffect(() => {
     if (!open) return;
+    setActiveTab("summary");
     let cancelled = false;
     fetchContentEntries("buildings")
       .then((items) => {
@@ -129,6 +193,116 @@ export function StateBudgetModal({
     });
   }, [currentDucats, ducatExpenses.total, net, open, projectedEnd, projectedIncomeDucats, turnId]);
 
+  useEffect(() => {
+    if (!open || activeTab !== "summary") return;
+    const applyPie = (
+      container: HTMLDivElement | null,
+      holder: { current: EChartsType | null },
+      title: string,
+      rows: Array<{ label: string; value: number; color: string }>,
+    ) => {
+      if (!container) return;
+      const existing = holder.current;
+      const chart =
+        existing && existing.getDom() === container
+          ? existing
+          : (() => {
+              existing?.dispose();
+              return echarts.init(container);
+            })();
+      holder.current = chart;
+      chart.setOption(
+        {
+          animationDuration: 280,
+          backgroundColor: "transparent",
+          tooltip: {
+            trigger: "item",
+            backgroundColor: "rgba(7,12,20,0.92)",
+            borderColor: "rgba(148,163,184,0.25)",
+            borderWidth: 1,
+            textStyle: { color: "#e2e8f0", fontSize: 11 },
+            formatter: (params: { name: string; value: number; percent: number }) =>
+              `${params.name}<br/>${formatInt(params.value)} дукат (${Math.round(params.percent)}%)`,
+          },
+          legend: {
+            bottom: 0,
+            left: "center",
+            itemWidth: 10,
+            itemHeight: 10,
+            textStyle: { color: "rgba(226,232,240,0.75)", fontSize: 11 },
+          },
+          series: [
+            {
+              name: title,
+              type: "pie",
+              radius: ["48%", "68%"],
+              center: ["50%", "43%"],
+              avoidLabelOverlap: true,
+              label: { show: false },
+              labelLine: { show: false },
+              data: rows.map((row) => ({
+                name: row.label,
+                value: Math.max(0, Math.floor(row.value)),
+                itemStyle: { color: row.color },
+              })),
+              emphasis: {
+                scale: true,
+                itemStyle: {
+                  shadowBlur: 10,
+                  shadowOffsetX: 0,
+                  shadowColor: "rgba(0, 0, 0, 0.45)",
+                },
+              },
+            },
+          ],
+        },
+        { notMerge: true },
+      );
+    };
+
+    applyPie(incomePieRef.current, incomeChartRef, "Доходы", incomeChartRows);
+    applyPie(expensePieRef.current, expenseChartRef, "Расходы", expenseChartRows);
+
+    // Framer-motion entry animation can leave containers with transient zero-size.
+    // Deferred resize ensures charts appear immediately on first open.
+    const rafId = window.requestAnimationFrame(() => {
+      incomeChartRef.current?.resize();
+      expenseChartRef.current?.resize();
+    });
+    const timeoutId = window.setTimeout(() => {
+      incomeChartRef.current?.resize();
+      expenseChartRef.current?.resize();
+    }, 140);
+
+    const onResize = () => {
+      incomeChartRef.current?.resize();
+      expenseChartRef.current?.resize();
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [activeTab, expenseChartRows, incomeChartRows, open]);
+
+  useEffect(() => {
+    if (open) return;
+    incomeChartRef.current?.dispose();
+    expenseChartRef.current?.dispose();
+    incomeChartRef.current = null;
+    expenseChartRef.current = null;
+  }, [open]);
+
+  useEffect(() => {
+    return () => {
+      incomeChartRef.current?.dispose();
+      expenseChartRef.current?.dispose();
+      incomeChartRef.current = null;
+      expenseChartRef.current = null;
+    };
+  }, []);
+
   const subsidyTotal = Math.max(0, Math.floor(subsidyItems.reduce((sum, item) => sum + Math.max(0, item.amount), 0)));
   const subsidyRows = useMemo(
     () =>
@@ -153,15 +327,15 @@ export function StateBudgetModal({
         exit={{ opacity: 0 }}
         transition={{ duration: 0.16, ease: "easeOut" }}
       />
-      <div className="fixed inset-0 flex items-start justify-center p-4 pt-20">
+      <div className="fixed inset-0 p-4 md:p-6">
         <motion.div
           initial={{ opacity: 0, y: -10, scale: 0.985 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -6, scale: 0.99 }}
           transition={{ duration: 0.18, ease: "easeOut" }}
-          className="w-full max-w-4xl"
+          className="h-full w-full"
         >
-          <Dialog.Panel className="glass panel-border w-full rounded-xl p-4">
+          <Dialog.Panel className="glass panel-border flex h-full w-full flex-col rounded-2xl bg-[#0b111b] p-4 md:p-5">
             <div className="mb-3 flex items-center justify-between gap-4">
               <div>
                 <Dialog.Title className="text-sm font-semibold text-slate-100">Бюджет дукатов государства</Dialog.Title>
@@ -199,27 +373,87 @@ export function StateBudgetModal({
               })}
             </div>
 
+            <div className="arc-scrollbar min-h-0 flex-1 overflow-auto pr-1">
             {activeTab === "summary" && (
-              <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
-                <div className="panel-border rounded-lg bg-black/20 p-3">
-                  <div className="text-[11px] text-white/55">Казна сейчас</div>
-                  <div className="mt-1 flex items-center gap-2 text-lg font-semibold text-white">
-                    {ducatIconUrl ? <img src={ducatIconUrl} alt="" className="h-4 w-4 object-contain" /> : null}
-                    {formatInt(currentDucats)}
+              <div className="space-y-3">
+                <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
+                  <div className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="text-[11px] text-white/55">Казна сейчас</div>
+                    <div className="mt-1 flex items-center gap-2 text-lg font-semibold text-white">
+                      {ducatIconUrl ? <img src={ducatIconUrl} alt="" className="h-4 w-4 object-contain" /> : null}
+                      {formatInt(currentDucats)}
+                    </div>
+                  </div>
+                  <div className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="text-[11px] text-white/55">Доходы за ход</div>
+                    <div className="mt-1 text-lg font-semibold text-emerald-400">+{formatInt(projectedIncomeDucats)}</div>
+                  </div>
+                  <div className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="text-[11px] text-white/55">Расходы за ход</div>
+                    <div className="mt-1 text-lg font-semibold text-rose-300">-{formatInt(ducatExpenses.total)}</div>
+                  </div>
+                  <div className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="text-[11px] text-white/55">Прогноз на конец хода</div>
+                    <div className={`mt-1 text-lg font-semibold ${netClass(net)}`}>{formatInt(projectedEnd)}</div>
+                    <div className={`mt-1 text-xs ${netClass(net)}`}>Итог: {formatSigned(net)}</div>
                   </div>
                 </div>
-                <div className="panel-border rounded-lg bg-black/20 p-3">
-                  <div className="text-[11px] text-white/55">Доходы за ход</div>
-                  <div className="mt-1 text-lg font-semibold text-emerald-400">+{formatInt(projectedIncomeDucats)}</div>
+
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <section className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="mb-2 text-sm font-semibold text-white/90">График доходов по категориям</div>
+                    <div ref={incomePieRef} className="h-[320px] w-full" />
+                  </section>
+                  <section className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="mb-2 text-sm font-semibold text-white/90">График расходов по категориям</div>
+                    <div ref={expensePieRef} className="h-[320px] w-full" />
+                  </section>
                 </div>
-                <div className="panel-border rounded-lg bg-black/20 p-3">
-                  <div className="text-[11px] text-white/55">Расходы за ход</div>
-                  <div className="mt-1 text-lg font-semibold text-rose-300">-{formatInt(ducatExpenses.total)}</div>
-                </div>
-                <div className="panel-border rounded-lg bg-black/20 p-3">
-                  <div className="text-[11px] text-white/55">Прогноз на конец хода</div>
-                  <div className={`mt-1 text-lg font-semibold ${netClass(net)}`}>{formatInt(projectedEnd)}</div>
-                  <div className={`mt-1 text-xs ${netClass(net)}`}>Итог: {formatSigned(net)}</div>
+
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="mb-2 text-sm font-semibold text-white/90">Доходы по категориям</div>
+                    <div className="overflow-hidden rounded-md border border-white/10">
+                      <div className="grid grid-cols-[1fr_auto] items-center gap-2 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-wide text-white/50">
+                        <span>Категория</span>
+                        <span>Сумма</span>
+                      </div>
+                      <div className="divide-y divide-white/10">
+                        {incomeRows.map((row) => (
+                          <div key={row.key} className="grid grid-cols-[1fr_auto] items-center gap-2 px-3 py-2 text-sm">
+                            <span className="text-white/80">{row.label}</span>
+                            <span className="font-semibold text-emerald-400">+{formatInt(row.value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-[1fr_auto] items-center gap-2 border-t border-white/10 bg-black/30 px-3 py-2 text-sm font-semibold">
+                        <span className="text-white">Итого доходов</span>
+                        <span className="text-emerald-400">+{formatInt(incomeTableTotal)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="panel-border rounded-lg bg-black/20 p-3">
+                    <div className="mb-2 text-sm font-semibold text-white/90">Расходы по категориям</div>
+                    <div className="overflow-hidden rounded-md border border-white/10">
+                      <div className="grid grid-cols-[1fr_auto] items-center gap-2 bg-white/5 px-3 py-2 text-[11px] uppercase tracking-wide text-white/50">
+                        <span>Категория</span>
+                        <span>Сумма</span>
+                      </div>
+                      <div className="divide-y divide-white/10">
+                        {expenseRows.map((row) => (
+                          <div key={row.key} className="grid grid-cols-[1fr_auto] items-center gap-2 px-3 py-2 text-sm">
+                            <span className="text-white/80">{row.label}</span>
+                            <span className="font-semibold text-rose-300">-{formatInt(row.value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-[1fr_auto] items-center gap-2 border-t border-white/10 bg-black/30 px-3 py-2 text-sm font-semibold">
+                        <span className="text-white">Итого расходов</span>
+                        <span className="text-rose-300">-{formatInt(expenseTableTotal)}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -301,6 +535,7 @@ export function StateBudgetModal({
                 ))}
               </div>
             )}
+            </div>
           </Dialog.Panel>
         </motion.div>
       </div>

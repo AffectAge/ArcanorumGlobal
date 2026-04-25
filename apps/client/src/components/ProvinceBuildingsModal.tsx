@@ -14,6 +14,7 @@ import {
   Lock,
   MapPin,
   Package,
+  Pencil,
   Power,
   Plus,
   SlidersHorizontal,
@@ -31,6 +32,7 @@ import {
   fetchMarketOverview,
   fetchPublicGameUiSettings,
   setCountryBuildAutoUpgradeState,
+  setCountryBuildCustomName,
   setCountryBuildManualWorkState,
   setCountryBuildSubsidyState,
   upgradeCountryBuildState,
@@ -40,6 +42,7 @@ import {
 } from "../lib/api";
 import { useGameStore } from "../store/gameStore";
 import { CustomSelect } from "./CustomSelect";
+import { TextInputModal } from "./TextInputModal";
 import { Tooltip } from "./Tooltip";
 
 type Props = {
@@ -73,6 +76,7 @@ type Card = {
   isActive: boolean;
   inactiveReasons: string[];
   level: number;
+  customName?: string | null;
   progressPercent: number;
   costConstruction: number;
   workersEmployed: number;
@@ -82,6 +86,7 @@ type Card = {
   lastInfraCoverage?: number;
   lastFinanceCoverage?: number;
   lastExtractionCoverage?: number;
+  lastDurabilityCoverage?: number;
   lastProductivity?: number;
   inactiveReason?: string | null;
 };
@@ -146,6 +151,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [togglingAutoUpgradeCardKey, setTogglingAutoUpgradeCardKey] = useState<string | null>(null);
   const [togglingSubsidyCardKey, setTogglingSubsidyCardKey] = useState<string | null>(null);
   const [togglingManualWorkCardKey, setTogglingManualWorkCardKey] = useState<string | null>(null);
+  const [renamingCardKey, setRenamingCardKey] = useState<string | null>(null);
   const [cancelConfirmTarget, setCancelConfirmTarget] = useState<
     | null
     | {
@@ -170,6 +176,19 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         demolitionCostConstruction: number;
       }
   >(null);
+  const [renameModalTarget, setRenameModalTarget] = useState<
+    | null
+    | {
+        key: string;
+        provinceId: string;
+        provinceName: string;
+        buildingId: string;
+        buildingName: string;
+        instanceId?: string;
+        currentName?: string | null;
+      }
+  >(null);
+  const [renameModalValue, setRenameModalValue] = useState("");
   const [filterBuildingId, setFilterBuildingId] = useState("");
   const [filterProvinceId, setFilterProvinceId] = useState("");
   const [filterCompanyId, setFilterCompanyId] = useState("");
@@ -181,6 +200,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [filterEconomy, setFilterEconomy] = useState<"all" | "profit" | "loss">("all");
   const [sortBy, setSortBy] = useState<"building" | "province" | "company" | "industry" | "sector">("building");
   const [openEconomyByCardKey, setOpenEconomyByCardKey] = useState<Record<string, boolean>>({});
+  const [openStatusByCardKey, setOpenStatusByCardKey] = useState<Record<string, boolean>>({});
   const [marketOverview, setMarketOverview] = useState<MarketOverviewResponse | null>(null);
   const auth = useGameStore((s) => s.auth);
   const turnId = useGameStore((s) => s.turnId);
@@ -251,6 +271,12 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       cancelled = true;
     };
   }, [open, auth?.token, worldBase?.turnId, countryId]);
+
+  useEffect(() => {
+    if (open) return;
+    setRenameModalTarget(null);
+    setRenameModalValue("");
+  }, [open]);
 
   const buildingById = useMemo(() => new Map(buildings.map((x) => [x.id, x] as const)), [buildings]);
   const sortedBuildings = useMemo(() => [...buildings].sort((a, b) => a.name.localeCompare(b.name, "ru")), [buildings]);
@@ -387,6 +413,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           isActive: !(instance.isInactive ?? false) && !instance.inactiveReason,
           inactiveReasons,
           level: instanceLevel,
+          customName: typeof instance.customName === "string" ? instance.customName : null,
           progressPercent: 100,
           costConstruction: Math.max(1, Math.floor(Number(b.costConstruction ?? 100))),
           workersEmployed,
@@ -397,6 +424,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           lastFinanceCoverage: typeof instance.lastFinanceCoverage === "number" ? instance.lastFinanceCoverage : undefined,
           lastExtractionCoverage:
             typeof instance.lastExtractionCoverage === "number" ? instance.lastExtractionCoverage : undefined,
+          lastDurabilityCoverage:
+            typeof instance.lastDurabilityCoverage === "number" ? instance.lastDurabilityCoverage : undefined,
           lastProductivity: typeof instance.lastProductivity === "number" ? instance.lastProductivity : undefined,
           inactiveReason: instance.inactiveReason ?? null,
         });
@@ -428,6 +457,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           isActive: true,
           inactiveReasons: [],
           level: 0,
+          customName: null,
           progressPercent,
           costConstruction: Math.max(1, Math.floor(Number(q.costConstruction || b.costConstruction || 100))),
           workersEmployed: 0,
@@ -558,7 +588,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         outputRevenue: 0,
         wagesCost: 0,
         stateSubsidyDucats: 0,
+        upgradeCostDucats: 0,
         netPerTurn: 0,
+        durabilityCurrent: 0,
+        durabilityMax: 0,
+        durabilityCoverage: 1,
         storageAmount: 0,
         inputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; cost: number }>,
         outputs: [] as Array<{ goodName: string; goodLogoUrl: string | null; factual: number; max: number; income: number }>,
@@ -642,6 +676,30 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       typeof instance?.lastStateSubsidyDucats === "number"
         ? Math.max(0, Number(instance.lastStateSubsidyDucats))
         : 0;
+    const upgradeCostDucats = Math.max(
+      0,
+      (worldBase?.provinceConstructionQueueByProvince?.[card.provinceId] ?? [])
+        .filter(
+          (project) =>
+            (project.projectType ?? "build") === "upgrade" &&
+            (project.targetInstanceId ?? "") === (card.instanceId ?? ""),
+        )
+        .reduce((sum, project) => sum + Math.max(0, Number(project.costDucats ?? 0)), 0),
+    );
+    const durabilityMax = Math.max(
+      1,
+      Number(
+        (
+          (building as ContentEntry & { maxDurability?: number | null })?.maxDurability ??
+          100
+        ),
+      ),
+    );
+    const durabilityCurrent =
+      typeof instance?.currentDurability === "number"
+        ? Math.max(0, Math.min(durabilityMax, Number(instance.currentDurability)))
+        : durabilityMax;
+    const durabilityCoverage = durabilityMax > 0 ? Math.max(0, Math.min(1, durabilityCurrent / durabilityMax)) : 1;
 
     const storageAmount =
       typeof instance?.ducats === "number"
@@ -746,7 +804,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       outputRevenue,
       wagesCost,
       stateSubsidyDucats,
+      upgradeCostDucats,
       netPerTurn,
+      durabilityCurrent,
+      durabilityMax,
+      durabilityCoverage,
       storageAmount,
       inputs,
       outputs,
@@ -1218,6 +1280,56 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     }
   };
 
+  const openRenameBuiltCardModal = (target: {
+    key: string;
+    provinceId: string;
+    provinceName: string;
+    buildingId: string;
+    buildingName: string;
+    instanceId?: string;
+    currentName?: string | null;
+  }) => {
+    if (!target.instanceId) return;
+    setRenameModalTarget(target);
+    setRenameModalValue((target.currentName ?? "").trim());
+  };
+
+  const submitRenameBuiltCard = async (target: {
+    key: string;
+    provinceId: string;
+    provinceName: string;
+    buildingId: string;
+    buildingName: string;
+    instanceId?: string;
+    currentName?: string | null;
+  }) => {
+    if (!auth?.token || !target.instanceId) return;
+    const normalized = renameModalValue.trim();
+    setRenamingCardKey(target.key);
+    try {
+      const result = await setCountryBuildCustomName(auth.token, {
+        provinceId: target.provinceId,
+        buildingId: target.buildingId,
+        instanceId: target.instanceId,
+        customName: normalized.length > 0 ? normalized : null,
+      });
+      toast.success(result.customName ? "Название постройки обновлено" : "Название постройки сброшено");
+      setRenameModalTarget(null);
+      setRenameModalValue("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "BUILD_CUSTOM_NAME_FAILED";
+      if (message === "NOT_PROVINCE_OWNER") {
+        toast.error("Переименование доступно только в ваших провинциях");
+      } else if (message === "BUILDING_CUSTOM_NAME_ALREADY_USED") {
+        toast.error("Такое название уже используется в этой провинции");
+      } else {
+        toast.error("Не удалось обновить название постройки");
+      }
+    } finally {
+      setRenamingCardKey(null);
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose} className="relative z-[206]">
       <motion.div aria-hidden="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
@@ -1397,6 +1509,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     { label: "infra", value: c.lastInfraCoverage },
                     { label: "finance", value: c.lastFinanceCoverage },
                     { label: "extraction", value: c.lastExtractionCoverage },
+                    { label: "durability", value: c.lastDurabilityCoverage },
                   ]
                     .filter((f): f is { label: string; value: number } => typeof f.value === "number")
                     .sort((a, b) => a.value - b.value);
@@ -1411,7 +1524,9 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                             ? "инфраструктура"
                             : limiting.label === "finance"
                               ? "финансы"
-                              : "добыча";
+                              : limiting.label === "extraction"
+                                ? "добыча"
+                                : "прочность";
                     const factorPct = Math.round(limiting.value * 100);
                     limitingFactorBadge = {
                       text: `Лимит: ${factorLabel} ${factorPct}%`,
@@ -1535,11 +1650,25 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     ? Math.max(1, Math.floor(c.costConstruction)) +
                       Math.max(0, Math.max(1, Math.floor(c.level)) - 1) * upgradeCostConstruction
                     : Math.max(1, Math.floor(c.costConstruction));
+                const productivityPct = Math.max(0, Math.min(100, econData?.productivity ?? 0));
+                const durabilityPct = Math.max(0, Math.min(100, Math.round(Math.max(0, Math.min(1, econData?.durabilityCoverage ?? 0)) * 100)));
                 return (
               <article key={c.key} className={`rounded-2xl border bg-gradient-to-br from-white/5 to-transparent p-4 flex flex-col gap-4 shadow-lg shadow-black/30 ${cardBorder}`}>
                 <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-[60px] w-[60px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">{c.iconUrl ? <img src={c.iconUrl} alt="" className="h-full w-full object-cover" /> : <Factory size={20} />}</div>
+                    <div className={`flex gap-3 ${c.kind === "built" ? "items-stretch" : "items-start"}`}>
+                      <div
+                        className={`flex items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30 ${
+                          c.kind === "built"
+                            ? "aspect-square min-h-[74px] self-stretch"
+                            : "h-[60px] w-[60px]"
+                        }`}
+                      >
+                        {c.iconUrl ? (
+                          <img src={c.iconUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <Factory size={20} />
+                        )}
+                      </div>
                       <div>
                       <div className="flex items-center gap-2 text-white/80 text-sm font-semibold">
                         <Tooltip
@@ -1551,25 +1680,10 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                         >
                           <span>{c.buildingName || c.buildingId}</span>
                         </Tooltip>
-                        {c.kind === "built" && (
-                          <span className="inline-flex items-center rounded-full border border-white/15 bg-black/40 px-2 py-0.5 text-[10px] font-semibold text-white/70">
-                            Ур. {c.level}
-                          </span>
-                        )}
                       </div>
+                      {c.kind === "built" && <div className="text-[11px] text-white/55">Название: {c.customName?.trim() ? c.customName : "не задано"}</div>}
                       <div className="text-[11px] text-white/45">Стоимость: {fmt(displayCostConstruction)}</div>
-                      {!displayIsActive && (
-                        <Tooltip content={displayInactiveReasons.join(", ")} placement="top">
-                          <span className="mt-1 inline-flex rounded-full border border-red-400/40 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-200">Неактивное</span>
-                        </Tooltip>
-                      )}
-                      {limitingFactorBadge && (
-                        <Tooltip content={limitingFactorBadge.tooltip} placement="top">
-                          <span className="mt-1 ml-1 inline-flex rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
-                            {limitingFactorBadge.text}
-                          </span>
-                        </Tooltip>
-                      )}
+                      {c.kind === "built" && <div className="text-[11px] text-white/45">Уровень: {c.level}</div>}
                     </div>
                   </div>
                   {c.kind === "construction" ? (
@@ -1593,6 +1707,26 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     </Tooltip>
                   ) : (
                     <div className="flex items-center gap-2">
+                      <Tooltip content="Изменить уникальное название постройки">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openRenameBuiltCardModal({
+                              key: c.key,
+                              provinceId: c.provinceId,
+                              provinceName: c.provinceName,
+                              buildingId: c.buildingId,
+                              buildingName: c.buildingName,
+                              instanceId: c.instanceId,
+                              currentName: c.customName,
+                            })
+                          }
+                          disabled={!c.instanceId || renamingCardKey === c.key}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-black/40 text-white/70 transition hover:border-white/30 hover:text-white disabled:opacity-40"
+                        >
+                          {renamingCardKey === c.key ? "..." : <Pencil size={14} />}
+                        </button>
+                      </Tooltip>
                       <Tooltip
                         content={
                           isManuallyDisabled
@@ -1744,56 +1878,94 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     <div className="mt-1 text-[11px] text-amber-300/90">Прогресс: {c.progressPercent}%</div>
                   </div>
                 )}
-                <div className="flex flex-col gap-1.5 text-xs text-white/65">
-                  <div className="flex items-center gap-2">
-                    <Factory size={13} />
-                    <span className="text-white/40">Отрасль:</span>
-                    <Tooltip
-                      content={industryDescription.length > 0 ? industryDescription : "Описание отрасли отсутствует"}
-                      placement="top"
-                    >
+                <div
+                  className={
+                    c.kind === "built"
+                      ? "grid grid-cols-2 items-start gap-3"
+                      : "flex items-start justify-between gap-3"
+                  }
+                >
+                  <div className="min-w-0 flex flex-col gap-1.5 text-xs text-white/65">
+                    <div className="inline-flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1">
+                      <Factory size={13} />
+                      <span className="text-white/40">Отрасль:</span>
+                      <Tooltip
+                        content={industryDescription.length > 0 ? industryDescription : "Описание отрасли отсутствует"}
+                        placement="top"
+                      >
+                        <span className="inline-flex items-center gap-1.5 text-white/80">
+                          {c.industryLogo ? <img src={c.industryLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}
+                          <span>{c.industryName ?? "—"}</span>
+                        </span>
+                      </Tooltip>
+                    </div>
+                    <div className="inline-flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1">
+                      <Factory size={13} />
+                      <span className="text-white/40">Сектор:</span>
+                      <Tooltip
+                        content={sectorDescription.length > 0 ? sectorDescription : "Описание сектора отсутствует"}
+                        placement="top"
+                      >
+                        <span className="inline-flex items-center gap-1.5 text-white/80">
+                          {c.sectorLogo ? <img src={c.sectorLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}
+                          <span>{c.sectorName ?? "—"}</span>
+                        </span>
+                      </Tooltip>
+                    </div>
+                    {c.kind === "built" && <div className="inline-flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1"><Hammer size={13} /><span className="text-white/40">Уровень:</span><span>{c.level}</span></div>}
+                    <div className="inline-flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1"><MapPin size={13} /><span className="text-white/40">Провинция:</span><span>{c.provinceName}</span></div>
+                    <div className="inline-flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1">
+                      <Building2 size={13} />
+                      <span className="text-white/40">Страна:</span>
                       <span className="inline-flex items-center gap-1.5 text-white/80">
-                        {c.industryLogo ? <img src={c.industryLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}
-                        <span>{c.industryName ?? "—"}</span>
+                        {countryById.get(c.provinceOwnerCountryId)?.flagUrl ? (
+                          <img src={countryById.get(c.provinceOwnerCountryId)?.flagUrl ?? ""} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" />
+                        ) : null}
+                        <span>{countryById.get(c.provinceOwnerCountryId)?.name ?? (c.provinceOwnerCountryId || "—")}</span>
                       </span>
-                    </Tooltip>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Factory size={13} />
-                    <span className="text-white/40">Сектор:</span>
-                    <Tooltip
-                      content={sectorDescription.length > 0 ? sectorDescription : "Описание сектора отсутствует"}
-                      placement="top"
-                    >
-                      <span className="inline-flex items-center gap-1.5 text-white/80">
-                        {c.sectorLogo ? <img src={c.sectorLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}
-                        <span>{c.sectorName ?? "—"}</span>
-                      </span>
-                    </Tooltip>
-                  </div>
-                  {c.kind === "built" && <div className="flex items-center gap-2"><Hammer size={13} /><span className="text-white/40">Уровень:</span><span>{c.level}</span></div>}
-                  <div className="flex items-center gap-2"><MapPin size={13} /><span className="text-white/40">Провинция:</span><span>{c.provinceName}</span></div>
-                  <div className="flex items-center gap-2">
-                    <Building2 size={13} />
-                    <span className="text-white/40">Страна:</span>
-                    <span className="inline-flex items-center gap-1.5 text-white/80">
-                      {countryById.get(c.provinceOwnerCountryId)?.flagUrl ? (
-                        <img src={countryById.get(c.provinceOwnerCountryId)?.flagUrl ?? ""} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" />
-                      ) : null}
-                      <span>{countryById.get(c.provinceOwnerCountryId)?.name ?? (c.provinceOwnerCountryId || "—")}</span>
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2"><Factory size={13} /><span className="text-white/40">Владелец:</span>{c.ownerType === "company" ? (
-                    <Tooltip
-                      content={ownerCompanyDescription.length > 0 ? ownerCompanyDescription : "Описание компании отсутствует"}
-                      placement="top"
-                    >
+                    </div>
+                    <div className="inline-flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1"><Factory size={13} /><span className="text-white/40">Владелец:</span>{c.ownerType === "company" ? (
+                      <Tooltip
+                        content={ownerCompanyDescription.length > 0 ? ownerCompanyDescription : "Описание компании отсутствует"}
+                        placement="top"
+                      >
+                        <span className="inline-flex items-center gap-1.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}<span>{c.ownerLabel}</span></span>
+                      </Tooltip>
+                    ) : (
                       <span className="inline-flex items-center gap-1.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}<span>{c.ownerLabel}</span></span>
-                    </Tooltip>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 text-white/80">{c.ownerLogo ? <img src={c.ownerLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}<span>{c.ownerLabel}</span></span>
-                  )}</div>
-                  {c.kind === "built" && <div className="flex items-center gap-2"><Users size={13} /><span className="text-white/40">Рабочие:</span><span>{fmt(c.workersEmployed)} / {fmt(c.workersDemand)}</span></div>}
+                    )}</div>
+                    {c.kind === "built" && <div className="inline-flex w-full items-center gap-2 rounded-md border border-white/10 bg-black/25 px-2 py-1"><Users size={13} /><span className="text-white/40">Рабочие:</span><span>{fmt(c.workersEmployed)} / {fmt(c.workersDemand)}</span></div>}
+                  </div>
+                  {c.kind === "built" && econData && (
+                    <div className="flex w-full min-w-0 flex-col gap-2">
+                      <Tooltip content={`Производительность: ${productivityPct}%. Показывает, какую долю от максимальной мощности здание отрабатывает за ход.`}>
+                        <span className="inline-flex min-h-[22px] w-full items-center justify-between gap-2 rounded-md border border-white/15 bg-black/40 px-2 py-1">
+                          <span className="text-[10px] font-semibold text-white/75">Производительность: {productivityPct}%</span>
+                          <span className="h-1.5 w-16 overflow-hidden rounded-full border border-white/15 bg-black/60">
+                            <span
+                              className="block h-full bg-emerald-400/75"
+                              style={{ width: `${productivityPct}%` }}
+                            />
+                          </span>
+                        </span>
+                      </Tooltip>
+                      <Tooltip
+                        content={`Прочность: ${durabilityPct}%. Ограничивает максимальную производительность здания.`}
+                      >
+                        <span className="inline-flex min-h-[22px] w-full items-center justify-between gap-2 rounded-md border border-white/15 bg-black/40 px-2 py-1">
+                          <span className="text-[10px] font-semibold text-white/75">
+                            Прочность: {durabilityPct}%
+                          </span>
+                          <span className="h-1.5 w-16 overflow-hidden rounded-full border border-white/15 bg-black/60">
+                            <span
+                              className="block h-full bg-sky-400/80"
+                              style={{ width: `${durabilityPct}%` }}
+                            />
+                          </span>
+                        </span>
+                      </Tooltip>
+                    </div>
+                  )}
                 </div>
                 {c.kind === "built" && (
                   <div className="rounded-xl border border-white/10 bg-black/30">
@@ -1805,21 +1977,10 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                           [c.key]: !prev[c.key],
                         }))
                       }
-                      className="flex w-full items-center justify-between px-3 py-2 text-xs text-white/80"
+                      className="flex min-h-[38px] w-full items-center justify-between px-3 py-2 text-xs text-white/80"
                     >
                       <span>Экономика</span>
                       <div className="flex items-center gap-2">
-                        <Tooltip content={`Производительность: ${econData?.productivity ?? 0}%. Показывает, какую долю от максимальной мощности здание отрабатывает за ход.`}>
-                          <span className="inline-flex min-h-[22px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-black/40 px-2 py-1">
-                            <span className="text-[10px] font-semibold text-white/75">Производительность: {econData?.productivity ?? 0}%</span>
-                            <span className="h-1.5 w-14 overflow-hidden rounded-full border border-white/15 bg-black/60">
-                              <span
-                                className="block h-full bg-emerald-400/75"
-                                style={{ width: `${Math.max(0, Math.min(100, econData?.productivity ?? 0))}%` }}
-                              />
-                            </span>
-                          </span>
-                        </Tooltip>
                         <Tooltip content="Накоплено денег у здания">
                           <span className="inline-flex min-h-[22px] items-center justify-center gap-1 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-[11px] font-bold leading-none text-white/75">
                             {resourceIcons.ducats ? (
@@ -1847,6 +2008,26 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                               <span>
                                 {(econData?.netPerTurn ?? 0) >= 0 ? "+" : ""}
                                 {formatCompact(econData?.netPerTurn ?? 0)}
+                              </span>
+                            </span>
+                          </span>
+                        </Tooltip>
+                        <Tooltip content="Сумма государственных субсидий, полученных зданием за ход">
+                          <span
+                            className={`inline-flex min-h-[22px] items-center justify-center rounded-md border px-2 py-1 text-[11px] font-bold leading-none ${
+                              (econData?.stateSubsidyDucats ?? 0) > 0
+                                ? "border-amber-400/40 bg-amber-500/15 text-amber-200"
+                                : "border-white/15 bg-black/40 text-white/55"
+                            }`}
+                          >
+                            <span className="inline-flex items-center justify-center gap-1">
+                              {resourceIcons.ducats ? (
+                                <img src={resourceIcons.ducats} alt="" className="h-3.5 w-3.5 shrink-0 self-center object-contain" />
+                              ) : (
+                                <Coins size={11} />
+                              )}
+                              <span>
+                                +{formatCompact(econData?.stateSubsidyDucats ?? 0)}
                               </span>
                             </span>
                           </span>
@@ -2112,6 +2293,14 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                                 </span>
                               </div>
                             </div>
+                            <div className="rounded-md border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-white/70">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-semibold text-rose-300">Повышение уровня</span>
+                                <span className="inline-flex items-center rounded-md border border-rose-400/45 bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold text-rose-200">
+                                  -{formatCompact(econData.upgradeCostDucats)} дукат
+                                </span>
+                              </div>
+                            </div>
                             <div
                               className={`rounded-md border px-2 py-1 text-white/70 ${
                                 econData.netPerTurn >= 0
@@ -2138,6 +2327,54 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                           </div>
                           </div>
                           </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+                {c.kind === "built" && (!displayIsActive || Boolean(limitingFactorBadge)) && (
+                  <div className="rounded-xl border border-white/10 bg-black/30">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenStatusByCardKey((prev) => ({
+                          ...prev,
+                          [c.key]: !prev[c.key],
+                        }))
+                      }
+                      className="flex min-h-[38px] w-full items-center justify-between px-3 py-2 text-xs text-white/80"
+                    >
+                      <span>Статусы</span>
+                      <div className="flex items-center gap-2">
+                        {openStatusByCardKey[c.key] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </div>
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {openStatusByCardKey[c.key] && (
+                        <motion.div
+                          key={`${c.key}-statuses`}
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2, ease: "easeOut" }}
+                          className="overflow-hidden"
+                        >
+                          <div className="space-y-2 border-t border-white/10 px-3 py-2 text-xs">
+                            {!displayIsActive && (
+                              <div className="rounded-md border border-red-400/40 bg-red-500/10 px-2 py-1 text-red-200">
+                                <div className="font-semibold">Неактивное</div>
+                                {displayInactiveReasons.length > 0 && (
+                                  <div className="mt-0.5 text-red-100/90">{displayInactiveReasons.join(", ")}</div>
+                                )}
+                              </div>
+                            )}
+                            {limitingFactorBadge && (
+                              <div className="rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                <div className="font-semibold">{limitingFactorBadge.text}</div>
+                                <div className="mt-0.5 text-amber-100/90">{limitingFactorBadge.tooltip}</div>
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
                       )}
                     </AnimatePresence>
                   </div>
@@ -2573,6 +2810,37 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           </Dialog.Panel>
         </div>
       </Dialog>
+
+      <TextInputModal
+        open={Boolean(renameModalTarget)}
+        onClose={() => {
+          if (renamingCardKey) return;
+          setRenameModalTarget(null);
+          setRenameModalValue("");
+        }}
+        title="Изменение названия постройки"
+        description={
+          renameModalTarget
+            ? `Постройка: ${renameModalTarget.buildingName}\nПровинция: ${renameModalTarget.provinceName}`
+            : undefined
+        }
+        label="Уникальное название (до 80 символов)"
+        value={renameModalValue}
+        onChange={setRenameModalValue}
+        onSubmit={() => {
+          if (!renameModalTarget) return;
+          void submitRenameBuiltCard(renameModalTarget);
+        }}
+        placeholder="Введите уникальное название"
+        hint="Пустое значение сбросит пользовательское название"
+        maxLength={80}
+        pending={Boolean(renamingCardKey)}
+        disabledSubmit={Boolean(renamingCardKey)}
+        submitLabel="Сохранить"
+        cancelLabel="Отмена"
+        zIndexClassName="z-[209]"
+      />
     </Dialog>
   );
 }
+

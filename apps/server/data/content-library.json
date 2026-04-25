@@ -50,6 +50,7 @@
         "costDucats": 10,
         "startingDucats": 10000,
         "maxLevel": 10,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 400,
         "sectorId": "8cafa974-b527-4d9b-977c-9bcdc96eaa76",
@@ -84,6 +85,7 @@
         "costDucats": 10,
         "startingDucats": 10000,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -128,6 +130,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -157,6 +160,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -186,6 +190,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -215,6 +220,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -244,6 +250,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -273,6 +280,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -302,6 +310,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -331,6 +340,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -360,6 +370,7 @@
         "costDucats": 10,
         "startingDucats": 0,
         "maxLevel": 1,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
         "sectorId": null,
@@ -382,17 +393,18 @@
         "name": "Угольная электростанция",
         "description": "вапваогр7",
         "color": "#a78bfa",
-        "logoUrl": "/uploads/buildings/78fba321-5236-42fd-bceb-fdbd9a6ac66b.png?v=1777057092175",
+        "logoUrl": "/uploads/buildings/282bd096-b29e-4919-b642-42ccedf2f350.png?v=1777111756877",
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "costConstruction": 100,
         "costDucats": 10,
         "startingDucats": 10000,
         "maxLevel": 100,
+        "maxDurability": 100,
         "upgradeCostDucats": 10,
         "upgradeCostConstruction": 100,
-        "sectorId": null,
-        "industryId": null,
+        "sectorId": "e178c489-dade-45cc-9b23-758d232cceb8",
+        "industryId": "8cafa974-b527-4d9b-977c-9bcdc96eaa76",
         "extractionGoodId": null,
         "extractionAmountPerTurn": 0,
         "extractionRequiresDeposit": true,
@@ -646,7 +658,7 @@
     "industries": [
       {
         "id": "8cafa974-b527-4d9b-977c-9bcdc96eaa76",
-        "name": "Энергетика",
+        "name": "Тепловая энергетика",
         "description": "",
         "color": "#e8ff38",
         "logoUrl": "/uploads/industries/a6b7450c-662e-42a8-9959-03006ec92021.png?v=1777037259352",
@@ -654,7 +666,17 @@
         "femalePortraitUrl": null
       }
     ],
-    "sectors": [],
+    "sectors": [
+      {
+        "id": "e178c489-dade-45cc-9b23-758d232cceb8",
+        "name": "Энергетика",
+        "description": "",
+        "color": "#a78bfa",
+        "logoUrl": "/uploads/sectors/fe392c48-a668-45c0-8d08-89638e7a277a.png?v=1777111619821",
+        "malePortraitUrl": null,
+        "femalePortraitUrl": null
+      }
+    ],
     "cultures": []
   },
   "civilopedia": {
@@ -708,5 +730,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-04-25T07:50:23.735Z"
+  "updatedAt": "2026-04-25T12:46:28.340Z"
 }

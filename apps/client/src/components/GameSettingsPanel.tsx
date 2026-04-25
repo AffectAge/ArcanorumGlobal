@@ -50,6 +50,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
   const [baseGoldPerTurn, setBaseGoldPerTurn] = useState(10);
   const [demolitionCostConstructionPercent, setDemolitionCostConstructionPercent] = useState(20);
   const [marketPriceSmoothing, setMarketPriceSmoothing] = useState(0.2);
+  const [buildingDurabilityDecayPerTurn, setBuildingDurabilityDecayPerTurn] = useState(10);
+  const [buildingDurabilityRecoveryPerTurn, setBuildingDurabilityRecoveryPerTurn] = useState(5);
   const [explorationBaseEmptyChancePct, setExplorationBaseEmptyChancePct] = useState(5);
   const [explorationDepletionPerAttemptPct, setExplorationDepletionPerAttemptPct] = useState(7.5);
   const [explorationDurationTurns, setExplorationDurationTurns] = useState(1);
@@ -98,6 +100,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
         setBaseGoldPerTurn(settings.economy.baseGoldPerTurn);
         setDemolitionCostConstructionPercent(settings.economy.demolitionCostConstructionPercent ?? 20);
         setMarketPriceSmoothing(settings.economy.marketPriceSmoothing ?? 0.2);
+        setBuildingDurabilityDecayPerTurn(settings.economy.buildingDurabilityDecayPerTurn ?? 10);
+        setBuildingDurabilityRecoveryPerTurn(settings.economy.buildingDurabilityRecoveryPerTurn ?? 5);
         setExplorationBaseEmptyChancePct(settings.economy.explorationBaseEmptyChancePct ?? 5);
         setExplorationDepletionPerAttemptPct(settings.economy.explorationDepletionPerAttemptPct ?? 7.5);
         setExplorationDurationTurns(settings.economy.explorationDurationTurns ?? 1);
@@ -144,6 +148,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
           baseGoldPerTurn: Math.max(0, Math.floor(baseGoldPerTurn)),
           demolitionCostConstructionPercent: Math.min(100, Math.max(0, Math.floor(demolitionCostConstructionPercent))),
           marketPriceSmoothing: Math.min(1, Math.max(0, Number(marketPriceSmoothing || 0))),
+          buildingDurabilityDecayPerTurn: Math.max(0, Number(buildingDurabilityDecayPerTurn || 0)),
+          buildingDurabilityRecoveryPerTurn: Math.max(0, Number(buildingDurabilityRecoveryPerTurn || 0)),
           explorationBaseEmptyChancePct: Math.min(100, Math.max(0, Number(explorationBaseEmptyChancePct || 0))),
           explorationDepletionPerAttemptPct: Math.min(100, Math.max(0, Number(explorationDepletionPerAttemptPct || 0))),
           explorationDurationTurns: Math.max(1, Math.floor(explorationDurationTurns || 1)),
@@ -155,6 +161,8 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
       setBaseGoldPerTurn(updated.economy.baseGoldPerTurn);
       setDemolitionCostConstructionPercent(updated.economy.demolitionCostConstructionPercent ?? 20);
       setMarketPriceSmoothing(updated.economy.marketPriceSmoothing ?? 0.2);
+      setBuildingDurabilityDecayPerTurn(updated.economy.buildingDurabilityDecayPerTurn ?? 10);
+      setBuildingDurabilityRecoveryPerTurn(updated.economy.buildingDurabilityRecoveryPerTurn ?? 5);
       setExplorationBaseEmptyChancePct(updated.economy.explorationBaseEmptyChancePct ?? 5);
       setExplorationDepletionPerAttemptPct(updated.economy.explorationDepletionPerAttemptPct ?? 7.5);
       setExplorationDurationTurns(updated.economy.explorationDurationTurns ?? 1);
@@ -437,7 +445,7 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                         <Coins size={15} className="text-arc-accent" />
                         Базовый доход за каждый резолв хода
                       </div>
-                      <div className="grid gap-3 md:grid-cols-5">
+                      <div className="grid gap-3 md:grid-cols-7">
                         <div>
                           <label className="mb-1 block text-xs text-slate-300">Очки строительства / ход</label>
                           <input type="number" min={0} value={baseConstructionPerTurn} onChange={(e) => setBaseConstructionPerTurn(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm" />
@@ -470,6 +478,28 @@ export function GameSettingsPanel({ open, token, onClose, onResourceIconsUpdated
                             step={0.01}
                             value={marketPriceSmoothing}
                             onChange={(e) => setMarketPriceSmoothing(Math.min(1, Math.max(0, Number(e.target.value) || 0)))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Потеря прочности/ход (неактивные)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            value={buildingDurabilityDecayPerTurn}
+                            onChange={(e) => setBuildingDurabilityDecayPerTurn(Math.max(0, Number(e.target.value) || 0))}
+                            className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-300">Восстановление прочности/ход (активные)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            value={buildingDurabilityRecoveryPerTurn}
+                            onChange={(e) => setBuildingDurabilityRecoveryPerTurn(Math.max(0, Number(e.target.value) || 0))}
                             className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-sm"
                           />
                         </div>
