@@ -827,6 +827,34 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     },
     [filteredCards, filterProvinceId, myProvinces],
   );
+  const provinceDepositsByProvinceId = useMemo(() => {
+    const out = new Map<
+      string,
+      Array<{
+        goodId: string;
+        goodName: string;
+        goodLogoUrl: string | null;
+        amount: number;
+      }>
+    >();
+    for (const province of myProvinces) {
+      const deposits = worldBase?.provinceResourceDepositsByProvince?.[province.id] ?? [];
+      const normalized = deposits
+        .map((deposit) => {
+          const good = goodById.get(deposit.goodId);
+          return {
+            goodId: deposit.goodId,
+            goodName: good?.name ?? deposit.goodId,
+            goodLogoUrl: good?.logoUrl ?? null,
+            amount: Math.max(0, Number(deposit.amount ?? 0)),
+          };
+        })
+        .filter((deposit) => deposit.amount > 0)
+        .sort((a, b) => b.amount - a.amount);
+      out.set(province.id, normalized);
+    }
+    return out;
+  }, [goodById, myProvinces, worldBase?.provinceResourceDepositsByProvince]);
 
   const availableConstruction = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.construction ?? 0)));
   const availableDucats = Math.max(0, Math.floor(Number(worldBase?.resourcesByCountry?.[countryId]?.ducats ?? 0)));
@@ -1324,11 +1352,35 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           <div className="arc-scrollbar min-h-0 space-y-4 overflow-auto pr-1">
             {provinceSections.map((section) => {
               const provinceCards = section.cards;
+              const provinceDeposits = provinceDepositsByProvinceId.get(section.provinceId) ?? [];
               return (
                 <section key={section.provinceId} className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold text-white/85">{section.provinceName}</div>
-                    <div className="text-[11px] text-white/50">
+                  <div className="mb-3 flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-white/85">{section.provinceName}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-white/65">
+                        <span className="text-white/45">Залежи:</span>
+                        {provinceDeposits.length === 0 ? (
+                          <span className="text-white/45">нет</span>
+                        ) : (
+                          provinceDeposits.map((deposit) => (
+                            <span
+                              key={`${section.provinceId}-${deposit.goodId}`}
+                              className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-black/25 px-1.5 py-0.5"
+                            >
+                              {deposit.goodLogoUrl ? (
+                                <img src={deposit.goodLogoUrl} alt="" className="h-3 w-3 object-contain" />
+                              ) : (
+                                <Package size={11} className="text-white/55" />
+                              )}
+                              <span>{deposit.goodName}</span>
+                              <span className="text-white/45">{formatCompact(deposit.amount)}</span>
+                            </span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div className="pt-0.5 text-[11px] text-white/50">
                       Построек: {provinceCards.filter((card) => card.kind === "built").length}, в очереди: {provinceCards.filter((card) => card.kind === "construction").length}
                     </div>
                   </div>

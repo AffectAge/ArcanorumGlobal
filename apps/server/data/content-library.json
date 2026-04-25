@@ -610,7 +610,7 @@
         "name": "Уголь",
         "description": "",
         "color": "#a78bfa",
-        "logoUrl": null,
+        "logoUrl": "/uploads/goods/90256b40-a38d-41d2-b176-671b12fc110c.png?v=1777103279735",
         "malePortraitUrl": null,
         "femalePortraitUrl": null,
         "resourceCategoryId": null,
@@ -708,5 +708,5 @@
     "ducats": "/uploads/resource-icons/b06dc196-dbe0-418f-9919-284c157bdb6e.png",
     "gold": "/uploads/resource-icons/885fa861-132b-4144-bafa-515f31c45216.png"
   },
-  "updatedAt": "2026-04-25T07:27:47.049Z"
+  "updatedAt": "2026-04-25T07:50:23.735Z"
 }

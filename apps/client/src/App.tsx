@@ -20,6 +20,7 @@ import { CivilopediaModal } from "./components/CivilopediaModal";
 import { ContentPanel } from "./components/ContentPanel";
 import { PopulationStatsModal } from "./components/PopulationStatsModal";
 import { ProvinceBuildingsModal } from "./components/ProvinceBuildingsModal";
+import { StateBudgetModal } from "./components/StateBudgetModal";
 import { MarketModal } from "./components/MarketModal";
 import { InAppNotificationTray, type InAppUiNotification } from "./components/InAppNotificationTray";
 import { NotificationHistoryModal } from "./components/NotificationHistoryModal";
@@ -77,6 +78,7 @@ export default function App() {
   const [contentPanelOpen, setContentPanelOpen] = useState(false);
   const [populationStatsOpen, setPopulationStatsOpen] = useState(false);
   const [provinceBuildingsOpen, setProvinceBuildingsOpen] = useState(false);
+  const [stateBudgetOpen, setStateBudgetOpen] = useState(false);
   const [marketOpen, setMarketOpen] = useState(false);
   const [globalMarketOpen, setGlobalMarketOpen] = useState(false);
   const [adminInitialProvinceId, setAdminInitialProvinceId] = useState<string | null>(null);
@@ -755,53 +757,59 @@ export default function App() {
     worldBase,
   ]);
 
-  const currentTurnExpenses = useMemo(() => {
-    const empty = { culture: 0, science: 0, religion: 0, colonization: 0, construction: 0, ducats: 0, gold: 0 };
-    if (!auth) {
+  const subsidyBudgetBreakdown = useMemo(() => {
+    const empty = { total: 0, items: [] as Array<{ provinceId: string; buildingId: string; instanceId: string; amount: number }> };
+    if (!auth || !worldBase) {
       return empty;
     }
-
-    const totals = { ...empty };
-
-    if (customizationDucatSpend.turnId === turnId && customizationDucatSpend.amount > 0) {
-      totals.ducats += customizationDucatSpend.amount;
-    }
-    if (provinceRenameDucatSpend.turnId === turnId && provinceRenameDucatSpend.amount > 0) {
-      totals.ducats += provinceRenameDucatSpend.amount;
-    }
-
-    if (myColonizationProjection.predictedPointsSpend > 0) {
-      totals.colonization += myColonizationProjection.predictedPointsSpend;
-      const supportDucatSpend = Math.min(
-        myColonizationProjection.predictedSupportDucatSpend,
-        Math.max(0, Math.floor(currentResources.ducats ?? 0)),
-      );
-      totals.ducats += supportDucatSpend;
-    }
-    if (myConstructionProjection.predictedPointsSpend > 0) {
-      totals.construction += myConstructionProjection.predictedPointsSpend;
-      totals.ducats += myConstructionProjection.predictedDucatSpend;
-    }
-    if (worldBase) {
-      let subsidySpend = 0;
-      for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince ?? {})) {
-        if (!Array.isArray(instances) || instances.length === 0) continue;
-        const provinceOwnerCountryId = worldBase.provinceOwner?.[provinceId] ?? "";
-        for (const instance of instances) {
-          const subsidySourceCountryId =
-            instance.owner.type === "state"
-              ? instance.owner.countryId
-              : provinceOwnerCountryId;
-          if (subsidySourceCountryId !== auth.countryId) continue;
-          subsidySpend += Math.max(0, Number(instance.lastStateSubsidyDucats ?? 0));
-        }
+    const items: Array<{ provinceId: string; buildingId: string; instanceId: string; amount: number }> = [];
+    for (const [provinceId, instances] of Object.entries(worldBase.provinceBuildingsByProvince ?? {})) {
+      if (!Array.isArray(instances) || instances.length === 0) continue;
+      const provinceOwnerCountryId = worldBase.provinceOwner?.[provinceId] ?? "";
+      for (const instance of instances) {
+        const subsidySourceCountryId =
+          instance.owner.type === "state"
+            ? instance.owner.countryId
+            : provinceOwnerCountryId;
+        if (subsidySourceCountryId !== auth.countryId) continue;
+        const amount = Math.max(0, Number(instance.lastStateSubsidyDucats ?? 0));
+        if (amount <= 0) continue;
+        items.push({
+          provinceId,
+          buildingId: instance.buildingId,
+          instanceId: instance.instanceId,
+          amount,
+        });
       }
-      totals.ducats += Math.floor(Math.max(0, subsidySpend));
     }
+    const sorted = items.sort((a, b) => b.amount - a.amount);
+    return {
+      total: Math.floor(sorted.reduce((sum, item) => sum + item.amount, 0)),
+      items: sorted,
+    };
+  }, [auth, worldBase]);
 
-    return totals;
+  const ducatExpenseBreakdown = useMemo(() => {
+    const customization = customizationDucatSpend.turnId === turnId ? Math.max(0, Math.floor(customizationDucatSpend.amount)) : 0;
+    const provinceRename = provinceRenameDucatSpend.turnId === turnId ? Math.max(0, Math.floor(provinceRenameDucatSpend.amount)) : 0;
+    const colonizationSupport =
+      myColonizationProjection.predictedPointsSpend > 0
+        ? Math.min(
+            myColonizationProjection.predictedSupportDucatSpend,
+            Math.max(0, Math.floor(currentResources.ducats ?? 0)),
+          )
+        : 0;
+    const construction = myConstructionProjection.predictedPointsSpend > 0 ? Math.max(0, Math.floor(myConstructionProjection.predictedDucatSpend)) : 0;
+    const subsidies = Math.max(0, Math.floor(subsidyBudgetBreakdown.total));
+    return {
+      customization,
+      provinceRename,
+      colonizationSupport,
+      construction,
+      subsidies,
+      total: customization + provinceRename + colonizationSupport + construction + subsidies,
+    };
   }, [
-    auth,
     currentResources.ducats,
     customizationDucatSpend.amount,
     customizationDucatSpend.turnId,
@@ -811,8 +819,41 @@ export default function App() {
     myConstructionProjection.predictedPointsSpend,
     provinceRenameDucatSpend.amount,
     provinceRenameDucatSpend.turnId,
+    subsidyBudgetBreakdown.total,
     turnId,
-    worldBase,
+  ]);
+
+  const currentTurnExpenses = useMemo(() => {
+    const empty = { culture: 0, science: 0, religion: 0, colonization: 0, construction: 0, ducats: 0, gold: 0 };
+    if (!auth) {
+      return empty;
+    }
+
+    const totals = { ...empty };
+
+    totals.ducats += ducatExpenseBreakdown.customization;
+    totals.ducats += ducatExpenseBreakdown.provinceRename;
+
+    if (myColonizationProjection.predictedPointsSpend > 0) {
+      totals.colonization += myColonizationProjection.predictedPointsSpend;
+      totals.ducats += ducatExpenseBreakdown.colonizationSupport;
+    }
+    if (myConstructionProjection.predictedPointsSpend > 0) {
+      totals.construction += myConstructionProjection.predictedPointsSpend;
+      totals.ducats += ducatExpenseBreakdown.construction;
+    }
+    totals.ducats += ducatExpenseBreakdown.subsidies;
+
+    return totals;
+  }, [
+    auth,
+    ducatExpenseBreakdown.colonizationSupport,
+    ducatExpenseBreakdown.construction,
+    ducatExpenseBreakdown.customization,
+    ducatExpenseBreakdown.provinceRename,
+    ducatExpenseBreakdown.subsidies,
+    myColonizationProjection.predictedPointsSpend,
+    myConstructionProjection.predictedPointsSpend,
   ]);
   useEffect(() => {
     setCustomizationDucatSpend((prev) => (prev.turnId === turnId ? prev : { turnId, amount: 0 }));
@@ -1254,6 +1295,9 @@ export default function App() {
           />
           <SideNav
             onItemClick={(key) => {
+              if (key === "budget") {
+                setStateBudgetOpen(true);
+              }
               if (key === "buildings") {
                 setProvinceBuildingsOpen(true);
               }
@@ -1284,6 +1328,22 @@ export default function App() {
           open={contentPanelOpen}
           token={auth.token}
           onClose={() => setContentPanelOpen(false)}
+        />
+      )}
+
+      {auth && (
+        <StateBudgetModal
+          open={stateBudgetOpen}
+          onClose={() => setStateBudgetOpen(false)}
+          worldBase={worldBase}
+          turnId={turnId}
+          countryId={auth.countryId}
+          countryName={country?.name ?? auth.countryId}
+          currentDucats={currentResources.ducats}
+          projectedIncomeDucats={Math.max(0, Math.floor(resourceGrowthByTurn.ducats ?? 0))}
+          ducatExpenses={ducatExpenseBreakdown}
+          subsidyItems={subsidyBudgetBreakdown.items}
+          ducatIconUrl={resourceIcons.ducats}
         />
       )}
 
