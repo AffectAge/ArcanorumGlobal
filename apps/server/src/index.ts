@@ -75,6 +75,7 @@ const contentUploadDirs = {
   goods: resolve(uploadsRoot, "goods"),
   companies: resolve(uploadsRoot, "companies"),
   industries: resolve(uploadsRoot, "industries"),
+  sectors: resolve(uploadsRoot, "sectors"),
   technologies: resolve(uploadsRoot, "technologies"),
 } as const;
 const FLAG_IMAGE_RULE = { maxWidth: 192, maxHeight: 128, ratioWidth: 3, ratioHeight: 2 } as const;
@@ -101,6 +102,7 @@ function resolveContentUploadDir(kind?: string): string {
   if (kind === "goods") return contentUploadDirs.goods;
   if (kind === "companies") return contentUploadDirs.companies;
   if (kind === "industries") return contentUploadDirs.industries;
+  if (kind === "sectors") return contentUploadDirs.sectors;
   if (kind === "technologies") return contentUploadDirs.technologies;
   return contentUploadDirs.cultures;
 }
@@ -838,6 +840,7 @@ type GoodContentEntry = GameContentEntry & {
 };
 
 type BuildingContentEntry = GameContentEntry & {
+  sectorId?: string | null;
   industryId?: string | null;
   costConstruction?: number | null;
   costDucats?: number | null;
@@ -921,6 +924,7 @@ type GameSettings = {
     goods: GoodContentEntry[];
     companies: GameContentEntry[];
     industries: GameContentEntry[];
+    sectors: GameContentEntry[];
     cultures: GameContentEntry[];
   };
   civilopedia: {
@@ -1586,6 +1590,7 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       upgradeCostDucats?: unknown;
       upgradeCostConstruction?: unknown;
       extractionGoodId?: unknown;
+      sectorId?: unknown;
       industryId?: unknown;
       extractionAmountPerTurn?: unknown;
       extractionRequiresDeposit?: unknown;
@@ -1629,6 +1634,12 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       typeof raw?.extractionGoodId === "string" && raw.extractionGoodId.trim().length > 0
         ? raw.extractionGoodId.trim()
         : null;
+    const sectorIdRaw =
+      typeof raw?.sectorId === "string" && raw.sectorId.trim().length > 0
+        ? raw.sectorId.trim()
+        : typeof raw?.industryId === "string" && raw.industryId.trim().length > 0
+          ? raw.industryId.trim()
+          : null;
     const industryId =
       typeof raw?.industryId === "string" && raw.industryId.trim().length > 0 ? raw.industryId.trim() : null;
     const extractionAmountPerTurn =
@@ -1645,6 +1656,7 @@ function normalizeContentBuildings(input: unknown): GameSettings["content"]["bui
       maxLevel,
       upgradeCostDucats: Number(upgradeCostDucats.toFixed(3)),
       upgradeCostConstruction,
+      sectorId: sectorIdRaw,
       industryId,
       extractionGoodId,
       extractionAmountPerTurn,
@@ -3782,6 +3794,7 @@ const defaultGameSettings = (): GameSettings => {
       goods: [],
       companies: [],
       industries: [],
+      sectors: [],
       cultures: [],
     },
     civilopedia: {
@@ -3869,6 +3882,7 @@ const defaultGameSettings = (): GameSettings => {
       goods: normalizeContentGoods((library.content as { goods?: unknown } | undefined)?.goods),
       companies: normalizeContentCultures((library.content as { companies?: unknown } | undefined)?.companies),
       industries: normalizeContentCultures((library.content as { industries?: unknown } | undefined)?.industries),
+      sectors: normalizeContentCultures((library.content as { sectors?: unknown } | undefined)?.sectors),
       cultures: normalizeContentCultures((library.content as { cultures?: unknown } | undefined)?.cultures),
     },
     civilopedia: {
@@ -4048,6 +4062,7 @@ function parseAndApplyPersistentState(input: unknown): boolean {
           goods: normalizeContentGoods((next as Partial<{ content?: { goods?: unknown } }>).content?.goods),
           companies: normalizeContentCultures((next as Partial<{ content?: { companies?: unknown } }>).content?.companies),
           industries: normalizeContentCultures((next as Partial<{ content?: { industries?: unknown } }>).content?.industries),
+          sectors: normalizeContentCultures((next as Partial<{ content?: { sectors?: unknown } }>).content?.sectors),
           cultures: normalizeContentCultures((next as Partial<{ content?: { cultures?: unknown } }>).content?.cultures),
         },
       civilopedia: {
@@ -8427,6 +8442,7 @@ const culturePayloadSchema = z.object({
   maxLevel: z.number().int().min(1).optional(),
   upgradeCostDucats: z.number().finite().min(0).optional(),
   upgradeCostConstruction: z.number().int().min(1).optional(),
+  sectorId: z.string().trim().min(1).max(120).nullable().optional(),
   industryId: z.string().trim().min(1).max(120).nullable().optional(),
   extractionGoodId: z.string().trim().min(1).max(120).nullable().optional(),
   extractionAmountPerTurn: z.number().finite().min(0).optional(),
@@ -8480,6 +8496,7 @@ const contentEntryKindSchema = z.enum([
   "goods",
   "companies",
   "industries",
+  "sectors",
 ]);
 type ContentEntryKind = z.infer<typeof contentEntryKindSchema>;
 
@@ -8574,6 +8591,16 @@ function sanitizeContentEntryByKind(
       maxLevel,
       upgradeCostDucats,
       upgradeCostConstruction,
+      sectorId:
+        payload.sectorId === undefined
+          ? (payload.industryId === undefined
+              ? undefined
+              : typeof payload.industryId === "string" && payload.industryId.trim().length > 0
+                ? payload.industryId.trim()
+                : null)
+          : typeof payload.sectorId === "string" && payload.sectorId.trim().length > 0
+            ? payload.sectorId.trim()
+            : null,
       industryId:
         payload.industryId === undefined
           ? undefined

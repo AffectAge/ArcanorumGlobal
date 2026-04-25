@@ -37,6 +37,7 @@ export type ContentCulture = {
   upgradeCostDucats?: number | null;
   upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
+  sectorId?: string | null;
   industryId?: string | null;
   extractionAmountPerTurn?: number | null;
   extractionRequiresDeposit?: boolean | null;
@@ -61,7 +62,8 @@ export type ContentEntryKind =
   | "buildings"
   | "goods"
   | "companies"
-  | "industries";
+  | "industries"
+  | "sectors";
 
 type ContentEntryUpsertPayload = {
   name: string;
@@ -92,6 +94,7 @@ type ContentEntryUpsertPayload = {
   upgradeCostDucats?: number | null;
   upgradeCostConstruction?: number | null;
   extractionGoodId?: string | null;
+  sectorId?: string | null;
   industryId?: string | null;
   extractionAmountPerTurn?: number | null;
   extractionRequiresDeposit?: boolean | null;

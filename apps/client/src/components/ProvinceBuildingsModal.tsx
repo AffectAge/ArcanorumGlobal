@@ -64,6 +64,8 @@ type Card = {
   iconUrl: string | null;
   industryLogo: string | null;
   industryName: string | null;
+  sectorLogo: string | null;
+  sectorName: string | null;
   ownerLabel: string;
   ownerLogo: string | null;
   ownerType: "state" | "company";
@@ -117,6 +119,7 @@ const formatCompact = (value: number): string => {
 export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, countryName, onQueueBuildOrder }: Props) {
   const [buildings, setBuildings] = useState<ContentEntry[]>([]);
   const [industries, setIndustries] = useState<ContentEntry[]>([]);
+  const [sectors, setSectors] = useState<ContentEntry[]>([]);
   const [goods, setGoods] = useState<ContentEntry[]>([]);
   const [companies, setCompanies] = useState<ContentEntry[]>([]);
   const [countries, setCountries] = useState<Array<{ id: string; name: string; flagUrl?: string | null }>>([]);
@@ -172,10 +175,11 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const [filterCompanyId, setFilterCompanyId] = useState("");
   const [filterCompanyCountryId, setFilterCompanyCountryId] = useState("");
   const [filterIndustryId, setFilterIndustryId] = useState("");
+  const [filterSectorId, setFilterSectorId] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "construction" | "built">("all");
   const [filterActive, setFilterActive] = useState<"all" | "active" | "inactive">("all");
   const [filterEconomy, setFilterEconomy] = useState<"all" | "profit" | "loss">("all");
-  const [sortBy, setSortBy] = useState<"building" | "province" | "company" | "industry">("building");
+  const [sortBy, setSortBy] = useState<"building" | "province" | "company" | "industry" | "sector">("building");
   const [openEconomyByCardKey, setOpenEconomyByCardKey] = useState<Record<string, boolean>>({});
   const [marketOverview, setMarketOverview] = useState<MarketOverviewResponse | null>(null);
   const auth = useGameStore((s) => s.auth);
@@ -189,15 +193,17 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     Promise.all([
       fetchContentEntries("buildings"),
       fetchContentEntries("industries"),
+      fetchContentEntries("sectors"),
       fetchContentEntries("goods"),
       fetchContentEntries("companies"),
       fetchCountries(),
       fetchPublicGameUiSettings(),
     ])
-      .then(([b, i, g, c, ctr, ui]) => {
+      .then(([b, ind, sec, g, c, ctr, ui]) => {
         if (cancelled) return;
         setBuildings(b);
-        setIndustries(i);
+        setIndustries(ind);
+        setSectors(sec);
         setGoods(g);
         setCompanies(c);
         setCountries(ctr);
@@ -208,6 +214,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         if (cancelled) return;
         setBuildings([]);
         setIndustries([]);
+        setSectors([]);
         setGoods([]);
         setCompanies([]);
         setCountries([]);
@@ -248,6 +255,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
   const buildingById = useMemo(() => new Map(buildings.map((x) => [x.id, x] as const)), [buildings]);
   const sortedBuildings = useMemo(() => [...buildings].sort((a, b) => a.name.localeCompare(b.name, "ru")), [buildings]);
   const industryById = useMemo(() => new Map(industries.map((x) => [x.id, x] as const)), [industries]);
+  const sectorById = useMemo(() => new Map(sectors.map((x) => [x.id, x] as const)), [sectors]);
   const goodById = useMemo(() => new Map(goods.map((x) => [x.id, x] as const)), [goods]);
   const companyById = useMemo(() => new Map(companies.map((x) => [x.id, x] as const)), [companies]);
   const countryById = useMemo(() => new Map(countries.map((x) => [x.id, x] as const)), [countries]);
@@ -345,7 +353,10 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         if (instance.inactiveReason) {
           inactiveReasons.push(instance.inactiveReason);
         }
-        const ind = industryById.get(((b as { industryId?: string }).industryId ?? "").trim());
+        const industryId = (((b as { industryId?: string } | undefined)?.industryId ?? "") as string).trim();
+        const sectorId = (((b as { sectorId?: string } | undefined)?.sectorId ?? "") as string).trim();
+        const industry = industryById.get(industryId);
+        const sector = sectorById.get(sectorId);
         const ownerLabel =
           instance.owner.type === "company"
             ? companyById.get(instance.owner.companyId)?.name ?? instance.owner.companyId
@@ -365,8 +376,10 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           buildingId: bid,
           buildingName: b.name,
           iconUrl: b.logoUrl ?? null,
-          industryLogo: ind?.logoUrl ?? null,
-          industryName: ind?.name ?? null,
+          industryLogo: industry?.logoUrl ?? null,
+          industryName: industry?.name ?? null,
+          sectorLogo: sector?.logoUrl ?? null,
+          sectorName: sector?.name ?? null,
           ownerLabel,
           ownerLogo,
           ownerType: instance.owner.type,
@@ -406,6 +419,8 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
           iconUrl: b.logoUrl ?? null,
           industryLogo: null,
           industryName: null,
+          sectorLogo: null,
+          sectorName: null,
           ownerLabel,
           ownerLogo,
           ownerType: q.owner.type,
@@ -422,7 +437,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       }
     }
     return res;
-  }, [worldBase, myProvinces, buildingById, industryById, countryById, companyById]);
+  }, [worldBase, myProvinces, buildingById, industryById, sectorById, countryById, companyById]);
 
   const constructionQueue = useMemo(
     () => {
@@ -753,8 +768,12 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
         if (companyCountryId !== filterCompanyCountryId) return false;
       }
       if (filterIndustryId) {
-        const industryId = (buildingById.get(card.buildingId) as (ContentEntry & { industryId?: string }) | undefined)?.industryId ?? "";
+        const industryId = ((buildingById.get(card.buildingId) as (ContentEntry & { industryId?: string }) | undefined)?.industryId ?? "");
         if (industryId !== filterIndustryId) return false;
+      }
+      if (filterSectorId) {
+        const sectorId = ((buildingById.get(card.buildingId) as (ContentEntry & { sectorId?: string }) | undefined)?.sectorId ?? "");
+        if (sectorId !== filterSectorId) return false;
       }
       if (filterStatus !== "all" && card.kind !== filterStatus) return false;
       if (filterActive === "active" && !card.isActive) return false;
@@ -770,6 +789,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
       if (sortBy === "province") return a.provinceName.localeCompare(b.provinceName, "ru");
       if (sortBy === "company") return a.ownerLabel.localeCompare(b.ownerLabel, "ru");
       if (sortBy === "industry") return (a.industryName ?? "").localeCompare(b.industryName ?? "", "ru");
+      if (sortBy === "sector") return (a.sectorName ?? "").localeCompare(b.sectorName ?? "", "ru");
       return a.buildingName.localeCompare(b.buildingName, "ru");
     });
     return source;
@@ -780,6 +800,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
     filterCompanyId,
     filterCompanyCountryId,
     filterIndustryId,
+    filterSectorId,
     filterStatus,
     filterActive,
     filterEconomy,
@@ -1228,6 +1249,12 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 placeholder="Фильтр по отрасли"
               />
               <CustomSelect
+                value={filterSectorId}
+                onChange={setFilterSectorId}
+                options={[{ value: "", label: "Фильтр по сектору" }, ...sectors.map((i) => ({ value: i.id, label: i.name }))]}
+                placeholder="Фильтр по сектору"
+              />
+              <CustomSelect
                 value={filterStatus}
                 onChange={(value) => setFilterStatus(value as "all" | "construction" | "built")}
                 options={[
@@ -1268,6 +1295,7 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                     setFilterCompanyId("");
                     setFilterCompanyCountryId("");
                     setFilterIndustryId("");
+                    setFilterSectorId("");
                     setFilterStatus("all");
                     setFilterActive("all");
                     setFilterEconomy("all");
@@ -1279,12 +1307,13 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 <div className="w-[190px]">
                   <CustomSelect
                     value={sortBy}
-                    onChange={(value) => setSortBy(value as "building" | "province" | "company" | "industry")}
+                    onChange={(value) => setSortBy(value as "building" | "province" | "company" | "industry" | "sector")}
                     options={[
                       { value: "building", label: "Сортировка: По зданию" },
                       { value: "province", label: "Сортировка: По провинции" },
                       { value: "company", label: "Сортировка: По компании" },
                       { value: "industry", label: "Сортировка: По отрасли" },
+                      { value: "sector", label: "Сортировка: По сектору" },
                     ]}
                   />
                 </div>
@@ -1345,9 +1374,14 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                 const econData = c.kind === "built" ? (econ ?? getCardEconomy(c)) : null;
                 const building = buildingById.get(c.buildingId);
                 const industryDescription = (() => {
-                  const industryId = ((building as { industryId?: string } | undefined)?.industryId ?? "").trim();
+                  const industryId = (((building as { industryId?: string } | undefined)?.industryId ?? "") as string).trim();
                   if (!industryId) return "";
                   return (industryById.get(industryId)?.description ?? "").trim();
+                })();
+                const sectorDescription = (() => {
+                  const sectorId = (((building as { sectorId?: string } | undefined)?.sectorId ?? "") as string).trim();
+                  if (!sectorId) return "";
+                  return (sectorById.get(sectorId)?.description ?? "").trim();
                 })();
                 const ownerCompanyDescription =
                   c.ownerType === "company" && c.ownerCompanyId
@@ -1669,6 +1703,19 @@ export function ProvinceBuildingsModal({ open, onClose, worldBase, countryId, co
                       <span className="inline-flex items-center gap-1.5 text-white/80">
                         {c.industryLogo ? <img src={c.industryLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}
                         <span>{c.industryName ?? "—"}</span>
+                      </span>
+                    </Tooltip>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Factory size={13} />
+                    <span className="text-white/40">Сектор:</span>
+                    <Tooltip
+                      content={sectorDescription.length > 0 ? sectorDescription : "Описание сектора отсутствует"}
+                      placement="top"
+                    >
+                      <span className="inline-flex items-center gap-1.5 text-white/80">
+                        {c.sectorLogo ? <img src={c.sectorLogo} alt="" className="h-3.5 w-3.5 rounded object-cover border border-white/10" /> : null}
+                        <span>{c.sectorName ?? "—"}</span>
                       </span>
                     </Tooltip>
                   </div>

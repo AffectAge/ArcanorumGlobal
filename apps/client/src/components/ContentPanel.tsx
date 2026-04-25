@@ -133,6 +133,16 @@ const CONTENT_UI_SCHEMA = {
         { id: "branding", label: "Логотип и стиль", icon: Sticker },
       ] as const,
     },
+    {
+      id: "sectors",
+      label: "Сектора",
+      icon: Factory,
+      enabled: true,
+      sections: [
+        { id: "general", label: "Основная информация", icon: FileText },
+        { id: "branding", label: "Логотип и стиль", icon: Sticker },
+      ] as const,
+    },
   ] as const,
 } as const;
 type PanelCategory = ContentEntryKind;
@@ -225,6 +235,14 @@ const CATEGORY_META: Record<
     namePlaceholder: "Название отрасли",
     descriptionPlaceholder: "Краткое описание отрасли",
     sectionTitle: "Раздел создания и редактирования отраслей",
+  },
+  sectors: {
+    singular: "сектор",
+    createBaseName: "Новый сектор",
+    createLabel: "Создать сектор",
+    namePlaceholder: "Название сектора",
+    descriptionPlaceholder: "Краткое описание сектора",
+    sectionTitle: "Раздел создания и редактирования секторов",
   },
 };
 
@@ -367,6 +385,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [draftUpgradeCostDucats, setDraftUpgradeCostDucats] = useState("10");
   const [draftUpgradeCostConstruction, setDraftUpgradeCostConstruction] = useState("100");
   const [draftIndustryId, setDraftIndustryId] = useState("");
+  const [draftSectorId, setDraftSectorId] = useState("");
   const [draftExtractionGoodId, setDraftExtractionGoodId] = useState("");
   const [draftExtractionAmountPerTurn, setDraftExtractionAmountPerTurn] = useState("0");
   const [draftExtractionRequiresDeposit, setDraftExtractionRequiresDeposit] = useState(true);
@@ -396,6 +415,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
   const [resourceCategoryOptions, setResourceCategoryOptions] = useState<ContentEntry[]>([]);
   const [professionOptions, setProfessionOptions] = useState<ContentEntry[]>([]);
   const [industryOptions, setIndustryOptions] = useState<ContentEntry[]>([]);
+  const [sectorOptions, setSectorOptions] = useState<ContentEntry[]>([]);
   const [countryOptions, setCountryOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [worldBuildingUsage, setWorldBuildingUsage] = useState<{
     globalByBuildingId: Record<string, number>;
@@ -435,7 +455,8 @@ export function ContentPanel({ open, token, onClose }: Props) {
       maxLevel: entry.maxLevel ?? null,
       upgradeCostDucats: entry.upgradeCostDucats ?? null,
       upgradeCostConstruction: entry.upgradeCostConstruction ?? null,
-      industryId: entry.industryId ?? null,
+      industryId: entry.industryId ?? entry.sectorId ?? null,
+      sectorId: entry.sectorId ?? entry.industryId ?? null,
       extractionGoodId: entry.extractionGoodId ?? null,
       extractionAmountPerTurn: entry.extractionAmountPerTurn ?? null,
       extractionRequiresDeposit:
@@ -612,6 +633,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
             : null
           : null,
       industryId: activeCategory === "buildings" ? draftIndustryId.trim() || null : null,
+      sectorId: activeCategory === "buildings" ? draftSectorId.trim() || null : null,
       extractionGoodId: activeCategory === "buildings" ? draftExtractionGoodId.trim() || null : null,
       extractionAmountPerTurn:
         activeCategory === "buildings"
@@ -730,14 +752,16 @@ export function ContentPanel({ open, token, onClose }: Props) {
       adminFetchContentEntries(token, "resourceCategories"),
       adminFetchContentEntries(token, "professions"),
       adminFetchContentEntries(token, "industries"),
+      adminFetchContentEntries(token, "sectors"),
       fetchCountries(),
     ])
-      .then(([goods, resourceCategories, professions, industries, countries]) => {
+      .then(([goods, resourceCategories, professions, industries, sectors, countries]) => {
         if (cancelled) return;
         setGoodsOptions(goods);
         setResourceCategoryOptions(resourceCategories);
         setProfessionOptions(professions);
         setIndustryOptions(industries);
+        setSectorOptions(sectors);
         setCountryOptions(countries.map((country) => ({ id: country.id, name: country.name })));
       })
       .catch(() => {
@@ -746,6 +770,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
         setResourceCategoryOptions([]);
         setProfessionOptions([]);
         setIndustryOptions([]);
+        setSectorOptions([]);
         setCountryOptions([]);
       });
     return () => {
@@ -838,6 +863,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       setDraftUpgradeCostDucats("10");
       setDraftUpgradeCostConstruction("100");
       setDraftIndustryId("");
+      setDraftSectorId("");
       setDraftInfrastructureUse("0");
       setDraftInputs([]);
       setDraftOutputs([]);
@@ -973,10 +999,19 @@ export function ContentPanel({ open, token, onClose }: Props) {
         ? String(Math.max(1, Math.floor(selectedEntry.upgradeCostConstruction)))
         : "100",
     );
+    setDraftSectorId(
+      typeof selectedEntry.sectorId === "string" && selectedEntry.sectorId.trim().length > 0
+        ? selectedEntry.sectorId.trim()
+        : typeof selectedEntry.industryId === "string" && selectedEntry.industryId.trim().length > 0
+          ? selectedEntry.industryId.trim()
+        : "",
+    );
     setDraftIndustryId(
       typeof selectedEntry.industryId === "string" && selectedEntry.industryId.trim().length > 0
         ? selectedEntry.industryId.trim()
-        : "",
+        : typeof selectedEntry.sectorId === "string" && selectedEntry.sectorId.trim().length > 0
+          ? selectedEntry.sectorId.trim()
+          : "",
     );
     setDraftExtractionGoodId(
       typeof selectedEntry.extractionGoodId === "string" && selectedEntry.extractionGoodId.trim().length > 0
@@ -1072,6 +1107,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
     draftUpgradeCostDucats,
     draftUpgradeCostConstruction,
     draftIndustryId,
+    draftSectorId,
     draftExtractionGoodId,
     draftExtractionAmountPerTurn,
     draftExtractionRequiresDeposit,
@@ -1223,6 +1259,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
       upgradeCostConstruction:
         activeCategory === "buildings" ? Math.max(1, Math.floor(Number(draftUpgradeCostConstruction || "100"))) : undefined,
       industryId: activeCategory === "buildings" ? (draftIndustryId.trim() || null) : undefined,
+      sectorId: activeCategory === "buildings" ? (draftSectorId.trim() || null) : undefined,
       extractionGoodId: activeCategory === "buildings" ? (draftExtractionGoodId.trim() || null) : undefined,
       extractionAmountPerTurn:
         activeCategory === "buildings" ? Math.max(0, Number(draftExtractionAmountPerTurn || "0")) : undefined,
@@ -1667,7 +1704,7 @@ export function ContentPanel({ open, token, onClose }: Props) {
                               transition={{ duration: 0.2, ease: "easeOut" }}
                               className="overflow-visible"
                             >
-                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-5">
+                            <div className="grid grid-cols-1 gap-2 pt-1 md:grid-cols-6">
                               <label className="block">
                                 <Tooltip content="Отрасль, к которой относится здание (используется в фильтрах и группировках UI).">
                                   <span className="mb-1 block text-xs text-white/60">Отрасль</span>
@@ -1678,6 +1715,20 @@ export function ContentPanel({ open, token, onClose }: Props) {
                                   options={[
                                     { value: "", label: "Не указана" },
                                     ...industryOptions.map((option) => ({ value: option.id, label: option.name })),
+                                  ]}
+                                  buttonClassName="h-[42px]"
+                                />
+                              </label>
+                              <label className="block">
+                                <Tooltip content="Сектор, к которому относится здание (используется в фильтрах и группировках UI).">
+                                  <span className="mb-1 block text-xs text-white/60">Сектор</span>
+                                </Tooltip>
+                                <CustomSelect
+                                  value={draftSectorId}
+                                  onChange={setDraftSectorId}
+                                  options={[
+                                    { value: "", label: "Не указана" },
+                                    ...sectorOptions.map((option) => ({ value: option.id, label: option.name })),
                                   ]}
                                   buttonClassName="h-[42px]"
                                 />
